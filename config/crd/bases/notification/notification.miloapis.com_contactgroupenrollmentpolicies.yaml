@@ -1,0 +1,101 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: contactgroupenrollmentpolicies.notification.miloapis.com
+spec:
+  group: notification.miloapis.com
+  names:
+    kind: ContactGroupEnrollmentPolicy
+    listKind: ContactGroupEnrollmentPolicyList
+    plural: contactgroupenrollmentpolicies
+    singular: contactgroupenrollmentpolicy
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.contactGroupRef.name
+      name: ContactGroup
+      type: string
+    - jsonPath: .spec.trigger.type
+      name: Trigger
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ContactGroupEnrollmentPolicy defines which ContactGroup a new Contact is automatically
+          enrolled in when a trigger condition is met.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ContactGroupEnrollmentPolicySpec defines the desired enrollment
+              behavior.
+            properties:
+              contactGroupRef:
+                description: ContactGroupRef references the ContactGroup that matching
+                  Contacts are enrolled in.
+                properties:
+                  name:
+                    description: Name is the name of the ContactGroup.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace of the ContactGroup.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              contactSelector:
+                description: |-
+                  ContactSelector filters which Contacts this policy applies to.
+                  If omitted, the policy applies to all Contacts.
+                properties:
+                  subjectKind:
+                    description: SubjectKind restricts enrollment to Contacts whose
+                      SubjectRef.Kind matches this value.
+                    enum:
+                    - User
+                    type: string
+                type: object
+              trigger:
+                description: Trigger defines when enrollment happens.
+                properties:
+                  type:
+                    description: |-
+                      Type is the event that triggers enrollment.
+                      ContactCreated fires when a new Contact resource is created.
+                    enum:
+                    - ContactCreated
+                    type: string
+                required:
+                - type
+                type: object
+            required:
+            - contactGroupRef
+            - trigger
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

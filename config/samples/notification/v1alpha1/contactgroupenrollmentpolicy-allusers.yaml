@@ -1,0 +1,12 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroupEnrollmentPolicy
+metadata:
+  name: new-user-all-users
+spec:
+  contactGroupRef:
+    name: allusers-contact-group-4lqxdp
+    namespace: milo-system
+  trigger:
+    type: ContactCreated
+  contactSelector:
+    subjectKind: User

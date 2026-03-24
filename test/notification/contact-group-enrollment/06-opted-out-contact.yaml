@@ -1,0 +1,13 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: Contact
+metadata:
+  name: enrollment-opted-out-contact
+  namespace: milo-system
+spec:
+  subject:
+    apiGroup: iam.miloapis.com
+    kind: User
+    name: enrollment-opted-out-user
+  givenName: OptedOut
+  familyName: User
+  email: opted-out@example.com
