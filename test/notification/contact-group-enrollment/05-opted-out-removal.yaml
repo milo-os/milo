@@ -1,0 +1,12 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroupMembershipRemoval
+metadata:
+  name: enrollment-opt-out-removal
+  namespace: milo-system
+spec:
+  contactRef:
+    name: enrollment-opted-out-contact
+    namespace: milo-system
+  contactGroupRef:
+    name: enrollment-test-group
+    namespace: milo-system
