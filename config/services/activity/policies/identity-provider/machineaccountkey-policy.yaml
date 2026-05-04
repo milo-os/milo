@@ -5,11 +5,11 @@
 apiVersion: activity.miloapis.com/v1alpha1
 kind: ActivityPolicy
 metadata:
-  name: identity.miloapis.com-machineaccountkey
+  name: identity.miloapis.com-serviceaccountkey
 spec:
   resource:
     apiGroup: identity.miloapis.com
-    kind: MachineAccountKey
+    kind: ServiceAccountKey
 
   auditRules:
     - name: create-with-account
