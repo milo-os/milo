@@ -12,6 +12,7 @@ End-to-end tests for ResourceRegistration validation including:
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [create-valid-registration](#step-create-valid-registration) | 0 | 3 | 0 | 0 | 0 |
+| 1a | [create-valid-feature-registration](#step-create-valid-feature-registration) | 0 | 2 | 0 | 0 | 0 |
 | 2 | [test-missing-required-fields](#step-test-missing-required-fields) | 0 | 1 | 0 | 0 | 0 |
 | 3 | [test-invalid-type-enum](#step-test-invalid-type-enum) | 0 | 1 | 0 | 0 | 0 |
 | 4 | [test-invalid-conversion-factor](#step-test-invalid-conversion-factor) | 0 | 1 | 0 | 0 | 0 |
@@ -34,6 +35,17 @@ Create a valid ResourceRegistration and verify it becomes Active
 | 1 | `create` | 0 | 0 | *No description* |
 | 2 | `wait` | 0 | 0 | *No description* |
 | 3 | `assert` | 0 | 0 | *No description* |
+
+### Step: `create-valid-feature-registration`
+
+Verify that a ResourceRegistration with type=`Feature` is accepted and reaches Active=True. This test covers the new 'Feature' type available on resource registrations, ensuring proper validation and signaling for feature flag entitlements.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `test-missing-required-fields`
 
@@ -142,3 +154,4 @@ Verify that exceeding maximum claimingResources array size is rejected
 
 ---
 
+ 
