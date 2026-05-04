@@ -28,6 +28,21 @@ spec:
         - assert:
             file: assertions/assert-valid-registration.yaml
 
+    - name: create-valid-feature-registration
+      description: Verify that type=Feature is accepted and reaches Active=True
+      try:
+        - create:
+            file: test-data/valid-feature-registration.yaml
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceRegistration
+            name: test-valid-feature-registration
+            timeout: 30s
+            for:
+              condition:
+                name: Active
+                value: 'True'
+
     - name: test-missing-required-fields
       description: Verify that ResourceRegistrations without required fields are rejected
       try:
