@@ -9,7 +9,7 @@ resources:
   - group-policy.yaml
   - groupmembership-policy.yaml
   - policybinding-policy.yaml
-  - machineaccount-policy.yaml
+  - serviceaccount-policy.yaml
   - userinvitation-policy.yaml
   - userdeactivation-policy.yaml
   - platforminvitation-policy.yaml

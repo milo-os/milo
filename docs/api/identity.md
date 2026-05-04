@@ -12,7 +12,7 @@ Package v1alpha1 contains API types for identity-related resources.
 
 - [UserIdentity](#useridentity)
 - [Session](#session)
-- [MachineAccountKey](#machineaccountkey)
+- [ServiceAccountKey](#serviceaccountkey)
 
 ---
 
@@ -72,37 +72,38 @@ This resource provides information about user authentication sessions, including
 | `ip` | string | The IP address from which the session was created (optional). |
 | `fingerprintID` | string | A fingerprint identifier for the session (optional). |
 | `createdAt` | metav1.Time | The timestamp when the session was created. |
-| `expiresAt` | *metav1.Time | The timestamp when the session expires (optional). |
+| `lastUpdatedAt` | *metav1.Time | The last time the provider updated this session, e.g. Zitadel `change_date` (optional). |
+| `userAgent` | string | The client User-Agent string for this session, when the provider supplies it (optional). |
 
 ---
 
-### MachineAccountKey
+### ServiceAccountKey
 
-MachineAccountKey represents a credential for a MachineAccount.
+ServiceAccountKey represents a credential for a ServiceAccount.
 
-This resource allows users to manage API keys for machine-to-machine authentication. When a MachineAccountKey is created, the system generates a private key that is returned in the status only once.
+This resource allows users to manage API keys for machine-to-machine authentication. When a ServiceAccountKey is created, the system generates a private key that is returned in the status only once.
 
 **Use cases:**
 
 - Authenticating external services and automation scripts
 - Managing key rotation and expiration
-- Auditing machine account activity
+- Auditing service account activity
 
 **Important notes:**
 
 - The `privateKey` is ONLY available in the creation response and is NEVER persisted in the Milo API server.
 - Keys can have an optional expiration date.
-- Each key is associated with a specific `MachineAccount` identified by its email.
+- Each key is associated with a specific `ServiceAccount` identified by its email.
 
-#### MachineAccountKeySpec
+#### ServiceAccountKeySpec
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `machineAccountUserName` | string | The email address of the MachineAccount that owns this key. |
+| `serviceAccountUserName` | string | The email address of the ServiceAccount that owns this key. |
 | `expirationDate` | metav1.Time | Optional date and time when the key will expire. |
 | `publicKey` | string | Optional public key to be registered. If not provided, one will be auto-generated. |
 
-#### MachineAccountKeyStatus
+#### ServiceAccountKeyStatus
 
 | Field | Type | Description |
 | :--- | :--- | :--- |

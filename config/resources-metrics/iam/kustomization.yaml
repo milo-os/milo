@@ -7,7 +7,7 @@ configMapGenerator:
     - users.yaml
     - groups.yaml
     - group_memberships.yaml
-    - machine_accounts.yaml
+    - service_accounts.yaml
     - policy_bindings.yaml
     - roles.yaml
     - user_invitations.yaml

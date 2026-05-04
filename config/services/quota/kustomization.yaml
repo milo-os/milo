@@ -3,6 +3,6 @@ kind: Component
 
 components:
   - iam
-  - telemetry/metrics/control-plane
+  - telemetry/metrics
   - registrations
   - claim-policies

@@ -141,7 +141,7 @@ spec:
                 items:
                   description: |-
                     Subject contains a reference to the object or user identities a role binding applies to.
-                    This can be a User, Group, or MachineAccount.
+                    This can be a User, Group, or ServiceAccount.
                   properties:
                     kind:
                       description: Kind of object being referenced. Values defined
@@ -149,7 +149,7 @@ spec:
                       enum:
                       - User
                       - Group
-                      - MachineAccount
+                      - ServiceAccount
                       type: string
                     name:
                       description: |-
@@ -160,7 +160,7 @@ spec:
                     namespace:
                       description: |-
                         Namespace of the referenced object.
-                        If not specified for a Group, User or MachineAccount, it is ignored.
+                        If not specified for a Group, User or ServiceAccount, it is ignored.
                       type: string
                     uid:
                       description: UID of the referenced object. Optional for system

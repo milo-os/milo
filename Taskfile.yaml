@@ -141,6 +141,11 @@ tasks:
         WEBHOOK_COUNT=$(task kubectl -- get mutatingwebhookconfigurations,validatingwebhookconfigurations --no-headers | grep resourcemanager.miloapis.com | wc -l || echo "0")
         echo "Installed $WEBHOOK_COUNT webhook configurations in Milo API server"
 
+        echo "📦 Installing ResourceMetricsPolicy CRD to Milo API server..."
+        task kubectl -- apply -f https://raw.githubusercontent.com/milo-os/resource-metrics/main/config/crd/bases/resourcemetrics.miloapis.com_resourcemetricspolicies.yaml
+        task kubectl -- wait --for=condition=Established customresourcedefinitions resourcemetricspolicies.resourcemetrics.miloapis.com --timeout=60s
+        echo "✅ ResourceMetricsPolicy CRD installed successfully"
+
         echo "⚙️  Installing service configurations to Milo API server..."
         task kubectl -- apply -k config/services/
         echo "✅ Service configurations installed successfully"

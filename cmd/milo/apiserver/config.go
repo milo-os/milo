@@ -45,7 +45,7 @@ import (
 
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
-	machineaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/machineaccountkeys"
+	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
@@ -78,7 +78,7 @@ type Config struct {
 type ExtraConfig struct {
 	SessionsProvider           SessionsProviderConfig
 	UserIdentitiesProvider     UserIdentitiesProviderConfig
-	MachineAccountKeysProvider MachineAccountKeysProviderConfig
+	ServiceAccountKeysProvider ServiceAccountKeysProviderConfig
 	EventsProvider             EventsProviderConfig
 }
 
@@ -115,8 +115,8 @@ type EventsProviderConfig struct {
 	ForwardExtras  []string
 }
 
-// MachineAccountKeysProviderConfig groups configuration for the machineaccountkeys backend provider
-type MachineAccountKeysProviderConfig struct {
+// ServiceAccountKeysProviderConfig groups configuration for the serviceaccountkeys backend provider
+type ServiceAccountKeysProviderConfig struct {
 	URL            string
 	CAFile         string
 	ClientCertFile string
@@ -220,23 +220,23 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 		provider.UserIdentities = backend
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(features.MachineAccountKeys) {
-		allow := make(map[string]struct{}, len(c.ExtraConfig.MachineAccountKeysProvider.ForwardExtras))
-		for _, k := range c.ExtraConfig.MachineAccountKeysProvider.ForwardExtras {
+	if utilfeature.DefaultFeatureGate.Enabled(features.ServiceAccountKeys) {
+		allow := make(map[string]struct{}, len(c.ExtraConfig.ServiceAccountKeysProvider.ForwardExtras))
+		for _, k := range c.ExtraConfig.ServiceAccountKeysProvider.ForwardExtras {
 			allow[k] = struct{}{}
 		}
-		cfg := machineaccountkeysbackend.Config{
+		cfg := serviceaccountkeysbackend.Config{
 			BaseConfig:     c.ControlPlane.Generic.LoopbackClientConfig,
-			ProviderURL:    c.ExtraConfig.MachineAccountKeysProvider.URL,
-			CAFile:         c.ExtraConfig.MachineAccountKeysProvider.CAFile,
-			ClientCertFile: c.ExtraConfig.MachineAccountKeysProvider.ClientCertFile,
-			ClientKeyFile:  c.ExtraConfig.MachineAccountKeysProvider.ClientKeyFile,
-			Timeout:        time.Duration(c.ExtraConfig.MachineAccountKeysProvider.TimeoutSeconds) * time.Second,
-			Retries:        c.ExtraConfig.MachineAccountKeysProvider.Retries,
+			ProviderURL:    c.ExtraConfig.ServiceAccountKeysProvider.URL,
+			CAFile:         c.ExtraConfig.ServiceAccountKeysProvider.CAFile,
+			ClientCertFile: c.ExtraConfig.ServiceAccountKeysProvider.ClientCertFile,
+			ClientKeyFile:  c.ExtraConfig.ServiceAccountKeysProvider.ClientKeyFile,
+			Timeout:        time.Duration(c.ExtraConfig.ServiceAccountKeysProvider.TimeoutSeconds) * time.Second,
+			Retries:        c.ExtraConfig.ServiceAccountKeysProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := machineaccountkeysbackend.NewDynamicProvider(cfg)
-		provider.MachineAccountKeys = backend
+		backend, _ := serviceaccountkeysbackend.NewDynamicProvider(cfg)
+		provider.ServiceAccountKeys = backend
 	}
 
 	return provider

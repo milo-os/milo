@@ -20,13 +20,12 @@ no longer exists in the API server, allowing the controller to proceed.
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup-organization](#step-setup-organization) | 0 | 2 | 0 | 0 | 0 |
 | 2 | [setup-user](#step-setup-user) | 0 | 3 | 0 | 0 | 0 |
-| 3 | [create-membership](#step-create-membership) | 0 | 2 | 0 | 0 | 0 |
+| 3 | [create-membership](#step-create-membership) | 0 | 3 | 0 | 0 | 0 |
 | 4 | [delete-user-and-verify-membership-cleaned-up](#step-delete-user-and-verify-membership-cleaned-up) | 0 | 3 | 0 | 0 | 0 |
 
 ### Step: `setup-organization`
 
-Create the Organization and wait for its namespace to be provisioned.
-
+Create the Organization and wait for its namespace.
 
 #### Try
 
@@ -51,16 +50,17 @@ the membership-cleanup finalizer on the first reconcile.
 
 ### Step: `create-membership`
 
-Create an OrganizationMembership linking the user to the organization with
-the owner role. The membership controller will reconcile it to Ready.
+Create the owner role fixture and an OrganizationMembership linking the
+user to the organization. The membership controller reconciles it to Ready.
 
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 0 | *No description* |
-| 2 | `wait` | 0 | 0 | *No description* |
+| 1 | `script` | 0 | 0 | Create the owner role so the membership webhook validates it |
+| 2 | `apply` | 0 | 0 | *No description* |
+| 3 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `delete-user-and-verify-membership-cleaned-up`
 
@@ -73,10 +73,8 @@ membership-cleanup finalizer.
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `delete` | 0 | 0 | *No description* |
-| 2 | `error` | 0 | 0 | Wait for the User to be fully removed from the API server |
-| 3 | `error` | 0 | 0 | Assert the OrganizationMembership was deleted by the finalizer (fix for
-issue #536).
- |
+| 2 | `error` | 0 | 0 | Wait for the User to be fully removed |
+| 3 | `error` | 0 | 0 | Assert the OrganizationMembership was deleted by the finalizer |
 
 ---
 

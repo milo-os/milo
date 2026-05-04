@@ -22,10 +22,10 @@ spec:
     - iam.miloapis.com/userinvitations.update
     - iam.miloapis.com/userinvitations.patch
     - iam.miloapis.com/userinvitations.delete
-    - iam.miloapis.com/machineaccounts.create
-    - iam.miloapis.com/machineaccounts.update
-    - iam.miloapis.com/machineaccounts.patch
-    - iam.miloapis.com/machineaccounts.delete
+    - iam.miloapis.com/serviceaccounts.create
+    - iam.miloapis.com/serviceaccounts.update
+    - iam.miloapis.com/serviceaccounts.patch
+    - iam.miloapis.com/serviceaccounts.delete
     - iam.miloapis.com/policybindings.create
     - iam.miloapis.com/policybindings.update
     - iam.miloapis.com/policybindings.patch

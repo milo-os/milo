@@ -68,10 +68,10 @@ var (
 	userIdentitiesProviderCAFile         string
 	userIdentitiesProviderClientCert     string
 	userIdentitiesProviderClientKey      string
-	machineAccountKeysProviderURL        string
-	machineAccountKeysProviderCAFile     string
-	machineAccountKeysProviderClientCert string
-	machineAccountKeysProviderClientKey  string
+	serviceAccountKeysProviderURL        string
+	serviceAccountKeysProviderCAFile     string
+	serviceAccountKeysProviderClientCert string
+	serviceAccountKeysProviderClientKey  string
 	eventsProviderURL                    string
 	eventsProviderCAFile                 string
 	eventsProviderClientCert             string
@@ -188,10 +188,10 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&userIdentitiesProviderCAFile, "useridentities-provider-ca-file", "", "Path to CA file to validate useridentities provider TLS")
 	fs.StringVar(&userIdentitiesProviderClientCert, "useridentities-provider-client-cert", "", "Client certificate for mTLS to useridentities provider")
 	fs.StringVar(&userIdentitiesProviderClientKey, "useridentities-provider-client-key", "", "Client private key for mTLS to useridentities provider")
-	fs.StringVar(&machineAccountKeysProviderURL, "machineaccountkeys-provider-url", "", "Direct provider base URL for machineaccountkeys (e.g., https://zitadel-apiserver:8443)")
-	fs.StringVar(&machineAccountKeysProviderCAFile, "machineaccountkeys-provider-ca-file", "", "Path to CA file to validate machineaccountkeys provider TLS")
-	fs.StringVar(&machineAccountKeysProviderClientCert, "machineaccountkeys-provider-client-cert", "", "Client certificate for mTLS to machineaccountkeys provider")
-	fs.StringVar(&machineAccountKeysProviderClientKey, "machineaccountkeys-provider-client-key", "", "Client private key for mTLS to machineaccountkeys provider")
+	fs.StringVar(&serviceAccountKeysProviderURL, "serviceaccountkeys-provider-url", "", "Direct provider base URL for serviceaccountkeys (e.g., https://zitadel-apiserver:8443)")
+	fs.StringVar(&serviceAccountKeysProviderCAFile, "serviceaccountkeys-provider-ca-file", "", "Path to CA file to validate serviceaccountkeys provider TLS")
+	fs.StringVar(&serviceAccountKeysProviderClientCert, "serviceaccountkeys-provider-client-cert", "", "Client certificate for mTLS to serviceaccountkeys provider")
+	fs.StringVar(&serviceAccountKeysProviderClientKey, "serviceaccountkeys-provider-client-key", "", "Client private key for mTLS to serviceaccountkeys provider")
 	fs.StringVar(&eventsProviderURL, "events-provider-url", "", "Activity API server URL for events storage (e.g., https://activity-apiserver.activity-system.svc:443)")
 	fs.StringVar(&eventsProviderCAFile, "events-provider-ca-file", "", "Path to CA file to validate Activity provider TLS")
 	fs.StringVar(&eventsProviderClientCert, "events-provider-client-cert", "", "Client certificate for mTLS to Activity provider")
@@ -261,13 +261,13 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	config.ExtraConfig.UserIdentitiesProvider.Retries = providerRetries
 	config.ExtraConfig.UserIdentitiesProvider.ForwardExtras = forwardExtras
 
-	config.ExtraConfig.MachineAccountKeysProvider.URL = machineAccountKeysProviderURL
-	config.ExtraConfig.MachineAccountKeysProvider.CAFile = machineAccountKeysProviderCAFile
-	config.ExtraConfig.MachineAccountKeysProvider.ClientCertFile = machineAccountKeysProviderClientCert
-	config.ExtraConfig.MachineAccountKeysProvider.ClientKeyFile = machineAccountKeysProviderClientKey
-	config.ExtraConfig.MachineAccountKeysProvider.TimeoutSeconds = providerTimeoutSeconds
-	config.ExtraConfig.MachineAccountKeysProvider.Retries = providerRetries
-	config.ExtraConfig.MachineAccountKeysProvider.ForwardExtras = forwardExtras
+	config.ExtraConfig.ServiceAccountKeysProvider.URL = serviceAccountKeysProviderURL
+	config.ExtraConfig.ServiceAccountKeysProvider.CAFile = serviceAccountKeysProviderCAFile
+	config.ExtraConfig.ServiceAccountKeysProvider.ClientCertFile = serviceAccountKeysProviderClientCert
+	config.ExtraConfig.ServiceAccountKeysProvider.ClientKeyFile = serviceAccountKeysProviderClientKey
+	config.ExtraConfig.ServiceAccountKeysProvider.TimeoutSeconds = providerTimeoutSeconds
+	config.ExtraConfig.ServiceAccountKeysProvider.Retries = providerRetries
+	config.ExtraConfig.ServiceAccountKeysProvider.ForwardExtras = forwardExtras
 
 	config.ExtraConfig.EventsProvider.URL = eventsProviderURL
 	config.ExtraConfig.EventsProvider.CAFile = eventsProviderCAFile

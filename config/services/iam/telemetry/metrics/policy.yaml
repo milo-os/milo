@@ -1,0 +1,365 @@
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: milo-iam-metrics
+spec:
+  generators:
+    # iam.miloapis.com: Group
+    - name: iam-groups-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: groups
+      families:
+        - name: milo_groups_info
+          help: "Information about IAM groups"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-groups-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: groups
+      families:
+        - name: milo_groups_created_timestamp
+          help: "Creation timestamp of IAM groups"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # iam.miloapis.com: GroupMembership
+    - name: iam-group-memberships-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: groupmemberships
+      families:
+        - name: milo_group_memberships_info
+          help: "Information about IAM group memberships"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-group-memberships-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: groupmemberships
+      families:
+        - name: milo_group_memberships_created_timestamp
+          help: "Creation timestamp of IAM group memberships"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # iam.miloapis.com: MachineAccount
+    - name: iam-machine-accounts-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: machineaccounts
+      families:
+        - name: milo_machine_accounts_info
+          help: "Information about IAM machine accounts"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-machine-accounts-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: machineaccounts
+      families:
+        - name: milo_machine_accounts_created_timestamp
+          help: "Creation timestamp of IAM machine accounts"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # iam.miloapis.com: PolicyBinding
+    - name: iam-policy-bindings-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: policybindings
+      families:
+        - name: milo_policy_bindings_info
+          help: "Information about IAM policy bindings"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-policy-bindings-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: policybindings
+      families:
+        - name: milo_policy_bindings_created_timestamp
+          help: "Creation timestamp of IAM policy bindings"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: iam-policy-bindings-status-condition
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: policybindings
+      families:
+        - name: milo_policy_bindings_status_condition
+          help: "Status conditions for IAM policy bindings"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    # iam.miloapis.com: ProtectedResource
+    - name: iam-protected-resources-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: protectedresources
+      families:
+        - name: milo_protected_resources_info
+          help: "Information about IAM protected resources"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-protected-resources-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: protectedresources
+      families:
+        - name: milo_protected_resources_created_timestamp
+          help: "Creation timestamp of IAM protected resources"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: iam-protected-resources-status-condition
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: protectedresources
+      families:
+        - name: milo_protected_resources_status_condition
+          help: "Status conditions for IAM protected resources"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    # iam.miloapis.com: Role
+    - name: iam-roles-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: roles
+      families:
+        - name: milo_roles_info
+          help: "Information about IAM roles"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-roles-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: roles
+      families:
+        - name: milo_roles_created_timestamp
+          help: "Creation timestamp of IAM roles"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: iam-roles-status-condition
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: roles
+      families:
+        - name: milo_roles_status_condition
+          help: "Status conditions for IAM roles"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    # iam.miloapis.com: UserInvitation
+    - name: iam-user-invitations-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: userinvitations
+      families:
+        - name: milo_user_invitations_info
+          help: "Information about IAM user invitations"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-user-invitations-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: userinvitations
+      families:
+        - name: milo_user_invitations_created_timestamp
+          help: "Creation timestamp of IAM user invitations"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # iam.miloapis.com: User
+    - name: iam-users-info
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: users
+      families:
+        - name: milo_users_info
+          help: "Information about IAM users"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: iam-users-created-timestamp
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: users
+      families:
+        - name: milo_users_created_timestamp
+          help: "Creation timestamp of IAM users"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"

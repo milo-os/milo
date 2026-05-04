@@ -71,9 +71,9 @@ resources:
   - notes-creator-editor.yaml
   - notes-admin.yaml
   - identity-user-session-viewer.yaml
-  - iam-machine-accounts-viewer.yaml
-  - iam-machine-accounts-editor.yaml
-  - iam-machine-accounts-admin.yaml
-  - identity-machine-account-keys-viewer.yaml
-  - identity-machine-account-keys-editor.yaml
-  - identity-machine-account-keys-admin.yaml
+  - iam-service-accounts-viewer.yaml
+  - iam-service-accounts-editor.yaml
+  - iam-service-accounts-admin.yaml
+  - identity-service-account-keys-viewer.yaml
+  - identity-service-account-keys-editor.yaml
+  - identity-service-account-keys-admin.yaml

@@ -1,7 +1,0 @@
-apiVersion: iam.miloapis.com/v1alpha1
-kind: MachineAccount
-metadata:
-  name: example-machine-account
-  namespace: default
-spec:
-  state: Active

@@ -4,7 +4,7 @@ kind: Component
 configMapGenerator:
   - name: milo-identity-resource-metrics
     files:
-    - machine_account_keys.yaml
+    - service_account_keys.yaml
     options:
       labels:
         telemetry.datumapis.com/core-resource-metrics-config: "true"

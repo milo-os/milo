@@ -14,5 +14,5 @@ resources:
   - platformaccessapproval.yaml
   - platformaccessrejection.yaml
   - platforminvitation.yaml
-  - machineaccount.yaml
+  - serviceaccount.yaml
 

@@ -24,9 +24,9 @@ spec:
     - iam.miloapis.com/userinvitations.get
     - iam.miloapis.com/userinvitations.list
     - iam.miloapis.com/userinvitations.watch
-    - iam.miloapis.com/machineaccounts.get
-    - iam.miloapis.com/machineaccounts.list
-    - iam.miloapis.com/machineaccounts.watch
+    - iam.miloapis.com/serviceaccounts.get
+    - iam.miloapis.com/serviceaccounts.list
+    - iam.miloapis.com/serviceaccounts.watch
     - iam.miloapis.com/protectedresources.get
     - iam.miloapis.com/protectedresources.list
     - iam.miloapis.com/protectedresources.watch

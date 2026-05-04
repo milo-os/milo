@@ -70,11 +70,11 @@ spec:
           - --useridentities-provider-ca-file=$(USERIDENTITIES_PROVIDER_CA_FILE)
           - --useridentities-provider-client-cert=$(USERIDENTITIES_PROVIDER_CLIENT_CERT_FILE)
           - --useridentities-provider-client-key=$(USERIDENTITIES_PROVIDER_CLIENT_KEY_FILE)
-          # MachineAccountKeys provider configuration
-          - --machineaccountkeys-provider-url=$(MACHINEACCOUNTKEYS_PROVIDER_URL)
-          - --machineaccountkeys-provider-ca-file=$(MACHINEACCOUNTKEYS_PROVIDER_CA_FILE)
-          - --machineaccountkeys-provider-client-cert=$(MACHINEACCOUNTKEYS_PROVIDER_CLIENT_CERT_FILE)
-          - --machineaccountkeys-provider-client-key=$(MACHINEACCOUNTKEYS_PROVIDER_CLIENT_KEY_FILE)
+          # ServiceAccountKeys provider configuration
+          - --serviceaccountkeys-provider-url=$(SERVICEACCOUNTKEYS_PROVIDER_URL)
+          - --serviceaccountkeys-provider-ca-file=$(SERVICEACCOUNTKEYS_PROVIDER_CA_FILE)
+          - --serviceaccountkeys-provider-client-cert=$(SERVICEACCOUNTKEYS_PROVIDER_CLIENT_CERT_FILE)
+          - --serviceaccountkeys-provider-client-key=$(SERVICEACCOUNTKEYS_PROVIDER_CLIENT_KEY_FILE)
           # Events proxy provider configuration (requires EventsProxy feature gate)
           - --events-provider-url=$(EVENTS_PROVIDER_URL)
           - --events-provider-ca-file=$(EVENTS_PROVIDER_CA_FILE)
@@ -162,13 +162,13 @@ spec:
             value: ""
           - name: USERIDENTITIES_PROVIDER_CLIENT_KEY_FILE
             value: ""
-          - name: MACHINEACCOUNTKEYS_PROVIDER_URL
+          - name: SERVICEACCOUNTKEYS_PROVIDER_URL
             value: ""
-          - name: MACHINEACCOUNTKEYS_PROVIDER_CA_FILE
+          - name: SERVICEACCOUNTKEYS_PROVIDER_CA_FILE
             value: ""
-          - name: MACHINEACCOUNTKEYS_PROVIDER_CLIENT_CERT_FILE
+          - name: SERVICEACCOUNTKEYS_PROVIDER_CLIENT_CERT_FILE
             value: ""
-          - name: MACHINEACCOUNTKEYS_PROVIDER_CLIENT_KEY_FILE
+          - name: SERVICEACCOUNTKEYS_PROVIDER_CLIENT_KEY_FILE
             value: ""
           # Events proxy provider configuration (requires --feature-gates=EventsProxy=true)
           - name: EVENTS_PROVIDER_URL

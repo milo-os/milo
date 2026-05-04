@@ -306,8 +306,8 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	if ok {
 		if err := ensureConnectorClass(ctx, pc.Dynamic,
-			"datum-connect",
-			"networking.datumapis.com/datum-connect",
+			"iroh-quic-tunnel",
+			"networking.datumapis.com/iroh-quic-tunnel",
 		); err != nil {
 			logger.Error(err, "ensure connectorclass failed", "project", project.Name)
 			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil

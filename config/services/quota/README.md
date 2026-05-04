@@ -25,12 +25,12 @@ Each quota resource type is registered as a ProtectedResource in Milo's IAM syst
 
 ## Telemetry and Metrics
 
-The quota system exports comprehensive metrics for monitoring quota usage and system health through kube-state-metrics. Metrics fall into two categories:
+The quota system exports comprehensive metrics for monitoring quota usage and system health via ResourceMetricsPolicy resources. Metrics definitions are found in `telemetry/metrics/policy.yaml` under this directory and are automatically discovered and processed by the resource-metrics-collector for export.
+
+Metrics fall into two categories:
 
 **Operational Metrics**: Status conditions, generation lag, policy enablement, controller health
 **Business Metrics**: Quota limits/usage, capacity, utilization ratios, allocation counts
-
-Metrics are configured in `telemetry/metrics/control-plane/` and deployed as ConfigMaps that the resource-metrics-collector automatically discovers and merges into its configuration.
 
 ### Exported Metrics
 
@@ -112,4 +112,5 @@ Service configurations are automatically deployed to the Milo API server:
 task kubectl -- apply -k config/services/
 ```
 
-This deploys IAM roles, protected resources, and telemetry metric ConfigMaps.
+This deploys IAM roles, protected resources, and telemetry metric ResourceMetricsPolicy definitions.
+ 

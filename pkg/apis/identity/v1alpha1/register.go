@@ -33,8 +33,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&SessionList{},
 		&UserIdentity{},
 		&UserIdentityList{},
-		&MachineAccountKey{},
-		&MachineAccountKeyList{},
+		&ServiceAccountKey{},
+		&ServiceAccountKeyList{},
 	}
 
 	scheme.AddKnownTypes(SchemeGroupVersion, types...)
@@ -42,8 +42,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		Group:   SchemeGroupVersion.Group,
 		Version: runtime.APIVersionInternal,
 	},
-		&MachineAccountKey{},
-		&MachineAccountKeyList{},
+		&ServiceAccountKey{},
+		&ServiceAccountKeyList{},
 	)
 
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)

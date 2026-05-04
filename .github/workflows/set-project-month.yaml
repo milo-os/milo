@@ -1,0 +1,10 @@
+name: Set Project Month
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+jobs:
+  set-month:
+    uses: datum-cloud/actions/.github/workflows/set-project-month.yaml@v1.13.2
+    secrets: inherit

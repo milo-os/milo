@@ -1,0 +1,41 @@
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: milo-identity-metrics
+spec:
+  generators:
+    # identity.miloapis.com: MachineAccountKey
+    - name: identity-machine-account-keys-info
+      resource:
+        group: identity.miloapis.com
+        version: v1alpha1
+        resource: machineaccountkeys
+      families:
+        - name: milo_machine_account_keys_info
+          help: "Information about identity machine account keys"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+
+    - name: identity-machine-account-keys-created-timestamp
+      resource:
+        group: identity.miloapis.com
+        version: v1alpha1
+        resource: machineaccountkeys
+      families:
+        - name: milo_machine_account_keys_created_timestamp
+          help: "Creation timestamp of identity machine account keys"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"

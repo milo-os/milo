@@ -2,7 +2,7 @@ resources:
 - iam.miloapis.com_roles.yaml
 - iam.miloapis.com_groups.yaml
 - iam.miloapis.com_groupmemberships.yaml
-- iam.miloapis.com_machineaccounts.yaml
+- iam.miloapis.com_serviceaccounts.yaml
 - iam.miloapis.com_policybindings.yaml
 - iam.miloapis.com_protectedresources.yaml
 - iam.miloapis.com_users.yaml
@@ -11,3 +11,4 @@ resources:
 - iam.miloapis.com_userdeactivations.yaml
 - iam.miloapis.com_platforminvitations.yaml
 - iam.miloapis.com_platformaccessapprovals.yaml
+- iam.miloapis.com_platformaccessrejections.yaml

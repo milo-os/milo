@@ -89,8 +89,9 @@ const (
 	userEmailIndexKey = "spec.email"
 )
 
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations,verbs=get;list;watch;update;delete
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations/status,verbs=update
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations/finalizers,verbs=update
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=policybindings,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=get;list;watch;create

@@ -5,5 +5,7 @@ kind: Component
 # Add new service directories here as they are created.
 
 components:
+  - iam
+  - resourcemanager
   - quota
   - activity
