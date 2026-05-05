@@ -65,15 +65,15 @@ func (m *ProjectMutator) Default(ctx context.Context, obj runtime.Object) error 
 	parentAPIGroup, parentAPIGroupOk := req.UserInfo.Extra[iamv1alpha1.ParentAPIGroupExtraKey]
 
 	if !parentNameOk || !parentKindOk || !parentAPIGroupOk {
-		errMsg := "request context does not have the required parent information"
-		projectlog.Error(fmt.Errorf(errMsg), errMsg)
-		return fmt.Errorf(errMsg)
+		const errMsg = "request context does not have the required parent information"
+		projectlog.Error(fmt.Errorf("%s", errMsg), errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	if len(parentKind) != 1 || parentKind[0] != "Organization" || parentAPIGroup[0] != v1alpha1.GroupVersion.Group {
-		errMsg := "request context has invalid parent information, must be Organization from the resourcemanager.miloapis.com API group"
-		projectlog.Error(fmt.Errorf(errMsg), errMsg)
-		return fmt.Errorf(errMsg)
+		const errMsg = "request context has invalid parent information, must be Organization from the resourcemanager.miloapis.com API group"
+		projectlog.Error(fmt.Errorf("%s", errMsg), errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	requestContextOrgID := parentName[0]
