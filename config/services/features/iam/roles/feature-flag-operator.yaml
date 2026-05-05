@@ -1,0 +1,31 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: features.miloapis.com-operator
+  namespace: milo-system
+  annotations:
+    kubernetes.io/display-name: Feature Flag Operator
+    kubernetes.io/description: Operational access to quota resources required to manage feature flags, including read access to registrations and allowance buckets and full management of resource grants
+  labels:
+    features.miloapis.com/role-type: operator
+    features.miloapis.com/service: features
+spec:
+  launchStage: Beta
+  includedPermissions:
+    # ResourceRegistration read permissions
+    - quota.miloapis.com/resourceregistrations.get
+    - quota.miloapis.com/resourceregistrations.list
+    - quota.miloapis.com/resourceregistrations.watch
+
+    # ResourceGrant full management (feature flags are granted via ResourceGrants)
+    - quota.miloapis.com/resourcegrants.get
+    - quota.miloapis.com/resourcegrants.list
+    - quota.miloapis.com/resourcegrants.watch
+    - quota.miloapis.com/resourcegrants.create
+    - quota.miloapis.com/resourcegrants.update
+    - quota.miloapis.com/resourcegrants.delete
+
+    # AllowanceBucket read permissions
+    - quota.miloapis.com/allowancebuckets.get
+    - quota.miloapis.com/allowancebuckets.list
+    - quota.miloapis.com/allowancebuckets.watch
