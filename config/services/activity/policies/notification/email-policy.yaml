@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: notification.miloapis.com-email
+spec:
+  resource:
+    apiGroup: notification.miloapis.com
+    kind: Email
+
+  auditRules:
+    - name: create-with-email-address
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.recipient) && has(audit.requestObject.spec.recipient.emailAddress)"
+      summary: "{{ actor }} sent an email to {{ audit.requestObject.spec.recipient.emailAddress }}"
+
+    - name: create-with-userref
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.recipient) && has(audit.requestObject.spec.recipient.userRef)"
+      summary: "{{ actor }} sent an email to {{ audit.requestObject.spec.recipient.userRef.name }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} sent an email"

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for PlatformAccessApproval resources.
+# Created when a user's request to join the platform is approved.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: iam.miloapis.com-platformaccessapproval
+spec:
+  resource:
+    apiGroup: iam.miloapis.com
+    kind: PlatformAccessApproval
+
+  auditRules:
+    - name: create-with-email
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.subjectRef) && has(audit.requestObject.spec.subjectRef.email)"
+      summary: "{{ actor }} approved platform access for {{ audit.requestObject.spec.subjectRef.email }}"
+
+    - name: create-with-userref
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.subjectRef) && has(audit.requestObject.spec.subjectRef.userRef)"
+      summary: "{{ actor }} approved platform access for {{ audit.requestObject.spec.subjectRef.userRef.name }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} approved platform access"
+
+    - name: delete
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} revoked platform access approval {{ audit.objectRef.name }}"

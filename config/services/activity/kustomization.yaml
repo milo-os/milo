@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy resources require the activity.miloapis.com CRDs to be installed.
+# Those CRDs are provided by the activity service, which is not deployed in the
+# milo test cluster. Deploy this directory separately once the activity service is present.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+components:
+  - policies

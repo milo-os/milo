@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for PlatformAccessRejection resources.
+# Created when a user's request to join the platform is rejected.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: iam.miloapis.com-platformaccessrejection
+spec:
+  resource:
+    apiGroup: iam.miloapis.com
+    kind: PlatformAccessRejection
+
+  auditRules:
+    - name: create-with-subject-and-reason
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.subjectRef) && has(audit.requestObject.spec.reason)"
+      summary: "{{ actor }} rejected platform access for {{ audit.requestObject.spec.subjectRef.name }} (reason: {{ audit.requestObject.spec.reason }})"
+
+    - name: create-with-subject
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.subjectRef)"
+      summary: "{{ actor }} rejected platform access for {{ audit.requestObject.spec.subjectRef.name }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} rejected a platform access request"

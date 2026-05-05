@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for OrganizationMembership resources.
+# Defines how OrganizationMembership API operations appear in activity timelines.
+#
+# Audit rules handle CRUD operations captured by the Kubernetes API server audit log.
+# No eventRules — the controller sets conditions but does not emit Kubernetes Events.
+#
+# Design principles:
+# - Use the membership name (typically the user's email or ID) as display text
+# - Human-readable phrasing: "added X to organization", "removed X from organization"
+# - Prefer requestObject.spec.userRef.name for create if available; fall back to objectRef.name
+# - For delete, responseObject carries the deleted resource spec; fall back to objectRef.name
+# - Exclude system actors to reduce reconciliation noise
+#
+# IMPORTANT: For DELETE operations, audit.requestObject is a DeleteOptions (not the resource),
+# so we use audit.responseObject to access the resource spec if available.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: resourcemanager.miloapis.com-organizationmembership
+spec:
+  resource:
+    apiGroup: resourcemanager.miloapis.com
+    kind: OrganizationMembership
+
+  # Audit log rules for CRUD operations.
+  # All rules exclude system components (!audit.user.username.startsWith('system:'))
+  # so controller reconciliation doesn't generate activity noise.
+  auditRules:
+    # Create with userRef available — show who was added
+    - name: create-with-userref
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef)"
+      summary: "{{ actor }} added {{ audit.requestObject.spec.userRef.name }} to the organization"
+
+    # Create fallback — no spec available
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} added a member to the organization"
+
+    # Delete with responseObject spec — show who was removed
+    - name: delete-with-userref
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.userRef)"
+      summary: "{{ actor }} removed {{ audit.responseObject.spec.userRef.name }} from the organization"
+
+    # Delete fallback — no spec on response
+    - name: delete-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} removed a member from the organization"
+
+    - name: update
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource)"
+      summary: "{{ actor }} updated membership {{ link(audit.objectRef.name, audit.objectRef) }}"
