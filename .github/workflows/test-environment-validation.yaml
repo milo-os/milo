@@ -69,6 +69,9 @@ jobs:
           kind version
           echo "Go version: $(go version)"
 
+      - name: Generate code
+        run: task generate:code
+
       - name: Build Milo container image with caching
         uses: docker/build-push-action@v5
         with:
@@ -88,9 +91,6 @@ jobs:
 
           # Create the KinD cluster
           task test-infra:cluster-up
-
-          # Generate required code
-          task generate:code
 
           # Load the pre-built image (will skip build since image exists)
           task dev:load
