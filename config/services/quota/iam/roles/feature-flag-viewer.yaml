@@ -1,0 +1,17 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: quota.miloapis.com-resource-registration-viewer
+  namespace: milo-system
+  annotations:
+    kubernetes.io/display-name: Resource Registration Viewer
+    kubernetes.io/description: View access to the ResourceRegistration catalog (feature flags, entities, allocations)
+  labels:
+    quota.miloapis.com/role-type: viewer
+    quota.miloapis.com/service: quota
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - quota.miloapis.com/resourceregistrations.get
+    - quota.miloapis.com/resourceregistrations.list
+    - quota.miloapis.com/resourceregistrations.watch
