@@ -42,7 +42,12 @@ Expectations:
 | 2 | [verify-platform-context-discovery](#step-verify-platform-context-discovery) | 0 | 1 | 0 | 0 | 0 |
 | 3 | [verify-org-context-discovery](#step-verify-org-context-discovery) | 0 | 1 | 0 | 0 | 0 |
 | 4 | [verify-user-context-discovery](#step-verify-user-context-discovery) | 0 | 1 | 0 | 0 | 0 |
-| 5 | [cleanup-external-crd](#step-cleanup-external-crd) | 0 | 1 | 0 | 0 | 0 |
+| 5 | [apply-policy-override](#step-apply-policy-override) | 0 | 2 | 0 | 0 | 0 |
+| 6 | [verify-policy-overrides-crd-annotation](#step-verify-policy-overrides-crd-annotation) | 0 | 1 | 0 | 0 | 0 |
+| 7 | [verify-policy-shows-in-platform-context](#step-verify-policy-shows-in-platform-context) | 0 | 1 | 0 | 0 | 0 |
+| 8 | [delete-policy-override](#step-delete-policy-override) | 0 | 2 | 0 | 0 | 0 |
+| 9 | [verify-reverts-to-crd-annotation](#step-verify-reverts-to-crd-annotation) | 0 | 1 | 0 | 0 | 0 |
+| 10 | [cleanup-external-crd](#step-cleanup-external-crd) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `install-external-crd`
 
@@ -79,6 +84,58 @@ Organization context should expose Organization-tagged resources and hide Platfo
 ### Step: `verify-user-context-discovery`
 
 User context should expose multi-context resources (organizationmemberships) and hide the rest.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `script` | 0 | 0 | *No description* |
+
+### Step: `apply-policy-override`
+
+Apply a DiscoveryContextPolicy that overrides the CRD annotation for discoverywidgets.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `sleep` | 0 | 0 | *No description* |
+
+### Step: `verify-policy-overrides-crd-annotation`
+
+Policy changes discoverywidgets from Organization to Platform — org context should no longer see it.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `script` | 0 | 0 | *No description* |
+
+### Step: `verify-policy-shows-in-platform-context`
+
+Policy sets discoverywidgets to Platform, so it should appear at root.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `script` | 0 | 0 | *No description* |
+
+### Step: `delete-policy-override`
+
+Delete the DiscoveryContextPolicy — discovery should revert to CRD annotation behavior.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `delete` | 0 | 0 | *No description* |
+| 2 | `sleep` | 0 | 0 | *No description* |
+
+### Step: `verify-reverts-to-crd-annotation`
+
+After policy deletion, discoverywidgets reverts to Organization context per its CRD annotation.
 
 #### Try
 
