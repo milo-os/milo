@@ -5,8 +5,7 @@ metadata:
 spec:
   rules:
     - group: ""
-      resources: ["pods", "services", "configmaps", "secrets", "namespaces",
-                  "persistentvolumeclaims", "endpoints", "events", "limitranges"]
+      resources: ["configmaps", "secrets", "namespaces", "endpoints", "events"]
       contexts: ["Project"]
     - group: "rbac.authorization.k8s.io"
       resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
