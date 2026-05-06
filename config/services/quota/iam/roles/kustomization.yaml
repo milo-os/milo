@@ -7,3 +7,4 @@ resources:
   - quota-viewer.yaml
   - quota-operator.yaml
   - organization-quota-manager.yaml
+  - feature-flag-viewer.yaml
