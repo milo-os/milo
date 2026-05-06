@@ -4,3 +4,4 @@ kind: Component
 components:
   - protected-resources
   - roles
+  - policies
