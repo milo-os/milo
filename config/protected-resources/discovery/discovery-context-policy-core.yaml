@@ -36,6 +36,9 @@ spec:
     - group: "flowcontrol.apiserver.k8s.io"
       resources: ["flowschemas", "prioritylevelconfigurations"]
       contexts: ["Platform"]
+    - group: "coordination.k8s.io"
+      resources: ["leases"]
+      contexts: ["Platform"]
     - group: "admissionregistration.k8s.io"
       resources: ["mutatingwebhookconfigurations", "validatingadmissionpolicies", "validatingadmissionpolicybindings", "validatingwebhookconfigurations"]
       contexts: ["Platform"]
