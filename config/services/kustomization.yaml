@@ -3,9 +3,13 @@ kind: Component
 
 # This component aggregates all Milo service configurations.
 # Add new service directories here as they are created.
+#
+# `activity` is intentionally NOT included here: ActivityPolicy resources
+# require the activity.miloapis.com CRDs, which are not part of the milo
+# control plane. Deploy `config/services/activity/` explicitly in
+# environments where the activity service is present.
 
 components:
   - iam
   - resourcemanager
   - quota
-  - activity
