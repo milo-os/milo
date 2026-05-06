@@ -149,6 +149,52 @@ func TestDeletePolicyRemovesEntries(t *testing.T) {
 	}
 }
 
+func TestDeletePolicyRemovesWildcardEntries(t *testing.T) {
+	r := makeRegistry()
+	gr := schema.GroupResource{Group: "apps", Resource: "deployments"}
+
+	r.crd[gr] = []ParentContext{ContextOrganization}
+	r.upsertFromPolicy("removable-policy", policySpec{
+		rules: []policyRule{
+			{group: "apps", resources: []string{"*"}, contexts: []string{"Project"}},
+		},
+	})
+
+	got := r.AllowedContexts(gr)
+	if len(got) != 1 || got[0] != ContextProject {
+		t.Fatalf("before delete: AllowedContexts = %v, want [Project]", got)
+	}
+
+	r.deleteFromPolicy("removable-policy")
+
+	got = r.AllowedContexts(gr)
+	if len(got) != 1 || got[0] != ContextOrganization {
+		t.Errorf("after delete: AllowedContexts = %v, want [Organization] (wildcard entry not cleaned up)", got)
+	}
+}
+
+func TestExactMatchConflictBetweenPolicies(t *testing.T) {
+	r := makeRegistry()
+	gr := schema.GroupResource{Group: "example.com", Resource: "widgets"}
+
+	// "alpha-policy" wins alphabetically over "zeta-policy".
+	r.upsertFromPolicy("zeta-policy", policySpec{
+		rules: []policyRule{
+			{group: "example.com", resources: []string{"widgets"}, contexts: []string{"Organization"}},
+		},
+	})
+	r.upsertFromPolicy("alpha-policy", policySpec{
+		rules: []policyRule{
+			{group: "example.com", resources: []string{"widgets"}, contexts: []string{"Project"}},
+		},
+	})
+
+	got := r.AllowedContexts(gr)
+	if len(got) != 1 || got[0] != ContextProject {
+		t.Errorf("AllowedContexts = %v, want [Project] (alpha-policy wins exact conflict)", got)
+	}
+}
+
 func TestHasSyncedRequiresBothInformers(t *testing.T) {
 	r := makeRegistry()
 

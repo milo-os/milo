@@ -25,9 +25,11 @@ type DiscoveryContextPolicyRule struct {
 	Resources []string `json:"resources"`
 
 	// Contexts lists the parent contexts where these resources are visible.
+	// Valid values are Platform, Organization, Project, and User.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +listType=set
+	// +kubebuilder:validation:items:Enum=Platform;Organization;Project;User
 	Contexts []string `json:"contexts"`
 }
 

@@ -29,38 +29,26 @@ var discoveryContextPolicyGVR = schema.GroupVersionResource{
 // The retry loop is required because the DiscoveryContextPolicy CRD is bootstrapped
 // by Milo's own post-start hook, so this informer may be called before the CRD exists.
 func (r *Registry) RunPolicyInformer(ctx context.Context, loopbackConfig *rest.Config) error {
-	backoff := wait.Backoff{
-		Duration: 500 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Steps:    10,
-		Cap:      30 * time.Second,
+	dynClient, err := dynamic.NewForConfig(loopbackConfig)
+	if err != nil {
+		return fmt.Errorf("creating dynamic client for policy informer: %w", err)
 	}
 
+	// Poll until the DiscoveryContextPolicy CRD is registered. The CRD is
+	// bootstrapped by Milo's own post-start hook, so it may not exist yet when
+	// this hook fires. PollUntilContextCancel retries indefinitely so a slow
+	// etcd or CRD bootstrap does not permanently disable the policy informer.
 	var factory dynamicinformer.DynamicSharedInformerFactory
-
-	err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		dynClient, err := dynamic.NewForConfig(loopbackConfig)
-		if err != nil {
-			klog.V(4).InfoS("Failed to create dynamic client for policy informer, retrying", "err", err)
-			return false, nil
-		}
-
-		// Probe that the GVR is available before setting up the informer.
-		_, err = dynClient.Resource(discoveryContextPolicyGVR).List(ctx, metav1.ListOptions{Limit: 1})
+	if err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, err := dynClient.Resource(discoveryContextPolicyGVR).List(ctx, metav1.ListOptions{Limit: 1})
 		if err != nil {
 			klog.V(4).InfoS("DiscoveryContextPolicy CRD not yet available, retrying", "err", err)
 			return false, nil
 		}
-
 		factory = dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0)
 		return true, nil
-	})
-	if err != nil {
-		return fmt.Errorf("timed out waiting for DiscoveryContextPolicy CRD: %w", err)
-	}
-	if factory == nil {
-		return fmt.Errorf("context cancelled before DiscoveryContextPolicy CRD became available")
+	}); err != nil {
+		return fmt.Errorf("waiting for DiscoveryContextPolicy CRD: %w", err)
 	}
 
 	informer := factory.ForResource(discoveryContextPolicyGVR).Informer()

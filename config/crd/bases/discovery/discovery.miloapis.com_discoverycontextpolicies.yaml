@@ -58,9 +58,15 @@ spec:
                     for a set of resources in a group.
                   properties:
                     contexts:
-                      description: Contexts lists the parent contexts where these
-                        resources are visible.
+                      description: |-
+                        Contexts lists the parent contexts where these resources are visible.
+                        Valid values are Platform, Organization, Project, and User.
                       items:
+                        enum:
+                        - Platform
+                        - Organization
+                        - Project
+                        - User
                         type: string
                       minItems: 1
                       type: array
