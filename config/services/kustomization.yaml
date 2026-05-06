@@ -3,9 +3,13 @@ kind: Component
 
 # This component aggregates all Milo service configurations.
 # Add new service directories here as they are created.
+#
+# Note: the activity/ component is intentionally excluded here because it
+# requires activity.miloapis.com CRDs provided by the activity service.
+# Include config/services/activity/ directly in overlays where that service
+# is deployed.
 
 components:
   - iam
   - resourcemanager
   - quota
-  - activity
