@@ -12,17 +12,17 @@ End-to-end tests for ResourceRegistration validation including:
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [create-valid-registration](#step-create-valid-registration) | 0 | 3 | 0 | 0 | 0 |
-| 1a | [create-valid-feature-registration](#step-create-valid-feature-registration) | 0 | 2 | 0 | 0 | 0 |
-| 2 | [test-missing-required-fields](#step-test-missing-required-fields) | 0 | 1 | 0 | 0 | 0 |
-| 3 | [test-invalid-type-enum](#step-test-invalid-type-enum) | 0 | 1 | 0 | 0 | 0 |
-| 4 | [test-invalid-conversion-factor](#step-test-invalid-conversion-factor) | 0 | 1 | 0 | 0 | 0 |
-| 5 | [test-duplicate-claiming-resources](#step-test-duplicate-claiming-resources) | 0 | 1 | 0 | 0 | 0 |
-| 6 | [test-cross-resource-duplicate](#step-test-cross-resource-duplicate) | 0 | 3 | 0 | 0 | 0 |
-| 7 | [test-immutable-resource-type](#step-test-immutable-resource-type) | 0 | 3 | 0 | 0 | 0 |
-| 8 | [test-immutable-consumer-type-ref](#step-test-immutable-consumer-type-ref) | 0 | 1 | 0 | 0 | 0 |
-| 9 | [test-immutable-type](#step-test-immutable-type) | 0 | 1 | 0 | 0 | 0 |
-| 10 | [test-valid-update](#step-test-valid-update) | 0 | 2 | 0 | 0 | 0 |
-| 11 | [test-max-claiming-resources](#step-test-max-claiming-resources) | 0 | 1 | 0 | 0 | 0 |
+| 2 | [create-valid-feature-registration](#step-create-valid-feature-registration) | 0 | 2 | 0 | 0 | 0 |
+| 3 | [test-missing-required-fields](#step-test-missing-required-fields) | 0 | 1 | 0 | 0 | 0 |
+| 4 | [test-invalid-type-enum](#step-test-invalid-type-enum) | 0 | 1 | 0 | 0 | 0 |
+| 5 | [test-invalid-conversion-factor](#step-test-invalid-conversion-factor) | 0 | 1 | 0 | 0 | 0 |
+| 6 | [test-duplicate-claiming-resources](#step-test-duplicate-claiming-resources) | 0 | 1 | 0 | 0 | 0 |
+| 7 | [test-cross-resource-duplicate](#step-test-cross-resource-duplicate) | 0 | 3 | 0 | 0 | 0 |
+| 8 | [test-immutable-resource-type](#step-test-immutable-resource-type) | 0 | 3 | 0 | 0 | 0 |
+| 9 | [test-immutable-consumer-type-ref](#step-test-immutable-consumer-type-ref) | 0 | 1 | 0 | 0 | 0 |
+| 10 | [test-immutable-type](#step-test-immutable-type) | 0 | 1 | 0 | 0 | 0 |
+| 11 | [test-valid-update](#step-test-valid-update) | 0 | 2 | 0 | 0 | 0 |
+| 12 | [test-max-claiming-resources](#step-test-max-claiming-resources) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `create-valid-registration`
 
@@ -38,7 +38,7 @@ Create a valid ResourceRegistration and verify it becomes Active
 
 ### Step: `create-valid-feature-registration`
 
-Verify that a ResourceRegistration with type=`Feature` is accepted and reaches Active=True. This test covers the new 'Feature' type available on resource registrations, ensuring proper validation and signaling for feature flag entitlements.
+Verify that type=Feature is accepted and reaches Active=True
 
 #### Try
 
@@ -154,4 +154,3 @@ Verify that exceeding maximum claimingResources array size is rejected
 
 ---
 
- 
