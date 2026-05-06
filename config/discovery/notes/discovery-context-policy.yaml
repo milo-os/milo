@@ -1,0 +1,15 @@
+apiVersion: discovery.miloapis.com/v1alpha1
+kind: DiscoveryContextPolicy
+metadata:
+  name: notes-resources
+spec:
+  rules:
+    - group: notes.miloapis.com
+      resources: ["notes", "clusternotes"]
+      contexts: ["Platform"]
+    - group: crm.miloapis.com
+      resources: ["notes"]
+      contexts: ["Platform"]
+    - group: notification.miloapis.com
+      resources: ["notes"]
+      contexts: ["Platform"]
