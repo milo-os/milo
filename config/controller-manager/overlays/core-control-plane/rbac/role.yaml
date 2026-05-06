@@ -46,6 +46,22 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - discovery.miloapis.com
+  resources:
+  - discoverycontextpolicies
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - discovery.miloapis.com
+  resources:
+  - discoverycontextpolicies/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - dns.networking.miloapis.com
   resources:
   - dnszoneclasses

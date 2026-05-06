@@ -50,6 +50,7 @@ import (
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
 	admissionquota "go.miloapis.com/milo/internal/quota/admission"
+	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
 	identityopenapi "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
 	quotaapi "go.miloapis.com/milo/pkg/apis/quota"
@@ -320,6 +321,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 
 	miloScheme := runtime.NewScheme()
+	discoveryapi.Install(miloScheme)
+	discoveryapi.Install(legacyscheme.Scheme)
 	identityapi.Install(miloScheme)
 	identityapi.Install(legacyscheme.Scheme)
 	quotaapi.Install(miloScheme)

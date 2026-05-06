@@ -68,6 +68,7 @@ func TestFilterAPIResourceListByContext(t *testing.T) {
 	// Mark "organizations" as Platform-only.
 	registry.crd[schema.GroupResource{Group: "resourcemanager.miloapis.com", Resource: "organizations"}] = []ParentContext{ContextPlatform}
 	registry.hasInit = true
+	registry.hasPolicyInit = true
 
 	// Inner handler that returns a synthetic APIResourceList.
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
