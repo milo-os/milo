@@ -332,6 +332,18 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	if err != nil {
 		return nil, fmt.Errorf("failed to create datum controlplane apiserver: %w", err)
 	}
+
+	if reg := config.DiscoveryRegistry; reg != nil {
+		nativeAPIs.GenericAPIServer.AddPostStartHookOrDie("milo-discovery-policy-registry", func(hookCtx genericapiserver.PostStartHookContext) error {
+			go func() {
+				if err := reg.RunPolicyInformer(hookCtx, config.ControlPlane.Generic.LoopbackClientConfig); err != nil {
+					klog.ErrorS(err, "discovery policy registry stopped")
+				}
+			}()
+			return nil
+		})
+	}
+
 	client, err := kubernetes.NewForConfig(config.ControlPlane.Generic.LoopbackClientConfig)
 	if err != nil {
 		return nil, err

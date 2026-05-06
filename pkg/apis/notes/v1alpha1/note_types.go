@@ -24,6 +24,7 @@ import (
 // +kubebuilder:selectablefield:JSONPath=".spec.nextActionTime"
 // +kubebuilder:selectablefield:JSONPath=".spec.followUp"
 // +kubebuilder:selectablefield:JSONPath=".status.createdBy"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type Note struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
