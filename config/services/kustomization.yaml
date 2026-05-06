@@ -8,6 +8,7 @@ components:
   - iam
   - resourcemanager
   - quota
+  - features
   # identity is intentionally excluded here — it contains ActivityPolicy resources
   # which require the activity.miloapis.com CRDs to be installed. Those CRDs are
   # provided by the activity service, which is not deployed in the milo test cluster.
