@@ -57,8 +57,12 @@ type ResourceRegistrationSpec struct {
 	// - `Allocation`: Measures numeric capacity or resource amounts. Use for resources
 	//   with variable consumption (for example, CPU millicores, memory bytes, storage capacity).
 	//   Claims can request fractional amounts based on resource specifications.
+	// - `Feature`: A boolean entitlement grant used for org-level feature flags. No admission
+	//   enforcement or claim machinery is used — the registration simply signals that a feature
+	//   is available to an organization. Grants convey on/off entitlement rather than a numeric
+	//   capacity.
 	//
-	// +kubebuilder:validation:Enum=Entity;Allocation
+	// +kubebuilder:validation:Enum=Entity;Allocation;Feature
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 

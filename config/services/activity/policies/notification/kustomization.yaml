@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - contact-policy.yaml
+  - contactgroup-policy.yaml
+  - contactgroupmembership-policy.yaml
+  - contactgroupmembershipremoval-policy.yaml
+  - email-policy.yaml
+  - emailbroadcast-policy.yaml

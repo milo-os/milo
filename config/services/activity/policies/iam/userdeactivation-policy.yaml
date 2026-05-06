@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for UserDeactivation resources.
+# Creating a UserDeactivation triggers deactivation; deleting it cancels/reverses it.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: iam.miloapis.com-userdeactivation
+spec:
+  resource:
+    apiGroup: iam.miloapis.com
+    kind: UserDeactivation
+
+  auditRules:
+    - name: create-with-user-and-reason
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef) && has(audit.requestObject.spec.reason)"
+      summary: "{{ actor }} deactivated user {{ audit.requestObject.spec.userRef.name }} (reason: {{ audit.requestObject.spec.reason }})"
+
+    - name: create-with-user
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef)"
+      summary: "{{ actor }} deactivated user {{ audit.requestObject.spec.userRef.name }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} deactivated a user"
+
+    - name: delete-with-user
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.userRef)"
+      summary: "{{ actor }} reactivated user {{ audit.responseObject.spec.userRef.name }}"
+
+    - name: delete-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} reactivated user {{ audit.objectRef.name }}"

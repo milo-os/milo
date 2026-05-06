@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for MachineAccountKey resources.
+# Keys are created/deleted but not updated (immutable after creation).
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: identity.miloapis.com-serviceaccountkey
+spec:
+  resource:
+    apiGroup: identity.miloapis.com
+    kind: ServiceAccountKey
+
+  auditRules:
+    - name: create-with-account
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.machineAccountUserName)"
+      summary: "{{ actor }} created API key for {{ audit.requestObject.spec.machineAccountUserName }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} created a machine account key"
+
+    - name: delete
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} deleted API key {{ audit.objectRef.name }}"

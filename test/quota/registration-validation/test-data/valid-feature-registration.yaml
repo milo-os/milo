@@ -1,0 +1,17 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceRegistration
+metadata:
+  name: test-valid-feature-registration
+spec:
+  consumerType:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+  type: "Feature"
+  resourceType: "test.validation.miloapis.com/feature-resources"
+  description: "Valid feature registration for validation tests"
+  baseUnit: "feature"
+  displayUnit: "features"
+  unitConversionFactor: 1
+  claimingResources:
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Project

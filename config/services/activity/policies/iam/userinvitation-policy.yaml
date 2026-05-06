@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for UserInvitation resources.
+# Defines how UserInvitation API operations appear in activity timelines.
+#
+# Audit rules handle CRUD operations captured by the Kubernetes API server audit log.
+# No eventRules — the controller sets conditions but does not emit Kubernetes Events.
+#
+# Design principles:
+# - Surface the invitee's email where available (spec.email at Request audit level)
+# - Include the organization name where available (spec.organizationRef.name or status.organization.displayName)
+# - State-specific rules (accepted/declined) are evaluated before the generic update rule
+# - "Cancelled" phrasing for user-initiated deletes
+# - Exclude system actors to reduce reconciliation noise
+#
+# Note: spec.email and spec.organizationRef.name are available when the audit level is Request or higher.
+# status.organization.displayName is populated by the controller and available in responseObject.
+# If the audit level is only Metadata, the fallback rules without these values will apply.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: iam.miloapis.com-userinvitation
+spec:
+  resource:
+    apiGroup: iam.miloapis.com
+    kind: UserInvitation
+
+  # Audit log rules for CRUD operations.
+  # All rules exclude system components (!audit.user.username.startsWith('system:'))
+  # so controller reconciliation doesn't generate activity noise.
+  auditRules:
+    # Create with email and organization available
+    - name: create-with-email-and-org
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.requestObject.spec.organizationRef.name)"
+      summary: "{{ actor }} invited {{ audit.requestObject.spec.email }} to {{ link(audit.requestObject.spec.organizationRef.name, audit.objectRef) }}"
+
+    # Create with email only
+    - name: create-with-email
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email)"
+      summary: "{{ actor }} invited {{ audit.requestObject.spec.email }} to the organization"
+
+    # Create fallback — no email in spec
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} sent an invitation to the organization"
+
+    # Invitation accepted with org displayname (state transition update)
+    - name: accepted-with-org
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted' && has(audit.responseObject.status.organization.displayName)"
+      summary: "The invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }} was accepted"
+
+    # Invitation accepted fallback
+    - name: accepted
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted'"
+      summary: "The invitation for {{ audit.objectRef.name }} was accepted"
+
+    # Invitation declined with org displayname (state transition update)
+    - name: declined-with-org
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined' && has(audit.responseObject.status.organization.displayName)"
+      summary: "The invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }} was declined"
+
+    # Invitation declined fallback
+    - name: declined
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined'"
+      summary: "The invitation for {{ audit.objectRef.name }} was declined"
+
+    # Generic update fallback
+    - name: update
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource)"
+      summary: "{{ actor }} updated invitation {{ audit.objectRef.name }}"
+
+    # Delete with org displayname — invitation cancelled
+    - name: delete-with-org
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.status.organization.displayName)"
+      summary: "{{ actor }} cancelled the invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }}"
+
+    # Delete fallback — invitation cancelled
+    - name: delete
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} cancelled the invitation for {{ audit.objectRef.name }}"
