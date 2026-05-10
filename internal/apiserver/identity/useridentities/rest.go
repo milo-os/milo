@@ -46,9 +46,20 @@ func (r *REST) List(ctx context.Context, opts *metainternalversion.ListOptions) 
 		uid = u.GetUID()
 		groups = u.GetGroups()
 	}
-	logger.V(4).Info("Listing user identities", "username", username, "uid", uid, "groups", groups)
-	// ignore selectors; self-scoped list delegated to provider
+	// Forward the caller's selectors to the backend so cross-user lookups
+	// (e.g. status.userUID=<uid>) reach the auth-provider-zitadel REST
+	// handler. The handler runs its own SAR check against milo using the
+	// caller identity preserved via X-Remote-* headers in DynamicProvider.
 	lo := metav1.ListOptions{}
+	if opts != nil {
+		if opts.FieldSelector != nil {
+			lo.FieldSelector = opts.FieldSelector.String()
+		}
+		if opts.LabelSelector != nil {
+			lo.LabelSelector = opts.LabelSelector.String()
+		}
+	}
+	logger.V(4).Info("Listing user identities", "username", username, "uid", uid, "groups", groups, "fieldSelector", lo.FieldSelector, "labelSelector", lo.LabelSelector)
 	res, err := r.backend.ListUserIdentities(ctx, u, &lo)
 	if err != nil {
 		logger.Error(err, "List user identities failed")
