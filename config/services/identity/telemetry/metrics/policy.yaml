@@ -4,15 +4,15 @@ metadata:
   name: milo-identity-metrics
 spec:
   generators:
-    # identity.miloapis.com: MachineAccountKey
-    - name: identity-machine-account-keys-info
+    # identity.miloapis.com: ServiceAccountKey
+    - name: identity-service-account-keys-info
       resource:
         group: identity.miloapis.com
         version: v1alpha1
-        resource: machineaccountkeys
+        resource: serviceaccountkeys
       families:
-        - name: milo_machine_account_keys_info
-          help: "Information about identity machine account keys"
+        - name: milo_service_account_keys_info
+          help: "Information about identity service account keys"
           type: gauge
           metrics:
             - labels:
@@ -23,14 +23,14 @@ spec:
                 - name: uid
                   value: "object.metadata.uid"
 
-    - name: identity-machine-account-keys-created-timestamp
+    - name: identity-service-account-keys-created-timestamp
       resource:
         group: identity.miloapis.com
         version: v1alpha1
-        resource: machineaccountkeys
+        resource: serviceaccountkeys
       families:
-        - name: milo_machine_account_keys_created_timestamp
-          help: "Creation timestamp of identity machine account keys"
+        - name: milo_service_account_keys_created_timestamp
+          help: "Creation timestamp of identity service account keys"
           type: gauge
           metrics:
             - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"

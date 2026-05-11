@@ -76,15 +76,15 @@ spec:
                 - name: namespace
                   value: "object.metadata.namespace"
 
-    # iam.miloapis.com: MachineAccount
-    - name: iam-machine-accounts-info
+    # iam.miloapis.com: ServiceAccount
+    - name: iam-service-accounts-info
       resource:
         group: iam.miloapis.com
         version: v1alpha1
-        resource: machineaccounts
+        resource: serviceaccounts
       families:
-        - name: milo_machine_accounts_info
-          help: "Information about IAM machine accounts"
+        - name: milo_service_accounts_info
+          help: "Information about IAM service accounts"
           type: gauge
           metrics:
             - labels:
@@ -95,14 +95,14 @@ spec:
                 - name: uid
                   value: "object.metadata.uid"
 
-    - name: iam-machine-accounts-created-timestamp
+    - name: iam-service-accounts-created-timestamp
       resource:
         group: iam.miloapis.com
         version: v1alpha1
-        resource: machineaccounts
+        resource: serviceaccounts
       families:
-        - name: milo_machine_accounts_created_timestamp
-          help: "Creation timestamp of IAM machine accounts"
+        - name: milo_service_accounts_created_timestamp
+          help: "Creation timestamp of IAM service accounts"
           type: gauge
           metrics:
             - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
