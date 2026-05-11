@@ -29,7 +29,7 @@ The fastest way to get Milo running:
 
 ```bash
 # Clone the repository
-git clone https://github.com/datum-cloud/milo.git
+git clone https://github.com/milo-os/milo.git
 cd milo
 
 # Enable remote task files to be used
@@ -58,7 +58,7 @@ You can verify your Milo installation and get detailed version information:
 
 ```bash
 # From a running container (if you built one)
-docker run --rm ghcr.io/datum-cloud/milo:dev version
+docker run --rm ghcr.io/milo-os/milo:dev version
 
 # Multiple output formats available
 milo version                    # Default detailed output
@@ -299,13 +299,13 @@ task test:end-to-end
 #### Version mismatch or build issues
 ```bash
 # Check if you're running the expected version
-docker run --rm ghcr.io/datum-cloud/milo:dev version
+docker run --rm ghcr.io/milo-os/milo:dev version
 
 # Rebuild with fresh version information
 task dev:build
 
 # Check version after rebuild
-docker run --rm ghcr.io/datum-cloud/milo:dev version --output short
+docker run --rm ghcr.io/milo-os/milo:dev version --output short
 ```
 
 #### Cluster won't start
@@ -356,5 +356,5 @@ rm -rf .task .test-infra
 
 ## Getting Help
 
-- 🐛 [Report Issues](https://github.com/datum-cloud/milo/issues)
+- 🐛 [Report Issues](https://github.com/milo-os/milo/issues)
 - 📧 Contact the [team on slack](https://slack.datum.net)
