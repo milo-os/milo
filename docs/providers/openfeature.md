@@ -2,9 +2,9 @@
 
 Feature flags in Datum are not a separate system. A flag is a
 `ResourceRegistration` of `type: Feature`, an "on" state is a `ResourceGrant`
-targeting an organization, and "is it on?" is `AllowanceBucket.status.available
-> 0`. This document shows service developers how to (1) register a flag and (2)
-gate code on it via the OpenFeature SDK.
+targeting an organization, and "is it on?" is
+`AllowanceBucket.status.available > 0`. This document shows service developers
+how to (1) register a flag and (2) gate code on it via the OpenFeature SDK.
 
 ## Registering a flag
 
@@ -41,38 +41,10 @@ staff portal lists registrations by that label selector.
 
 ## Gating code
 
-Both the Go and TypeScript OpenFeature providers evaluate a flag by querying
+The TypeScript OpenFeature provider evaluates a flag by querying
 `AllowanceBucket` for the caller's organization with a field selector on
-`spec.resourceType`. Steady-state evaluation is in-memory (an informer keeps
-the bucket cache warm); the provider performs a single `LIST` on cold start.
-On miss, on error, or on any provider degradation, the provider returns the
-caller-supplied default — flags are **closed by default**.
-
-### Go
-
-```go
-import (
-    "github.com/open-feature/go-sdk/openfeature"
-    miloprovider "go.miloapis.com/milo/providers/openfeature"
-)
-
-openfeature.SetProvider(miloprovider.New(miloprovider.Config{
-    KubeConfig: cfg,
-}))
-
-client := openfeature.NewClient("ai-edge-dns")
-
-evalCtx := openfeature.NewEvaluationContext("", map[string]any{
-    "organization": orgName,
-})
-
-if client.BooleanValue(ctx, "ai-edge-dns", false, evalCtx) {
-    return enableEdgeDNSPath(req)
-}
-return legacyDNSPath(req)
-```
-
-### TypeScript
+`spec.resourceType`. On miss, on error, or on any provider degradation it
+returns the caller-supplied default — flags are **closed by default**.
 
 ```ts
 import { OpenFeature } from "@openfeature/web-sdk";
@@ -91,6 +63,12 @@ if (await client.getBooleanValue("ai-edge-dns", false)) {
 The flag key (`"ai-edge-dns"`) is the `ResourceRegistration` name with the
 `feature-` prefix stripped. The evaluation context **must** include
 `organization`; without it the provider returns the default.
+
+> **Note**: A Go provider is planned but not yet built (see
+> datum-cloud/enhancements#711). Until it lands, server-side Go services
+> that need flag evaluation should query `AllowanceBucket` directly with a
+> field selector on `spec.resourceType` and treat any error or missing
+> bucket as `false`.
 
 ## Evaluation contract
 

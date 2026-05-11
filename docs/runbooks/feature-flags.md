@@ -120,44 +120,42 @@ or customer comms.
 Reported as: "Provider logs are full of errors" or "Every flag is evaluating
 to its default even where I know a grant exists."
 
-### 3.1 Distinguish cold-start failure from steady-state failure
+Only the **TypeScript** provider exists today (used by cloud portal and staff
+portal). A Go provider is planned but not yet built; server-side Go callers
+query `AllowanceBucket` directly. The steps below cover both.
 
-The provider does **one** `LIST` against `AllowanceBucket` on startup, then
-watches via an informer. Errors fall into two buckets:
+### 3.1 Common causes
 
-- **Cold-start failure** — `LIST` returned 403/5xx. The provider stays in
-  "closed" mode and every evaluation returns the default. Logged as
-  `failed to initialize bucket cache` or similar.
-- **Steady-state failure** — informer disconnects, individual evaluation
-  hits a transient lookup error. The provider returns the default for that
-  single call but keeps serving cached state for others.
-
-Cold-start failure is the urgent one. Check the caller pod logs near startup
-for the first occurrence.
-
-### 3.2 Common cold-start causes
-
-- **RBAC.** The caller's service account lacks
-  `list/watch` on `allowancebuckets.quota.miloapis.com` for the org
-  namespaces it needs. Verify with:
+- **RBAC.** The caller lacks `list` (and, for the TS provider, `watch`) on
+  `allowancebuckets.quota.miloapis.com` for the org namespace. For
+  service-account callers verify with:
 
   ```sh
   kubectl auth can-i list allowancebuckets.quota.miloapis.com \
-    --as=system:serviceaccount:<ns>:<sa>
+    --as=system:serviceaccount:<ns>:<sa> \
+    -n organization-<orgname>
   ```
 
-- **Network/DNS.** The caller can't reach the milo apiserver. Check the
-  service's egress and DNS — unrelated to flags, but flags fail first
-  because evaluation happens on every request.
+  Browser callers go through the staff/cloud portal proxy, which forwards
+  the user's OIDC identity — for those, check that the user has the
+  expected role on the org.
 
-- **Schema skew.** The caller pinned an old version of the provider
-  library that doesn't understand a new `AllowanceBucket` field. Bump the
-  provider dep.
+- **Network/DNS.** The caller can't reach the milo apiserver (or the portal
+  proxy can't). Check the caller's egress and DNS — unrelated to flags,
+  but flag evaluation fails first because it runs on every request.
 
-### 3.3 Steady-state diagnostics
+- **Missing evaluation context.** The provider returns the default whenever
+  `organization` is missing from the OpenFeature evaluation context. Grep
+  the caller for `OpenFeature.setContext` / `setProviderAndWait` and
+  confirm the org is being threaded in.
 
-If individual flag checks intermittently return defaults despite a healthy
-bucket, watch the informer event stream:
+- **Schema skew.** The caller pinned an old provider/SDK version that
+  doesn't understand a current `AllowanceBucket` field. Bump the dep.
+
+### 3.2 Confirm the bucket itself looks healthy
+
+If grant + bucket pass §1's checks, watch the bucket while the caller
+retries:
 
 ```sh
 kubectl -n organization-<orgname> get allowancebucket \
@@ -167,8 +165,8 @@ kubectl -n organization-<orgname> get allowancebucket \
 
 If the bucket flaps (created/deleted repeatedly), a controller upstream is
 fighting itself — escalate to the quota system owner. If the bucket is
-stable but the caller still defaults, the caller's informer is wedged;
-restart the caller pod.
+stable but the caller still defaults, the caller's local cache is wedged;
+reload the page (TS provider) or restart the pod (direct Go callers).
 
 ## Quick reference
 
