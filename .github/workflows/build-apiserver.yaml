@@ -14,6 +14,7 @@ jobs:
       attestations: write
     uses: datum-cloud/actions/.github/workflows/publish-docker.yaml@v1.8.1
     with:
+      registry-organization: milo-os
       image-name: milo
       platforms: linux/amd64,linux/arm64
     secrets: inherit
@@ -30,8 +31,8 @@ jobs:
       packages: write
     uses: datum-cloud/actions/.github/workflows/publish-kustomize-bundle.yaml@v1.8.1
     with:
-      bundle-name: ghcr.io/datum-cloud/milo-kustomize
+      bundle-name: ghcr.io/milo-os/milo-kustomize
       bundle-path: config
       image-overlays: config/apiserver,config/controller-manager/base
-      image-name: ghcr.io/datum-cloud/milo
+      image-name: ghcr.io/milo-os/milo
     secrets: inherit

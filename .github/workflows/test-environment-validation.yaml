@@ -15,7 +15,7 @@ env:
   TASK_X_REMOTE_TASKFILES: 1
   # Test infrastructure configuration
   TEST_INFRA_CLUSTER_NAME: test-infra
-  MILO_IMAGE_NAME: ghcr.io/datum-cloud/milo
+  MILO_IMAGE_NAME: ghcr.io/milo-os/milo
   MILO_IMAGE_TAG: dev
 
 jobs:

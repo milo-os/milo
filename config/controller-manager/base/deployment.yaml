@@ -22,7 +22,7 @@ spec:
       automountServiceAccountToken: false
       containers:
       - name: milo-controller-manager
-        image: ghcr.io/datum-cloud/milo:latest
+        image: ghcr.io/milo-os/milo:latest
         imagePullPolicy: IfNotPresent
         args:
           - controller-manager
