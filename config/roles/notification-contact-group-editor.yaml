@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-contact-group-editor
+  labels:
+    taxonomy.miloapis.com/role-category: feature
   annotations:
     kubernetes.io/display-name: Notification Contact Group Editor
     kubernetes.io/description: Create, update, and delete notification contact groups
+    taxonomy.miloapis.com/product: Notifications
+    taxonomy.miloapis.com/sort-order: "20"
 spec:
   launchStage: Beta
   inheritedRoles:
