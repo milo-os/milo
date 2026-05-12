@@ -21,7 +21,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       containers:
-      - image: ghcr.io/datum-cloud/milo:latest
+      - image: ghcr.io/milo-os/milo:latest
         imagePullPolicy: IfNotPresent
         args:
           - apiserver

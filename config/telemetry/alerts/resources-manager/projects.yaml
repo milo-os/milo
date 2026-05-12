@@ -15,6 +15,6 @@ spec:
             severity: critical
             slo_violation: "true"
           annotations:
-            runbook_url: "https://github.com/datum-cloud/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
             summary: "Project {{ $labels.resource_name }} is stuck creating for over 60 seconds"
             description: "Project {{ $labels.resource_name }} has been in creation state for {{ $value }} seconds without reaching Ready status, which exceeds the 60-second SLO threshold."

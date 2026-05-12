@@ -31,24 +31,35 @@ func Install(scheme *runtime.Scheme) {
 		},
 	)
 
-	// Sessions are listed by callers (e.g. fraud-operator) using
-	// status.userUID=<uid> for cross-user lookups. The auth-provider-zitadel
-	// aggregated apiserver consumes this selector behind a SAR-gated REST
-	// handler, but the request never reaches it without this registration on
-	// the milo aggregator.
+	// Sessions and UserIdentities are listed by callers (e.g. fraud-operator,
+	// staff-portal) using status.userUID=<uid> for cross-user lookups. The
+	// auth-provider-zitadel aggregated apiserver consumes this selector
+	// behind a SAR-gated REST handler, but the request never reaches it
+	// without this registration on the milo aggregator.
+	userScopedSelector := func(label, value string) (string, string, error) {
+		switch label {
+		case "status.userUID", "metadata.name", "metadata.namespace":
+			return label, value, nil
+		default:
+			return "", "", nil
+		}
+	}
+
 	_ = scheme.AddFieldLabelConversionFunc(
 		schema.GroupVersionKind{
 			Group:   v1alpha1.SchemeGroupVersion.Group,
 			Version: v1alpha1.SchemeGroupVersion.Version,
 			Kind:    "Session",
 		},
-		func(label, value string) (string, string, error) {
-			switch label {
-			case "status.userUID", "metadata.name", "metadata.namespace":
-				return label, value, nil
-			default:
-				return "", "", nil
-			}
+		userScopedSelector,
+	)
+
+	_ = scheme.AddFieldLabelConversionFunc(
+		schema.GroupVersionKind{
+			Group:   v1alpha1.SchemeGroupVersion.Group,
+			Version: v1alpha1.SchemeGroupVersion.Version,
+			Kind:    "UserIdentity",
 		},
+		userScopedSelector,
 	)
 }

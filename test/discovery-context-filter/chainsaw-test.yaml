@@ -170,6 +170,83 @@ spec:
 
               echo "PASS: user-context discovery"
 
+    - name: apply-policy-override
+      description: Apply a DiscoveryContextPolicy that overrides the CRD annotation for discoverywidgets.
+      cluster: root
+      try:
+        - apply:
+            file: 03-policy-override.yaml
+        # Give the policy informer time to observe the new policy.
+        - sleep:
+            duration: 3s
+
+    - name: verify-policy-overrides-crd-annotation
+      description: Policy changes discoverywidgets from Organization to Platform — org context should no longer see it.
+      cluster: org
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              WIDGET_NAMES=$(kubectl --kubeconfig=kubeconfig-org get --raw \
+                "/apis/discovery-filter-test.example.com/v1alpha1" \
+                | jq -r '.resources[].name // empty' | sort -u)
+
+              echo "Org example.com resources after policy override: ${WIDGET_NAMES:-<none>}"
+
+              ! echo "$WIDGET_NAMES" | grep -qx "discoverywidgets" \
+                || { echo "FAIL: discoverywidgets should be hidden in org context after policy override"; exit 1; }
+
+              echo "PASS: policy hides org-tagged resource in org context"
+
+    - name: verify-policy-shows-in-platform-context
+      description: Policy sets discoverywidgets to Platform, so it should appear at root.
+      cluster: root
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              WIDGET_NAMES=$(kubectl --kubeconfig=kubeconfig-root get --raw \
+                "/apis/discovery-filter-test.example.com/v1alpha1" \
+                | jq -r '.resources[].name // empty' | sort -u)
+
+              echo "Platform example.com resources after policy override: ${WIDGET_NAMES:-<none>}"
+
+              echo "$WIDGET_NAMES" | grep -qx "discoverywidgets" \
+                || { echo "FAIL: discoverywidgets missing at platform after policy override"; exit 1; }
+
+              echo "PASS: policy-tagged resource visible in platform context"
+
+    - name: delete-policy-override
+      description: Delete the DiscoveryContextPolicy — discovery should revert to CRD annotation behavior.
+      cluster: root
+      try:
+        - delete:
+            file: 03-policy-override.yaml
+        # Give the policy informer time to process the deletion.
+        - sleep:
+            duration: 3s
+
+    - name: verify-reverts-to-crd-annotation
+      description: After policy deletion, discoverywidgets reverts to Organization context per its CRD annotation.
+      cluster: org
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              WIDGET_NAMES=$(kubectl --kubeconfig=kubeconfig-org get --raw \
+                "/apis/discovery-filter-test.example.com/v1alpha1" \
+                | jq -r '.resources[].name // empty' | sort -u)
+
+              echo "Org example.com resources after policy deletion: ${WIDGET_NAMES:-<none>}"
+
+              echo "$WIDGET_NAMES" | grep -qx "discoverywidgets" \
+                || { echo "FAIL: discoverywidgets missing in org context after policy deleted (should revert to CRD annotation)"; exit 1; }
+
+              echo "PASS: CRD annotation restored after policy deletion"
+
     - name: cleanup-external-crd
       description: Remove the external CRD so the registry forgets the entry.
       cluster: root

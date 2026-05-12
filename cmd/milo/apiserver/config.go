@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/endpoints/filterlatency"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
@@ -50,6 +51,7 @@ import (
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
 	admissionquota "go.miloapis.com/milo/internal/quota/admission"
+	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
 	identityopenapi "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
 	quotaapi "go.miloapis.com/milo/pkg/apis/quota"
@@ -312,6 +314,14 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	var registry *discoveryctx.Registry
 	if utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter) {
 		registry = discoveryctx.NewRegistry()
+		registry.RegisterStatic(
+			schema.GroupResource{Group: "identity.miloapis.com", Resource: "sessions"},
+			discoveryctx.ContextUser,
+		)
+		registry.RegisterStatic(
+			schema.GroupResource{Group: "identity.miloapis.com", Resource: "useridentities"},
+			discoveryctx.ContextUser,
+		)
 	}
 
 	c := &Config{
@@ -320,6 +330,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 
 	miloScheme := runtime.NewScheme()
+	discoveryapi.Install(miloScheme)
+	discoveryapi.Install(legacyscheme.Scheme)
 	identityapi.Install(miloScheme)
 	identityapi.Install(legacyscheme.Scheme)
 	quotaapi.Install(miloScheme)

@@ -1,0 +1,14 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: authenticated-user-resource-registration-read
+spec:
+  roleRef:
+    name: quota.miloapis.com-resource-registration-viewer
+  subjects:
+    - kind: Group
+      name: "system:authenticated"
+  resourceSelector:
+    resourceKind:
+      apiGroup: "quota.miloapis.com"
+      kind: ResourceRegistration

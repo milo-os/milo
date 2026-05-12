@@ -10,7 +10,7 @@ vars:
   # renovate: datasource=go depName=github.com/kyverno/chainsaw
   CHAINSAW_VERSION: v0.2.13
   # Container image configuration
-  MILO_IMAGE_NAME: "ghcr.io/datum-cloud/milo"
+  MILO_IMAGE_NAME: "ghcr.io/milo-os/milo"
   MILO_IMAGE_TAG: "dev"
   TEST_INFRA_CLUSTER_NAME: "test-infra"
   # Test infra repository configuration - can be overridden with environment variable

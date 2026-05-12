@@ -46,5 +46,5 @@ patches:
       name: argo-events
 
 images:
-  - name: ghcr.io/datum-cloud/milo
+  - name: ghcr.io/milo-os/milo
     newTag: dev

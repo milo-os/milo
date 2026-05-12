@@ -5,29 +5,21 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
     discovery.miloapis.com/parent-contexts: Platform
-  name: notes.notes.miloapis.com
+  name: discoverycontextpolicies.discovery.miloapis.com
 spec:
-  group: notes.miloapis.com
+  group: discovery.miloapis.com
   names:
-    kind: Note
-    listKind: NoteList
-    plural: notes
-    singular: note
-  scope: Namespaced
+    categories:
+    - milo
+    kind: DiscoveryContextPolicy
+    listKind: DiscoveryContextPolicyList
+    plural: discoverycontextpolicies
+    shortNames:
+    - dcp
+    singular: discoverycontextpolicy
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.subjectRef.kind
-      name: Subject Kind
-      type: string
-    - jsonPath: .spec.subjectRef.name
-      name: Subject Name
-      type: string
-    - jsonPath: .spec.creatorRef.name
-      name: Creator
-      type: string
-    - jsonPath: .status.conditions[?(@.type=='Ready')].status
-      name: Ready
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -35,8 +27,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Note is the Schema for the notes API.
-          It represents a namespaced note attached to a subject resource.
+          DiscoveryContextPolicy defines the parent contexts in which API resources are visible
+          in discovery responses.
         properties:
           apiVersion:
             description: |-
@@ -56,85 +48,55 @@ spec:
           metadata:
             type: object
           spec:
-            description: NoteSpec defines the desired state of Note.
+            description: DiscoveryContextPolicySpec defines the desired state of DiscoveryContextPolicy
             properties:
-              content:
-                description: Content is the text content of the note.
-                maxLength: 1000
-                type: string
-              creatorRef:
-                description: |-
-                  CreatorRef is a reference to the user that created the note.
-                  Defaults to the user that created the note.
-                properties:
-                  name:
-                    description: Name is the name of the User being referenced.
-                    type: string
-                required:
-                - name
-                type: object
-                x-kubernetes-validations:
-                - message: creatorRef type is immutable
-                  rule: type(oldSelf) == null_type || self == oldSelf
-              followUp:
-                default: false
-                description: |-
-                  FollowUp indicates whether this note requires follow-up.
-                  When true, the note is being actively tracked for further action.
-                type: boolean
-              interactionTime:
-                description: InteractionTime is the timestamp of the interaction with
-                  the subject.
-                format: date-time
-                type: string
-              nextAction:
-                description: NextAction is an optional follow-up action.
-                type: string
-              nextActionTime:
-                description: NextActionTime is the timestamp for the follow-up action.
-                format: date-time
-                type: string
-              subjectRef:
-                description: Subject is a reference to the subject of the note.
-                properties:
-                  apiGroup:
-                    description: APIGroup is the group for the resource being referenced.
-                    type: string
-                  kind:
-                    description: Kind is the type of resource being referenced.
-                    type: string
-                  name:
-                    description: Name is the name of resource being referenced.
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace is the namespace of resource being referenced.
-                      Required for namespace-scoped resources. Omitted for cluster-scoped resources.
-                    type: string
-                required:
-                - apiGroup
-                - kind
-                - name
-                type: object
-                x-kubernetes-validations:
-                - message: subject type is immutable
-                  rule: type(oldSelf) == null_type || self == oldSelf
+              rules:
+                description: Rules define which resources are visible in which parent
+                  contexts.
+                items:
+                  description: DiscoveryContextPolicyRule defines context visibility
+                    for a set of resources in a group.
+                  properties:
+                    contexts:
+                      description: |-
+                        Contexts lists the parent contexts where these resources are visible.
+                        Valid values are Platform, Organization, Project, and User.
+                      items:
+                        enum:
+                        - Platform
+                        - Organization
+                        - Project
+                        - User
+                        type: string
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    group:
+                      description: Group is the API group. Empty string means the
+                        core group. Use "*" to match all groups.
+                      type: string
+                    resources:
+                      description: Resources is the list of resource plural names.
+                        Use ["*"] to match all resources in the group.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                  required:
+                  - contexts
+                  - group
+                  - resources
+                  type: object
+                minItems: 1
+                type: array
             required:
-            - content
-            - subjectRef
+            - rules
             type: object
           status:
-            description: NoteStatus defines the observed state of Note
+            description: DiscoveryContextPolicyStatus defines the observed state of
+              DiscoveryContextPolicy
             properties:
               conditions:
-                default:
-                - lastTransitionTime: "1970-01-01T00:00:00Z"
-                  message: Waiting for control plane to reconcile
-                  reason: Unknown
-                  status: Unknown
-                  type: Ready
-                description: Conditions provide conditions that represent the current
-                  status of the Note.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -190,19 +152,11 @@ spec:
                   - type
                   type: object
                 type: array
-              createdBy:
-                description: CreatedBy is the email of the user that created the note.
-                type: string
+              observedGeneration:
+                format: int64
+                type: integer
             type: object
         type: object
-    selectableFields:
-    - jsonPath: .spec.creatorRef.name
-    - jsonPath: .spec.subjectRef.name
-    - jsonPath: .spec.subjectRef.namespace
-    - jsonPath: .spec.subjectRef.kind
-    - jsonPath: .spec.nextActionTime
-    - jsonPath: .spec.followUp
-    - jsonPath: .status.createdBy
     served: true
     storage: true
     subresources:

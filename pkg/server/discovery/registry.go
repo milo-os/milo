@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -12,35 +13,54 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// wildcardRule holds a policy rule where group or resource is "*".
+type wildcardRule struct {
+	policyName      string
+	groupPattern    string
+	resourcePattern string
+	contexts        []ParentContext
+}
+
+// policyEntry stores contexts alongside the policy name that set them, used
+// for exact GroupResource entries in the policy map.
+type policyEntry struct {
+	policyName string
+	contexts   []ParentContext
+}
+
 // Registry is the source of truth for "which parent contexts is this resource
-// visible in." It merges two inputs:
+// visible in." It merges three inputs in descending precedence order:
 //
-//  1. CRD annotations — for resources installed through the apiextensions API
+//  1. Policy — DiscoveryContextPolicy objects watched live via a dynamic
+//     informer. Highest precedence; overrides CRD annotations and static
+//     registrations.
+//
+//  2. CRD annotations — for resources installed through the apiextensions API
 //     (both Milo's bundled CRDs and any CRDs installed by external services
 //     that build on Milo). Watched live via an informer.
 //
-//  2. Static registrations — for built-in/aggregated APIs (e.g. core/v1,
+//  3. Static registrations — for built-in/aggregated APIs (e.g. core/v1,
 //     identity.miloapis.com sessions) that aren't backed by CRDs. Registered
 //     once at apiserver startup with RegisterStatic.
 //
-// Lookups return the union: a static registration sets a baseline that a CRD
-// annotation can extend but not contradict. (In practice no resource has
-// both, since static is for non-CRD types.)
-//
-// Resources with no registration in either source are treated as visible in
-// all contexts, so existing CRDs and external CRDs that haven't adopted the
-// marker continue to behave as before.
+// Resources with no registration in any source are treated as visible in all
+// contexts, so existing CRDs and external CRDs that haven't adopted the marker
+// continue to behave as before.
 type Registry struct {
-	mu      sync.RWMutex
-	crd     map[schema.GroupResource][]ParentContext
-	static  map[schema.GroupResource][]ParentContext
-	hasInit bool
+	mu              sync.RWMutex
+	policy          map[schema.GroupResource]policyEntry
+	policyWildcards []wildcardRule
+	crd             map[schema.GroupResource][]ParentContext
+	static          map[schema.GroupResource][]ParentContext
+	hasInit         bool
+	hasPolicyInit   bool
 }
 
 // NewRegistry creates an empty registry. Call RegisterStatic for any built-in
 // APIs, then Run with an informer factory to populate the CRD-derived map.
 func NewRegistry() *Registry {
 	return &Registry{
+		policy: map[schema.GroupResource]policyEntry{},
 		crd:    map[schema.GroupResource][]ParentContext{},
 		static: map[schema.GroupResource][]ParentContext{},
 	}
@@ -59,17 +79,52 @@ func (r *Registry) RegisterStatic(gr schema.GroupResource, contexts ...ParentCon
 }
 
 // AllowedContexts returns the parent contexts a resource should be visible
-// in, or nil if it should be visible everywhere.
+// in, or nil if it should be visible everywhere. Precedence: policy exact
+// match → policy wildcard match → crd → static.
 func (r *Registry) AllowedContexts(gr schema.GroupResource) []ParentContext {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if v, ok := r.static[gr]; ok {
-		return v
+
+	if entry, ok := r.policy[gr]; ok {
+		return entry.contexts
 	}
+
+	if match := r.matchWildcard(gr); match != nil {
+		return match
+	}
+
 	if v, ok := r.crd[gr]; ok {
 		return v
 	}
+
+	if v, ok := r.static[gr]; ok {
+		return v
+	}
+
 	return nil
+}
+
+// matchWildcard scans policyWildcards for a rule that covers gr. When multiple
+// rules match, the one from the alphabetically first policy name wins.
+// Must be called with r.mu held (at least RLock).
+func (r *Registry) matchWildcard(gr schema.GroupResource) []ParentContext {
+	var best *wildcardRule
+	for i := range r.policyWildcards {
+		rule := &r.policyWildcards[i]
+		if !matchesPattern(rule.groupPattern, gr.Group) {
+			continue
+		}
+		if !matchesPattern(rule.resourcePattern, gr.Resource) {
+			continue
+		}
+		if best == nil || rule.policyName < best.policyName {
+			best = rule
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return best.contexts
 }
 
 // IsVisible is a convenience wrapper combining AllowedContexts + Matches.
@@ -77,13 +132,13 @@ func (r *Registry) IsVisible(gr schema.GroupResource, current ParentContext) boo
 	return Matches(r.AllowedContexts(gr), current)
 }
 
-// HasSynced reports whether the CRD informer has completed its initial list.
-// Discovery filtering should fall open (visible) until this is true to avoid
-// hiding resources during apiserver startup.
+// HasSynced reports whether both the CRD informer and the policy informer have
+// completed their initial list. Discovery filtering should fall open (visible)
+// until this is true to avoid hiding resources during apiserver startup.
 func (r *Registry) HasSynced() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.hasInit
+	return r.hasInit && r.hasPolicyInit
 }
 
 // Run starts watching CRDs from the supplied informer factory. It blocks
@@ -148,4 +203,87 @@ func (r *Registry) deleteFromObj(obj any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.crd, gr)
+}
+
+// upsertFromPolicy replaces all entries contributed by policyName with the
+// rules in spec. Existing entries from other policies are unaffected.
+func (r *Registry) upsertFromPolicy(policyName string, spec policySpec) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Remove all prior contributions from this policy.
+	for gr, entry := range r.policy {
+		if entry.policyName == policyName {
+			delete(r.policy, gr)
+		}
+	}
+	filtered := r.policyWildcards[:0]
+	for _, rule := range r.policyWildcards {
+		if rule.policyName != policyName {
+			filtered = append(filtered, rule)
+		}
+	}
+	r.policyWildcards = filtered
+
+	for _, rule := range spec.rules {
+		contexts := make([]ParentContext, len(rule.contexts))
+		for i, c := range rule.contexts {
+			contexts[i] = ParentContext(c)
+		}
+
+		isGroupWild := rule.group == "*"
+		for _, resource := range rule.resources {
+			isResourceWild := resource == "*"
+			if isGroupWild || isResourceWild {
+				r.policyWildcards = append(r.policyWildcards, wildcardRule{
+					policyName:      policyName,
+					groupPattern:    rule.group,
+					resourcePattern: resource,
+					contexts:        contexts,
+				})
+			} else {
+				gr := schema.GroupResource{Group: rule.group, Resource: resource}
+				existing, ok := r.policy[gr]
+				if !ok || policyName < existing.policyName {
+					r.policy[gr] = policyEntry{policyName: policyName, contexts: contexts}
+				}
+			}
+		}
+	}
+
+	// Keep wildcards deterministically sorted for stable conflict resolution.
+	sort.Slice(r.policyWildcards, func(i, j int) bool {
+		return r.policyWildcards[i].policyName < r.policyWildcards[j].policyName
+	})
+}
+
+// deleteFromPolicy removes all entries contributed by policyName.
+func (r *Registry) deleteFromPolicy(policyName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for gr, entry := range r.policy {
+		if entry.policyName == policyName {
+			delete(r.policy, gr)
+		}
+	}
+	filtered := r.policyWildcards[:0]
+	for _, rule := range r.policyWildcards {
+		if rule.policyName != policyName {
+			filtered = append(filtered, rule)
+		}
+	}
+	r.policyWildcards = filtered
+}
+
+// policySpec is an internal representation of DiscoveryContextPolicySpec that
+// avoids importing the API types package into registry.go.
+type policySpec struct {
+	rules []policyRule
+}
+
+type policyRule struct {
+	group     string
+	resources []string
+	contexts  []string
 }
