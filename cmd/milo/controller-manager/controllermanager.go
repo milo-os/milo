@@ -354,6 +354,9 @@ func NewOptions() (*Options, error) {
 		KubeControllerManagerOptions: baseOpts,
 		InfraCluster: &infracluster.Options{
 			KubeconfigFile: baseOpts.Generic.ClientConnection.Kubeconfig,
+			LeaderElection: &infracluster.LeaderElectionConfig{
+				CandidateNamespace: "datum-system",
+			},
 		},
 		ControlPlane: &controlplane.Options{},
 	}
@@ -849,7 +852,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 		// Start lease candidate controller for coordinated leader election
 		leaseCandidate, waitForSync, err := leaderelection.NewCandidate(
 			c.Client,
-			"datum-system",
+			opts.InfraCluster.LeaderElection.CandidateNamespace,
 			id,
 			"datum-controller-manager",
 			binaryVersion.FinalizeVersion(),
