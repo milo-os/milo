@@ -98,6 +98,7 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	miloprovider "go.miloapis.com/milo/pkg/multicluster-runtime/milo"
+	"go.miloapis.com/milo/internal/controllers/projectprovider"
 	milowebhook "go.miloapis.com/milo/pkg/webhook"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 )
@@ -304,6 +305,11 @@ func NewCommand() *cobra.Command {
 
 	fs.IntVar(&s.ControllerRuntimeWebhookPort, "controller-runtime-webhook-port", 9443, "The port to use for the controller-runtime webhook server.")
 
+	fs.IntVar(&s.ProjectProvider.Workers, "project-provider-workers", s.ProjectProvider.Workers, "Number of concurrent workers that process project additions.")
+	fs.IntVar(&s.ProjectProvider.MaxRetries, "project-provider-max-retries", s.ProjectProvider.MaxRetries, "Maximum retry attempts for a failed project addition before giving up.")
+	fs.Float64Var(&s.ProjectProvider.RateLimit, "project-provider-rate-limit", s.ProjectProvider.RateLimit, "Sustained per-second rate at which projects are added.")
+	fs.IntVar(&s.ProjectProvider.RateBurst, "project-provider-rate-burst", s.ProjectProvider.RateBurst, "Burst allowance for the project addition rate limiter.")
+
 	fs.StringVar(&AssignableRolesNamespace, "assignable-roles-namespace", "datum-cloud", "An extra namespace that the system allows to be used for assignable roles.")
 
 	s.InfraCluster.AddFlags(namedFlagSets.FlagSet("Infrastructure Cluster"))
@@ -341,6 +347,10 @@ type Options struct {
 
 	// The port to use for the controller-runtime webhook server.
 	ControllerRuntimeWebhookPort int
+
+	// ProjectProvider holds tunable parameters for the project provider's
+	// rate-limiting and retry behaviour during bulk project onboarding.
+	ProjectProvider projectprovider.Config
 }
 
 // NewOptions creates a new Options object with default values.
@@ -355,7 +365,8 @@ func NewOptions() (*Options, error) {
 		InfraCluster: &infracluster.Options{
 			KubeconfigFile: baseOpts.Generic.ClientConnection.Kubeconfig,
 		},
-		ControlPlane: &controlplane.Options{},
+		ControlPlane:    &controlplane.Options{},
+		ProjectProvider: projectprovider.DefaultConfig(),
 	}
 
 	return opts, nil
@@ -415,6 +426,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			logger.Error(err, "Error building controller context")
 			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		}
+		controllerContext.ProjectProviderConfig = opts.ProjectProvider
 
 		// Create a controller manager for the core control plane.
 		//
@@ -953,6 +965,9 @@ type ControllerContext struct {
 
 	// GraphBuilder gives an access to dependencyGraphBuilder which keeps tracks of resources in the cluster
 	GraphBuilder *garbagecollector.GraphBuilder
+
+	// ProjectProviderConfig carries tunable parameters for the project provider.
+	ProjectProviderConfig projectprovider.Config
 }
 
 // IsControllerEnabled checks if the context's controllers enabled or not

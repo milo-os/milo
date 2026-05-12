@@ -64,7 +64,7 @@ func startModifiedNamespaceController(ctx context.Context, controllerContext Con
 		Finalizer: v1.FinalizerKubernetes,
 	}
 
-	prov, err := projectprovider.New(nsKubeconfig, sink)
+	prov, err := projectprovider.New(nsKubeconfig, sink, controllerContext.ProjectProviderConfig)
 	if err != nil {
 		return nil, true, err
 	}
@@ -134,7 +134,7 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 		InformersStarted:  controllerContext.InformersStarted,
 		InitialSyncPeriod: 30 * time.Second,
 	}
-	prov, err := projectprovider.New(cfg, gcSink)
+	prov, err := projectprovider.New(cfg, gcSink, controllerContext.ProjectProviderConfig)
 	if err != nil {
 		return nil, true, fmt.Errorf("failed to start project provider for GC: %w", err)
 	}
