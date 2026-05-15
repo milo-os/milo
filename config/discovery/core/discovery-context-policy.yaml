@@ -27,7 +27,12 @@ spec:
       contexts: ["Platform"]
     - group: "coordination.k8s.io"
       resources: ["leases"]
-      contexts: ["Platform"]
+      # Leases are used by per-project workloads (leader election in
+      # operators, custom heartbeat mechanisms like Datum Connect's connector
+      # health Lease) so they must be discoverable in Project context.
+      # Datum's network-services-operator depends on this: see
+      # datum-cloud/network-services-operator#160.
+      contexts: ["Platform", "Project"]
     - group: "admissionregistration.k8s.io"
       resources: ["mutatingwebhookconfigurations", "validatingadmissionpolicies", "validatingadmissionpolicybindings", "validatingwebhookconfigurations"]
       contexts: ["Platform"]
