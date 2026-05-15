@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -19,12 +20,35 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 )
 
-// DeniedAutoClaimCleanupController automatically deletes denied ResourceClaims
-// that were created by the admission plugin, while leaving manually created claims untouched.
+// DefaultStalePendingClaimAge is the age after which a Pending auto-created
+// ResourceClaim is considered abandoned and eligible for deletion. It is set
+// well above the admission plugin's watch timeout (30s by default) so that
+// normal in-flight admission requests are never disturbed, while any claim
+// that outlives a failed admission path is reliably cleaned up.
+const DefaultStalePendingClaimAge = 5 * time.Minute
+
+// DeniedAutoClaimCleanupController automatically deletes ResourceClaims that
+// were created by the admission plugin and are no longer useful:
+//
+//   - Denied claims (Granted=False, reason=QuotaExceeded) - removed
+//     immediately so the next admission attempt for the same resource can
+//     Create a fresh claim.
+//   - Stale pending claims (no final Granted condition, older than
+//     StalePendingClaimAge) - removed so leftover claims from admission
+//     timeouts cannot permanently block retries via AlreadyExists.
+//
+// Manually created claims are never touched; the controller keys off the
+// auto-created label and annotation set by the admission plugin.
 type DeniedAutoClaimCleanupController struct {
 	Scheme  *runtime.Scheme
 	Manager mcmanager.Manager
-	logger  logr.Logger
+
+	// StalePendingClaimAge is the minimum age before a Pending claim is
+	// considered abandoned. Zero means use DefaultStalePendingClaimAge.
+	StalePendingClaimAge time.Duration
+
+	logger logr.Logger
+	now    func() time.Time
 }
 
 // NewDeniedAutoClaimCleanupController creates a new DeniedAutoClaimCleanupController.
@@ -36,15 +60,20 @@ func NewDeniedAutoClaimCleanupController(
 		Scheme:  scheme,
 		Manager: manager,
 		logger:  ctrl.Log.WithName("denied-autoclaim-cleanup"),
+		now:     time.Now,
 	}
 }
 
 // +kubebuilder:rbac:groups=quota.miloapis.com,resources=resourceclaims,verbs=get;list;watch;delete
 
 // Reconcile processes ResourceClaims and deletes those that are:
-// 1. Auto-created by the admission plugin
-// 2. Denied (status.conditions[type=Granted,status=False,reason=QuotaExceeded])
-// This controller runs across all control planes to clean up denied claims wherever they exist.
+//  1. Auto-created by the admission plugin AND
+//  2. Either denied (Granted=False, reason=QuotaExceeded) or pending for
+//     longer than the configured stale-pending age.
+//
+// This controller runs across all control planes to clean up these claims
+// wherever they exist. Stale pending claims are requeued just past their
+// deadline so they get deleted even without a follow-up event.
 func (r *DeniedAutoClaimCleanupController) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("claim", req.Name, "namespace", req.Namespace)
 	if req.ClusterName != "" {
@@ -72,31 +101,62 @@ func (r *DeniedAutoClaimCleanupController) Reconcile(ctx context.Context, req mc
 		return ctrl.Result{}, nil
 	}
 
-	// Filter 2: Only process denied claims
-	if !r.isClaimDenied(&claim) {
-		logger.V(3).Info("Skipping non-denied claim")
+	// Denied claims are removed immediately.
+	if r.isClaimDenied(&claim) {
+		logger.Info("Deleting denied auto-created ResourceClaim",
+			"policy", claim.Labels["quota.miloapis.com/policy"],
+			"resourceName", claim.Annotations["quota.miloapis.com/resource-name"],
+			"denialReason", r.getClaimDenialReason(&claim))
+
+		if err := clusterClient.Delete(ctx, &claim); err != nil {
+			logger.Error(err, "Failed to delete denied auto-created ResourceClaim")
+			return ctrl.Result{}, fmt.Errorf("failed to delete denied auto-created ResourceClaim: %w", err)
+		}
+		logger.V(1).Info("Successfully deleted denied auto-created ResourceClaim")
 		return ctrl.Result{}, nil
 	}
 
-	// Delete the denied auto-created claim immediately
-	logger.Info("Deleting denied auto-created ResourceClaim",
-		"policy", claim.Labels["quota.miloapis.com/policy"],
-		"resourceName", claim.Annotations["quota.miloapis.com/resource-name"],
-		"denialReason", r.getClaimDenialReason(&claim))
+	// Stale pending claims (no final condition, older than the threshold) are
+	// removed so they do not permanently block admission retries for the same
+	// deterministic name.
+	if r.isClaimPending(&claim) {
+		threshold := r.stalePendingAge()
+		age := r.now().Sub(claim.CreationTimestamp.Time)
+		if age < threshold {
+			// Requeue just past the threshold to guarantee eventual cleanup
+			// even if no further events fire for this claim.
+			return ctrl.Result{RequeueAfter: (threshold - age) + time.Second}, nil
+		}
 
-	if err := clusterClient.Delete(ctx, &claim); err != nil {
-		logger.Error(err, "Failed to delete denied auto-created ResourceClaim")
-		return ctrl.Result{}, fmt.Errorf("failed to delete denied auto-created ResourceClaim: %w", err)
+		logger.Info("Deleting stale pending auto-created ResourceClaim",
+			"policy", claim.Labels["quota.miloapis.com/policy"],
+			"resourceName", claim.Annotations["quota.miloapis.com/resource-name"],
+			"age", age)
+
+		if err := clusterClient.Delete(ctx, &claim); err != nil {
+			logger.Error(err, "Failed to delete stale pending auto-created ResourceClaim")
+			return ctrl.Result{}, fmt.Errorf("failed to delete stale pending auto-created ResourceClaim: %w", err)
+		}
+		logger.V(1).Info("Successfully deleted stale pending auto-created ResourceClaim")
+		return ctrl.Result{}, nil
 	}
 
-	logger.V(1).Info("Successfully deleted denied auto-created ResourceClaim")
+	logger.V(3).Info("Skipping granted claim")
 	return ctrl.Result{}, nil
+}
+
+// stalePendingAge returns the configured stale-pending threshold, falling
+// back to the default when unset.
+func (r *DeniedAutoClaimCleanupController) stalePendingAge() time.Duration {
+	if r.StalePendingClaimAge > 0 {
+		return r.StalePendingClaimAge
+	}
+	return DefaultStalePendingClaimAge
 }
 
 // isAutoCreatedClaim checks if a ResourceClaim was automatically created by the admission plugin.
 // Returns true only if both the label and annotation markers are present.
 func (r *DeniedAutoClaimCleanupController) isAutoCreatedClaim(claim *quotav1alpha1.ResourceClaim) bool {
-	// Check both label and annotation for safety
 	autoCreatedLabel := claim.Labels["quota.miloapis.com/auto-created"] == "true"
 	createdByPlugin := claim.Annotations["quota.miloapis.com/created-by"] == "claim-creation-plugin"
 
@@ -114,6 +174,22 @@ func (r *DeniedAutoClaimCleanupController) isClaimDenied(claim *quotav1alpha1.Re
 	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == quotav1alpha1.ResourceClaimDeniedReason
 }
 
+// isClaimPending returns true when the claim has no Granted condition, or the
+// Granted condition is False with a non-denied reason (e.g. PendingEvaluation).
+// Granted=True claims return false.
+func (r *DeniedAutoClaimCleanupController) isClaimPending(claim *quotav1alpha1.ResourceClaim) bool {
+	cond := apimeta.FindStatusCondition(claim.Status.Conditions, quotav1alpha1.ResourceClaimGranted)
+	if cond == nil {
+		return true
+	}
+	if cond.Status == metav1.ConditionTrue {
+		return false
+	}
+	// Granted=False but not Denied → still pending/in-progress from the
+	// caller's perspective (e.g. PendingEvaluation, ValidationFailed).
+	return cond.Reason != quotav1alpha1.ResourceClaimDeniedReason
+}
+
 // getClaimDenialReason returns the reason why a ResourceClaim was denied.
 func (r *DeniedAutoClaimCleanupController) getClaimDenialReason(claim *quotav1alpha1.ResourceClaim) string {
 	cond := apimeta.FindStatusCondition(claim.Status.Conditions, quotav1alpha1.ResourceClaimGranted)
@@ -128,6 +204,9 @@ func (r *DeniedAutoClaimCleanupController) getClaimDenialReason(claim *quotav1al
 
 // SetupWithManager sets up the controller with the Manager and configures efficient filtering.
 func (r *DeniedAutoClaimCleanupController) SetupWithManager(mgr mcmanager.Manager) error {
+	if r.now == nil {
+		r.now = time.Now
+	}
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.ResourceClaim{},
 			mcbuilder.WithEngageWithLocalCluster(true),

@@ -970,7 +970,13 @@ func TestClaimWaitScenarios(t *testing.T) {
 			name:          "claim denied",
 			claimBehavior: "denied",
 			expectError:   true,
-			errorSubstr:   "Insufficient quota resources available",
+			errorSubstr:   "You've reached your quota for this resource type",
+		},
+		{
+			name:          "claim timeout",
+			claimBehavior: "timeout",
+			expectError:   true,
+			errorSubstr:   "Your request took too long",
 		},
 	}
 
@@ -1272,7 +1278,16 @@ func (m *testWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, n
 		case "grant":
 			resultChan <- ClaimResult{Granted: true, Reason: "test granted"}
 		case "deny":
-			resultChan <- ClaimResult{Granted: false, Reason: "quota exceeded", Error: fmt.Errorf("ResourceClaim was denied: quota exceeded")}
+			// Matches watchManager.evaluateClaimStatus: denied claims are
+			// surfaced with Granted=false and Reason set to the denial
+			// message, and no Error.
+			resultChan <- ClaimResult{Granted: false, Reason: "quota exceeded"}
+		case "timeout":
+			resultChan <- ClaimResult{
+				Granted: false,
+				Reason:  "timeout",
+				Error:   fmt.Errorf("timeout waiting for ResourceClaim after 30s"),
+			}
 		}
 		close(resultChan)
 	}()
@@ -1626,5 +1641,281 @@ func TestProjectClientCaching(t *testing.T) {
 
 	if client1 == client3 {
 		t.Error("getProjectClient() returned same client for different project")
+	}
+}
+
+// newFixedNameClaimPolicy returns a ClaimCreationPolicy that produces a claim
+// whose name is a fixed string (not derived from the trigger). This lets us
+// pre-seed an existing claim at the exact deterministic name that the
+// admission plugin will compute, so we can exercise the resolveExistingClaim
+// code path.
+func newFixedNameClaimPolicy(claimName string) *quotav1alpha1.ClaimCreationPolicy {
+	return &quotav1alpha1.ClaimCreationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixed-name-policy"},
+		Spec: quotav1alpha1.ClaimCreationPolicySpec{
+			Trigger: quotav1alpha1.ClaimTriggerSpec{
+				Resource: quotav1alpha1.ClaimTriggerResource{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+				},
+			},
+			Disabled: ptr.To(false),
+			Target: quotav1alpha1.ClaimTargetSpec{
+				ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
+					Metadata: quotav1alpha1.ObjectMetaTemplate{Name: claimName},
+					Spec: quotav1alpha1.ResourceClaimSpec{
+						ConsumerRef: quotav1alpha1.ConsumerRef{
+							APIGroup: "resourcemanager.miloapis.com",
+							Kind:     "Organization",
+							Name:     "test-org",
+						},
+						Requests: []quotav1alpha1.ResourceRequest{
+							{ResourceType: "apps/Deployment", Amount: 1},
+						},
+					},
+				},
+			},
+		},
+		Status: quotav1alpha1.ClaimCreationPolicyStatus{
+			Conditions: []metav1.Condition{{
+				Type:   quotav1alpha1.ClaimCreationPolicyReady,
+				Status: metav1.ConditionTrue,
+				Reason: "TestReady",
+			}},
+		},
+	}
+}
+
+// existingClaim builds an unstructured ResourceClaim suitable for pre-seeding
+// the fake dynamic client with the auto-created markers the admission plugin
+// looks for when inspecting existing claims.
+func existingClaim(name, namespace string, granted *bool, reason, message string) *unstructured.Unstructured {
+	labels := map[string]interface{}{
+		"quota.miloapis.com/auto-created": "true",
+	}
+	annotations := map[string]interface{}{
+		"quota.miloapis.com/created-by": "claim-creation-plugin",
+	}
+	meta := map[string]interface{}{
+		"name":        name,
+		"namespace":   namespace,
+		"labels":      labels,
+		"annotations": annotations,
+	}
+	obj := map[string]interface{}{
+		"apiVersion": "quota.miloapis.com/v1alpha1",
+		"kind":       "ResourceClaim",
+		"metadata":   meta,
+	}
+	if granted != nil {
+		status := "False"
+		if *granted {
+			status = "True"
+		}
+		obj["status"] = map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{
+					"type":    quotav1alpha1.ResourceClaimGranted,
+					"status":  status,
+					"reason":  reason,
+					"message": message,
+				},
+			},
+		}
+	}
+	return &unstructured.Unstructured{Object: obj}
+}
+
+// TestResolveExistingClaim exercises the pre-create decision table in
+// createResourceClaim. It covers four cases:
+//   - A prior Granted=True claim short-circuits admission to allow.
+//   - A prior Granted=False/Denied claim surfaces a Conflict error rather
+//     than a generic "Insufficient quota" message so the user knows to retry.
+//   - A stale Pending claim (older than the threshold) is deleted inline and
+//     a fresh claim is created on the same name.
+//   - No existing claim → the plain Create path still works.
+func TestResolveExistingClaim(t *testing.T) {
+	claimName := "fixed-claim"
+	namespace := "default"
+	resourceGVK := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	claimGVR := schema.GroupVersionResource{
+		Group:    "quota.miloapis.com",
+		Version:  "v1alpha1",
+		Resource: "resourceclaims",
+	}
+
+	tests := []struct {
+		name             string
+		seedClaim        *unstructured.Unstructured
+		watchBehavior    string
+		expectError      bool
+		errorSubstr      string
+		expectCreate     bool
+		expectDelete     bool
+	}{
+		{
+			name:          "existing granted claim short-circuits admission",
+			seedClaim:     existingClaim(claimName, namespace, ptr.To(true), quotav1alpha1.ResourceClaimGrantedReason, "granted earlier"),
+			watchBehavior: "grant",
+			expectError:   false,
+			expectCreate:  false,
+		},
+		{
+			name:          "existing denied claim returns conflict error",
+			seedClaim:     existingClaim(claimName, namespace, ptr.To(false), quotav1alpha1.ResourceClaimDeniedReason, "quota exhausted previously"),
+			watchBehavior: "grant",
+			expectError:   true,
+			errorSubstr:   "still cleaning up from a previous attempt",
+			expectCreate:  false,
+		},
+		{
+			name:          "existing pending claim is deleted before re-create",
+			seedClaim:     existingClaim(claimName, namespace, ptr.To(false), quotav1alpha1.ResourceClaimPendingReason, "still evaluating"),
+			watchBehavior: "grant",
+			expectError:   false,
+			expectCreate:  true,
+			expectDelete:  true,
+		},
+		{
+			name:          "no existing claim - normal create path",
+			seedClaim:     nil,
+			watchBehavior: "grant",
+			expectError:   false,
+			expectCreate:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			quotav1alpha1.AddToScheme(scheme)
+
+			var objects []runtime.Object
+			if tt.seedClaim != nil {
+				tt.seedClaim.SetGroupVersionKind(schema.GroupVersionKind{
+					Group:   "quota.miloapis.com",
+					Version: "v1alpha1",
+					Kind:    "ResourceClaim",
+				})
+				objects = append(objects, tt.seedClaim)
+			}
+
+			fakeDynClient := fake.NewSimpleDynamicClient(scheme, objects...)
+
+			logger := zap.New(zap.UseDevMode(true))
+			celEngine, err := engine.NewCELEngine()
+			if err != nil {
+				t.Fatalf("Failed to create CEL engine: %v", err)
+			}
+
+			policy := newFixedNameClaimPolicy(claimName)
+
+			plugin := &ResourceQuotaEnforcementPlugin{
+				Handler:        admission.NewHandler(admission.Create),
+				dynamicClient:  fakeDynClient,
+				policyEngine:   &testPolicyEngine{policy: policy, gvk: resourceGVK},
+				templateEngine: engine.NewTemplateEngine(celEngine, logger.WithName("template")),
+				config:         DefaultAdmissionPluginConfig(),
+				logger:         logger.WithName("plugin"),
+			}
+			plugin.watchManagers.Store("", &testWatchManager{behavior: tt.watchBehavior})
+
+			obj := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "test-deployment",
+						"namespace": namespace,
+					},
+				},
+			}
+			attrs := &testAdmissionAttributes{
+				operation: admission.Create,
+				object:    obj,
+				gvk:       resourceGVK,
+				name:      obj.GetName(),
+				namespace: obj.GetNamespace(),
+				userInfo:  &user.DefaultInfo{Name: "test-user"},
+			}
+
+			err = plugin.Validate(context.Background(), attrs, nil)
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error but got none")
+				}
+				if tt.errorSubstr != "" && !contains(err.Error(), tt.errorSubstr) {
+					t.Errorf("expected error to contain %q, got: %v", tt.errorSubstr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			sawCreate := false
+			sawDelete := false
+			for _, action := range fakeDynClient.Actions() {
+				if action.GetResource() != claimGVR {
+					continue
+				}
+				switch action.GetVerb() {
+				case "create":
+					sawCreate = true
+				case "delete":
+					sawDelete = true
+				}
+			}
+			if sawCreate != tt.expectCreate {
+				t.Errorf("create action: got %v, want %v", sawCreate, tt.expectCreate)
+			}
+			if sawDelete != tt.expectDelete {
+				t.Errorf("delete action: got %v, want %v", sawDelete, tt.expectDelete)
+			}
+		})
+	}
+}
+
+// TestUserFacingClaimError verifies each claimFailureKind maps to a distinct
+// user-facing message so operators and end users can tell denials, timeouts,
+// conflicts, and infrastructure errors apart from the 403 body.
+func TestUserFacingClaimError(t *testing.T) {
+	tests := []struct {
+		name     string
+		failure  *claimFailure
+		contains string
+	}{
+		{
+			name:     "denied with message",
+			failure:  newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, "bucket exhausted"),
+			contains: "You've reached your quota for this resource type (bucket exhausted)",
+		},
+		{
+			name:     "denied without message",
+			failure:  newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, ""),
+			contains: "You've reached your quota for this resource type.",
+		},
+		{
+			name:     "timeout",
+			failure:  newTimeoutFailure(errors.New("timeout waiting for claim")),
+			contains: "Your request took too long to be checked against your quota",
+		},
+		{
+			name:     "conflict with message",
+			failure:  newConflictFailure("stale denied claim", nil),
+			contains: "still cleaning up from a previous attempt to create this resource (stale denied claim)",
+		},
+		{
+			name:     "internal",
+			failure:  newInternalFailure(errors.New("boom")),
+			contains: "Something went wrong while checking your quota",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := userFacingClaimError(tt.failure).Error()
+			if !contains(msg, tt.contains) {
+				t.Errorf("message %q did not contain %q", msg, tt.contains)
+			}
+		})
 	}
 }
