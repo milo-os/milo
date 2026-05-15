@@ -93,7 +93,17 @@ func filterAPIResourceList(w http.ResponseWriter, req *http.Request, next http.H
 }
 
 // filterAPIIndex filters /apis. Handles both the legacy APIGroupList and the
-// modern aggregated APIGroupDiscoveryList based on Content-Type.
+// modern aggregated APIGroupDiscoveryList. We must decide which format we
+// were given before re-encoding, otherwise the filter will silently emit an
+// empty list.
+//
+// The request's Accept header tells us what kubectl/controller-runtime
+// *wants* but not what Milo actually *returned* — Milo doesn't always echo
+// the matching Content-Type, and the underlying apiserver may emit legacy
+// APIGroupList JSON even when aggregated was requested. So we probe the
+// response body's `kind` field first; that's the only reliable signal for
+// the format that's actually in `cw.body`. The Accept header is a tie-break
+// when the body lacks an explicit kind.
 func filterAPIIndex(w http.ResponseWriter, req *http.Request, next http.Handler, registry *Registry) {
 	cw := newCaptureWriter(w)
 	next.ServeHTTP(cw, req)
@@ -105,11 +115,14 @@ func filterAPIIndex(w http.ResponseWriter, req *http.Request, next http.Handler,
 
 	parentCtx := FromRequest(req.Context())
 
-	// Detect aggregated discovery from the request Accept header. kubectl sends
-	// Accept: application/json;...;as=APIGroupDiscoveryList and a conformant
-	// server echoes it in Content-Type — but checking the request is more
-	// reliable since Milo returns plain application/json in the response.
-	if isAggregatedDiscovery(req.Header.Get("Accept")) {
+	var kindProbe struct {
+		Kind string `json:"kind"`
+	}
+	_ = json.Unmarshal(cw.body.Bytes(), &kindProbe)
+
+	switch {
+	case kindProbe.Kind == "APIGroupDiscoveryList" ||
+		(kindProbe.Kind == "" && isAggregatedDiscovery(req.Header.Get("Accept"))):
 		var list apidiscoveryv2.APIGroupDiscoveryList
 		if err := json.Unmarshal(cw.body.Bytes(), &list); err != nil {
 			cw.flushUnchanged()
@@ -117,13 +130,17 @@ func filterAPIIndex(w http.ResponseWriter, req *http.Request, next http.Handler,
 		}
 		filterAggregatedGroups(&list, registry, parentCtx)
 		cw.flushJSON(&list)
-		return
+	case kindProbe.Kind == "APIGroupList":
+		// Legacy APIGroupList — we can't tell from the index alone which
+		// resources live in each group, so we leave the group list intact.
+		// The per-(group,version) request will be filtered by
+		// filterAPIResourceList.
+		cw.flushUnchanged()
+	default:
+		// Unknown/unrecognised body — pass through verbatim rather than
+		// risk emitting a malformed response.
+		cw.flushUnchanged()
 	}
-
-	// Legacy APIGroupList — we can't tell from the index alone which
-	// resources live in each group, so we leave the group list intact. The
-	// per-(group,version) request will be filtered by filterAPIResourceList.
-	cw.flushUnchanged()
 }
 
 func filterAggregatedGroups(list *apidiscoveryv2.APIGroupDiscoveryList, registry *Registry, parentCtx ParentContext) {
