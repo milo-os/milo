@@ -80,6 +80,7 @@ import (
 	controlplane "go.miloapis.com/milo/internal/control-plane"
 	iamcontroller "go.miloapis.com/milo/internal/controllers/iam"
 	notescontroller "go.miloapis.com/milo/internal/controllers/notes"
+	notificationcontroller "go.miloapis.com/milo/internal/controllers/notification"
 	remoteapiservicecontroller "go.miloapis.com/milo/internal/controllers/remoteapiservice"
 	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
 	infracluster "go.miloapis.com/milo/internal/infra-cluster"
@@ -739,6 +740,16 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			if err := userContactCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up user contact controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			// ContactGroupEnrollmentController automatically enrolls new Contacts into
+			// the ContactGroups configured by ContactGroupEnrollmentPolicy resources.
+			contactGroupEnrollmentCtrl := notificationcontroller.ContactGroupEnrollmentController{
+				Client: ctrl.GetClient(),
+			}
+			if err := contactGroupEnrollmentCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up contact group enrollment controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 

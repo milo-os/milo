@@ -1,0 +1,17 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: enrollment-test-user
+spec:
+  email: enrollment-test@example.com
+  givenName: Enrollment
+  familyName: Test
+---
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: enrollment-existing-user
+spec:
+  email: enrollment-existing@example.com
+  givenName: Existing
+  familyName: User

@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notification-contact-group-enrollment-policy-admin
+  annotations:
+    kubernetes.io/display-name: Notification Contact Group Enrollment Policy Admin
+    kubernetes.io/description: Full access to notification contact group enrollment policies
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: notification-contact-group-enrollment-policy-editor

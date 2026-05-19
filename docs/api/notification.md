@@ -8,6 +8,8 @@ Packages:
 
 Resource Types:
 
+- [ContactGroupEnrollmentPolicy](#contactgroupenrollmentpolicy)
+
 - [ContactGroupMembershipRemoval](#contactgroupmembershipremoval)
 
 - [ContactGroupMembership](#contactgroupmembership)
@@ -26,6 +28,189 @@ Resource Types:
 
 
 
+
+## ContactGroupEnrollmentPolicy
+<sup><sup>[↩ Parent](#notificationmiloapiscomv1alpha1 )</sup></sup>
+
+
+
+
+
+
+ContactGroupEnrollmentPolicy defines which ContactGroup a new Contact is automatically
+enrolled in when a trigger condition is met.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+      <td><b>apiVersion</b></td>
+      <td>string</td>
+      <td>notification.miloapis.com/v1alpha1</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b>kind</b></td>
+      <td>string</td>
+      <td>ContactGroupEnrollmentPolicy</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">metadata</a></b></td>
+      <td>object</td>
+      <td>Refer to the Kubernetes API documentation for the fields of the `metadata` field.</td>
+      <td>true</td>
+      </tr><tr>
+        <td><b><a href="#contactgroupenrollmentpolicyspec">spec</a></b></td>
+        <td>object</td>
+        <td>
+          ContactGroupEnrollmentPolicySpec defines the desired enrollment behavior.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ContactGroupEnrollmentPolicy.spec
+<sup><sup>[↩ Parent](#contactgroupenrollmentpolicy)</sup></sup>
+
+
+
+ContactGroupEnrollmentPolicySpec defines the desired enrollment behavior.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#contactgroupenrollmentpolicyspeccontactgroupref">contactGroupRef</a></b></td>
+        <td>object</td>
+        <td>
+          ContactGroupRef references the ContactGroup that matching Contacts are enrolled in.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#contactgroupenrollmentpolicyspectrigger">trigger</a></b></td>
+        <td>object</td>
+        <td>
+          Trigger defines when enrollment happens.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#contactgroupenrollmentpolicyspeccontactselector">contactSelector</a></b></td>
+        <td>object</td>
+        <td>
+          ContactSelector filters which Contacts this policy applies to.
+If omitted, the policy applies to all Contacts.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ContactGroupEnrollmentPolicy.spec.contactGroupRef
+<sup><sup>[↩ Parent](#contactgroupenrollmentpolicyspec)</sup></sup>
+
+
+
+ContactGroupRef references the ContactGroup that matching Contacts are enrolled in.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the name of the ContactGroup.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>namespace</b></td>
+        <td>string</td>
+        <td>
+          Namespace is the namespace of the ContactGroup.<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### ContactGroupEnrollmentPolicy.spec.trigger
+<sup><sup>[↩ Parent](#contactgroupenrollmentpolicyspec)</sup></sup>
+
+
+
+Trigger defines when enrollment happens.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>type</b></td>
+        <td>enum</td>
+        <td>
+          Type is the event that triggers enrollment.
+ContactCreated fires when a new Contact resource is created.<br/>
+          <br/>
+            <i>Enum</i>: ContactCreated<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### ContactGroupEnrollmentPolicy.spec.contactSelector
+<sup><sup>[↩ Parent](#contactgroupenrollmentpolicyspec)</sup></sup>
+
+
+
+ContactSelector filters which Contacts this policy applies to.
+If omitted, the policy applies to all Contacts.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>subjectKind</b></td>
+        <td>enum</td>
+        <td>
+          SubjectKind restricts enrollment to Contacts whose SubjectRef.Kind matches this value.<br/>
+          <br/>
+            <i>Enum</i>: User<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
 
 ## ContactGroupMembershipRemoval
 <sup><sup>[↩ Parent](#notificationmiloapiscomv1alpha1 )</sup></sup>

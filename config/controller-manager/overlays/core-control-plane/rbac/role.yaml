@@ -219,6 +219,26 @@ rules:
 - apiGroups:
   - notification.miloapis.com
   resources:
+  - contactgroupenrollmentpolicies
+  - contactgroupmembershipremovals
+  - emailtemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - notification.miloapis.com
+  resources:
+  - contactgroupmemberships
+  - emails
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - notification.miloapis.com
+  resources:
   - contacts
   verbs:
   - create
@@ -234,23 +254,6 @@ rules:
   - contacts/status
   verbs:
   - update
-- apiGroups:
-  - notification.miloapis.com
-  resources:
-  - emails
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - notification.miloapis.com
-  resources:
-  - emailtemplates
-  verbs:
-  - get
-  - list
-  - watch
 - apiGroups:
   - quota.miloapis.com
   resources:

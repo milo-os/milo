@@ -1,0 +1,12 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroupEnrollmentPolicy
+metadata:
+  name: enrollment-basic-policy
+spec:
+  contactGroupRef:
+    name: enrollment-test-group
+    namespace: milo-system
+  trigger:
+    type: ContactCreated
+  contactSelector:
+    subjectKind: User
