@@ -1,10 +1,10 @@
 apiVersion: notification.miloapis.com/v1alpha1
 kind: ContactGroupEnrollmentPolicy
 metadata:
-  name: enrollment-retroactive-policy
+  name: enrollment-opt-out-test-policy
 spec:
   contactGroupRef:
-    name: enrollment-retroactive-test-group
+    name: enrollment-opt-out-test-group
     namespace: milo-system
   trigger:
     type: ContactCreated
