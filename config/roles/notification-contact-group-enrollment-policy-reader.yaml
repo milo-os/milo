@@ -1,0 +1,13 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notification-contact-group-enrollment-policy-reader
+  annotations:
+    kubernetes.io/display-name: Notification Contact Group Enrollment Policy Viewer
+    kubernetes.io/description: View notification contact group enrollment policies
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - notification.miloapis.com/contactgroupenrollmentpolicies.get
+    - notification.miloapis.com/contactgroupenrollmentpolicies.list
+    - notification.miloapis.com/contactgroupenrollmentpolicies.watch
