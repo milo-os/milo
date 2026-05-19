@@ -1,0 +1,8 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroup
+metadata:
+  name: enrollment-retroactive-test-group
+  namespace: milo-system
+spec:
+  displayName: Enrollment Retroactive Test Group
+  visibility: public

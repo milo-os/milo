@@ -5,8 +5,8 @@ metadata:
   namespace: milo-system
 spec:
   contactRef:
-    name: enrollment-opted-out-contact
+    name: user-enrollment-opted-out-user
     namespace: milo-system
   contactGroupRef:
-    name: enrollment-test-group
+    name: enrollment-opt-out-test-group
     namespace: milo-system
