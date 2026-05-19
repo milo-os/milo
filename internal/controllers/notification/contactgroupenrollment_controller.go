@@ -107,22 +107,21 @@ func (r *ContactGroupEnrollmentController) evaluatePolicy(ctx context.Context, c
 		}
 	}
 
-	defer func() {
-		// Always annotate the Contact after evaluation so future reconciliations skip it.
-		if err := r.markPolicyEvaluated(ctx, contact, annotationKey); err != nil {
-			log.Error(err, "Failed to mark policy as evaluated on contact")
-		}
-	}()
-
 	// Check that the trigger type is supported.
 	if policy.Spec.Trigger.Type != notificationv1alpha1.EnrollmentTriggerContactCreated {
 		log.V(1).Info("Unsupported trigger type, skipping", "trigger", policy.Spec.Trigger.Type)
+		if err := r.markPolicyEvaluated(ctx, contact, annotationKey); err != nil {
+			log.Error(err, "Failed to mark policy as evaluated on contact")
+		}
 		return nil
 	}
 
 	// Apply the contact selector if specified.
 	if !contactMatchesSelector(contact, policy.Spec.ContactSelector) {
 		log.V(1).Info("Contact does not match policy selector, skipping")
+		if err := r.markPolicyEvaluated(ctx, contact, annotationKey); err != nil {
+			log.Error(err, "Failed to mark policy as evaluated on contact")
+		}
 		return nil
 	}
 
@@ -134,6 +133,9 @@ func (r *ContactGroupEnrollmentController) evaluatePolicy(ctx context.Context, c
 	if hasOptOut {
 		log.Info("Contact has opted out of this group, skipping enrollment",
 			"group", policy.Spec.ContactGroupRef.Name)
+		if err := r.markPolicyEvaluated(ctx, contact, annotationKey); err != nil {
+			log.Error(err, "Failed to mark policy as evaluated on contact")
+		}
 		return nil
 	}
 
@@ -142,6 +144,9 @@ func (r *ContactGroupEnrollmentController) evaluatePolicy(ctx context.Context, c
 		return fmt.Errorf("failed to ensure membership: %w", err)
 	}
 
+	if err := r.markPolicyEvaluated(ctx, contact, annotationKey); err != nil {
+		log.Error(err, "Failed to mark policy as evaluated on contact")
+	}
 	return nil
 }
 
@@ -230,6 +235,10 @@ func (r *ContactGroupEnrollmentController) ensureMembership(
 	if err := r.Client.Create(ctx, membership, client.FieldOwner(enrollmentFieldOwner)); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			log.V(1).Info("ContactGroupMembership already exists (race condition)", "membership", membershipName)
+			return nil
+		}
+		if reason, skip := webhookRejectionReason(err); skip {
+			log.V(1).Info("Skipping enrollment due to webhook rejection", "membership", membershipName, "reason", reason)
 			return nil
 		}
 		return fmt.Errorf("failed to create ContactGroupMembership: %w", err)
@@ -358,6 +367,36 @@ func (r *ContactGroupEnrollmentController) SetupWithManager(mgr ctrl.Manager) er
 // enrollmentAnnotationKey returns the annotation key for a given policy name.
 func enrollmentAnnotationKey(policyName string) string {
 	return fmt.Sprintf("%s/%s", notificationv1alpha1.EnrollmentPolicyAnnotationPrefix, policyName)
+}
+
+// webhookRejectionReason inspects an Invalid admission error from the
+// ContactGroupMembership webhook and returns a human-readable reason plus
+// whether the controller should treat it as a non-retryable skip (true) or a
+// real error (false).
+//
+// Two webhook rejections are expected and safe to skip:
+//   - CauseTypeDuplicate: the contact is already a member of the group via
+//     another membership object — enrollment is effectively complete.
+//   - CauseTypeFieldValueInvalid: a ContactGroupMembershipRemoval exists for
+//     this contact+group — the contact has opted out (cache lag prevented
+//     hasOptOut from catching it earlier).
+func webhookRejectionReason(err error) (string, bool) {
+	if !apierrors.IsInvalid(err) {
+		return "", false
+	}
+	statusErr, ok := err.(*apierrors.StatusError)
+	if !ok || statusErr.ErrStatus.Details == nil {
+		return "", false
+	}
+	for _, cause := range statusErr.ErrStatus.Details.Causes {
+		switch cause.Type {
+		case metav1.CauseTypeFieldValueDuplicate:
+			return "contact already enrolled in group", true
+		case metav1.CauseTypeFieldValueInvalid:
+			return "contact has opted out via ContactGroupMembershipRemoval", true
+		}
+	}
+	return "", false
 }
 
 // membershipName returns a deterministic name for a ContactGroupMembership
