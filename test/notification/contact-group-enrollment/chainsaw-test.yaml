@@ -1,0 +1,470 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: contact-group-enrollment
+spec:
+  description: |
+    End-to-end tests for the ContactGroupEnrollmentController.
+
+    This test verifies the following scenarios:
+    1. A Contact with a User SubjectRef is automatically enrolled into a ContactGroup
+       when a matching ContactGroupEnrollmentPolicy exists.
+    2. A Contact without a User SubjectRef is NOT enrolled (selector filtering).
+    3. A Contact with a pre-existing ContactGroupMembershipRemoval is NOT enrolled
+       (opt-out is honored).
+    4. Enrollment is idempotent — a second reconciliation does not create duplicate
+       ContactGroupMembership records.
+    5. An existing Contact is enrolled retroactively when a new
+       ContactGroupEnrollmentPolicy is applied (the policy watcher triggers re-evaluation).
+    6. Full pipeline: creating a User triggers UserContactController to create a Contact,
+       which in turn triggers enrollment via ContactGroupEnrollmentPolicy.
+
+  concurrent: false
+  steps:
+
+  # -----------------------------------------------------------------------
+  # Setup: create the shared ContactGroup and basic enrollment policy
+  # -----------------------------------------------------------------------
+  - name: setup-contact-group
+    description: Create the ContactGroup used across all scenarios
+    try:
+    - apply:
+        file: 01-contact-group.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroup
+          metadata:
+            name: enrollment-test-group
+            namespace: milo-system
+
+  - name: setup-basic-policy
+    description: Create the basic ContactGroupEnrollmentPolicy targeting User contacts
+    try:
+    - apply:
+        file: 02-basic-policy.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupEnrollmentPolicy
+          metadata:
+            name: enrollment-basic-policy
+
+  # -----------------------------------------------------------------------
+  # Setup: create Users so UserContactController auto-creates their Contacts.
+  # enrollment-opted-out-user is created later in Scenario 3, AFTER its
+  # ContactGroupMembershipRemoval is applied, so the opt-out is already in
+  # place when the Contact first appears.
+  # -----------------------------------------------------------------------
+  - name: setup-test-users
+    description: Create Users whose auto-created Contacts are used in subsequent scenarios
+    try:
+    - apply:
+        file: 00-test-users.yaml
+    - assert:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          metadata:
+            name: enrollment-test-user
+    - assert:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          metadata:
+            name: enrollment-existing-user
+    # Wait for UserContactController to create the Contacts
+    - wait:
+        apiVersion: notification.miloapis.com/v1alpha1
+        kind: Contact
+        name: user-enrollment-test-user
+        namespace: milo-system
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.subject.name}'
+            value: enrollment-test-user
+    - wait:
+        apiVersion: notification.miloapis.com/v1alpha1
+        kind: Contact
+        name: user-enrollment-existing-user
+        namespace: milo-system
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.subject.name}'
+            value: enrollment-existing-user
+
+  # -----------------------------------------------------------------------
+  # Scenario 1: Contact with User SubjectRef is enrolled
+  # -----------------------------------------------------------------------
+  - name: enroll-user-contact
+    description: Verify the auto-created Contact for enrollment-test-user is enrolled into the ContactGroup
+    try:
+    - wait:
+        apiVersion: notification.miloapis.com/v1alpha1
+        kind: ContactGroupMembership
+        name: enrollment-enrollment-basic-policy-user-enrollment-test-user
+        namespace: milo-system
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.contactRef.name}'
+            value: user-enrollment-test-user
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupMembership
+          metadata:
+            name: enrollment-enrollment-basic-policy-user-enrollment-test-user
+            namespace: milo-system
+            labels:
+              enrollment.notification.miloapis.com/policy: enrollment-basic-policy
+          spec:
+            contactRef:
+              name: user-enrollment-test-user
+              namespace: milo-system
+            contactGroupRef:
+              name: enrollment-test-group
+              namespace: milo-system
+    catch:
+    - script:
+        timeout: 10s
+        content: |
+          echo "=== ContactGroupMemberships in milo-system ==="
+          kubectl get contactgroupmemberships -n milo-system -o wide 2>&1 || true
+          echo "=== Contact annotations ==="
+          kubectl get contact user-enrollment-test-user -n milo-system -o jsonpath='{.metadata.annotations}' 2>&1 || true
+
+  # -----------------------------------------------------------------------
+  # Scenario 1b: Enrollment annotation is written to the Contact
+  # -----------------------------------------------------------------------
+  - name: verify-enrollment-annotation
+    description: Verify the enrollment annotation is written to the Contact after evaluation
+    try:
+    - script:
+        timeout: 30s
+        content: |
+          for i in $(seq 1 15); do
+            annotation=$(kubectl get contact user-enrollment-test-user -n milo-system \
+              -o jsonpath='{.metadata.annotations.enrollment\.notification\.miloapis\.com/enrollment-basic-policy}' 2>/dev/null || echo "")
+            if [ "$annotation" = "true" ]; then
+              echo "Enrollment annotation is set correctly"
+              exit 0
+            fi
+            echo "Waiting for enrollment annotation... (attempt $i)"
+            sleep 2
+          done
+          echo "Enrollment annotation was not set in time"
+          kubectl get contact user-enrollment-test-user -n milo-system -o yaml 2>&1
+          exit 1
+
+  # -----------------------------------------------------------------------
+  # Scenario 2: Contact without User SubjectRef is NOT enrolled
+  # -----------------------------------------------------------------------
+  - name: no-enrollment-for-bare-contact
+    description: Create a Contact without a SubjectRef and verify no membership is created
+    try:
+    - apply:
+        file: 04-bare-contact.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: Contact
+          metadata:
+            name: enrollment-bare-contact
+            namespace: milo-system
+    # Wait for the controller to annotate the bare contact (proves it was evaluated)
+    - script:
+        timeout: 30s
+        content: |
+          for i in $(seq 1 15); do
+            annotation=$(kubectl get contact enrollment-bare-contact -n milo-system \
+              -o jsonpath='{.metadata.annotations.enrollment\.notification\.miloapis\.com/enrollment-basic-policy}' 2>/dev/null || echo "")
+            if [ "$annotation" = "true" ]; then
+              echo "Bare contact was evaluated (annotation set)"
+              exit 0
+            fi
+            echo "Waiting for evaluation annotation... (attempt $i)"
+            sleep 2
+          done
+          echo "Evaluation annotation was not set in time"
+          exit 1
+    # Assert that no membership was created for the bare contact
+    - error:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupMembership
+          metadata:
+            namespace: milo-system
+          spec:
+            contactRef:
+              name: enrollment-bare-contact
+              namespace: milo-system
+        timeout: 10s
+
+  # -----------------------------------------------------------------------
+  # Scenario 3: Opt-out (ContactGroupMembershipRemoval) is honored
+  # -----------------------------------------------------------------------
+  - name: setup-opt-out-removal
+    description: |
+      Create the opted-out User, wait for its Contact, then create the removal.
+      Uses a dedicated ContactGroup (enrollment-opt-out-test-group) so the opt-out
+      test policy can create memberships without conflicting with enrollment-test-group
+      memberships from the basic policy.
+    try:
+    - apply:
+        file: 12-opt-out-test-group.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroup
+          metadata:
+            name: enrollment-opt-out-test-group
+            namespace: milo-system
+    - apply:
+        file: 10-opted-out-user.yaml
+    # Wait for UserContactController to create the Contact before applying the removal
+    - wait:
+        apiVersion: notification.miloapis.com/v1alpha1
+        kind: Contact
+        name: user-enrollment-opted-out-user
+        namespace: milo-system
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.subject.name}'
+            value: enrollment-opted-out-user
+    - apply:
+        file: 05-opted-out-removal.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupMembershipRemoval
+          metadata:
+            name: enrollment-opt-out-removal
+            namespace: milo-system
+
+  - name: no-enrollment-when-opted-out
+    description: |
+      Apply a new enrollment policy AFTER the removal is in place. The controller
+      evaluates user-enrollment-opted-out-user against this policy for the first time
+      with the removal already present, so enrollment is skipped.
+    try:
+    - apply:
+        file: 11-opt-out-test-policy.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupEnrollmentPolicy
+          metadata:
+            name: enrollment-opt-out-test-policy
+    # Wait for another contact to be enrolled — proves the policy ran for all contacts.
+    # Uses a polling script because kubectl wait --for=jsonpath fails immediately
+    # with NotFound when the resource does not yet exist.
+    - script:
+        timeout: 30s
+        content: |
+          for i in $(seq 1 15); do
+            name=$(kubectl get contactgroupmembership \
+              enrollment-enrollment-opt-out-test-policy-user-enrollment-test-user \
+              -n milo-system -o jsonpath='{.spec.contactRef.name}' 2>/dev/null || echo "")
+            if [ "$name" = "user-enrollment-test-user" ]; then
+              echo "Membership for test user created — policy controller ran"
+              exit 0
+            fi
+            echo "Waiting for test-user membership... (attempt $i)"
+            sleep 2
+          done
+          echo "Test-user membership was not created in time"
+          exit 1
+    # Assert that the opted-out contact was NOT enrolled by this policy
+    - error:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupMembership
+          metadata:
+            name: enrollment-enrollment-opt-out-test-policy-user-enrollment-opted-out-user
+            namespace: milo-system
+        timeout: 10s
+
+  # -----------------------------------------------------------------------
+  # Scenario 4: Enrollment is idempotent
+  # -----------------------------------------------------------------------
+  - name: enrollment-is-idempotent
+    description: Re-triggering reconciliation on an already-enrolled Contact does not create duplicates
+    try:
+    - script:
+        timeout: 10s
+        content: |
+          # Touch the contact to force a re-reconciliation
+          kubectl annotate contact user-enrollment-test-user -n milo-system \
+            test.miloapis.com/idempotency-check="$(date +%s)" --overwrite
+    - script:
+        timeout: 30s
+        content: |
+          sleep 5
+          count=$(kubectl get contactgroupmemberships -n milo-system \
+            -l enrollment.notification.miloapis.com/policy=enrollment-basic-policy \
+            -o json | jq '[.items[] | select(.spec.contactRef.name == "user-enrollment-test-user")] | length')
+          if [ "$count" -ne 1 ]; then
+            echo "Expected exactly 1 membership, got $count (idempotency check failed)"
+            kubectl get contactgroupmemberships -n milo-system -o wide 2>&1
+            exit 1
+          fi
+          echo "Idempotency check passed: exactly 1 membership exists"
+
+  # -----------------------------------------------------------------------
+  # Scenario 5: Retroactive enrollment of existing contacts when a new policy is applied
+  # -----------------------------------------------------------------------
+  - name: create-contact-before-policy
+    description: |
+      Assert the Contact for enrollment-existing-user exists before the retroactive
+      policy is applied, and create the dedicated group the retroactive policy targets.
+    try:
+    - apply:
+        file: 13-retroactive-test-group.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroup
+          metadata:
+            name: enrollment-retroactive-test-group
+            namespace: milo-system
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: Contact
+          metadata:
+            name: user-enrollment-existing-user
+            namespace: milo-system
+
+  - name: apply-retroactive-policy
+    description: Apply a new policy and verify existing contacts are enrolled retroactively
+    try:
+    - apply:
+        file: 08-retroactive-policy.yaml
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupEnrollmentPolicy
+          metadata:
+            name: enrollment-retroactive-policy
+    - script:
+        timeout: 30s
+        content: |
+          for i in $(seq 1 15); do
+            name=$(kubectl get contactgroupmembership \
+              enrollment-enrollment-retroactive-policy-user-enrollment-existing-user \
+              -n milo-system -o jsonpath='{.spec.contactRef.name}' 2>/dev/null || echo "")
+            if [ "$name" = "user-enrollment-existing-user" ]; then
+              echo "Retroactive membership created"
+              exit 0
+            fi
+            echo "Waiting for retroactive membership... (attempt $i)"
+            sleep 2
+          done
+          echo "Retroactive membership was not created in time"
+          exit 1
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupMembership
+          metadata:
+            name: enrollment-enrollment-retroactive-policy-user-enrollment-existing-user
+            namespace: milo-system
+          spec:
+            contactRef:
+              name: user-enrollment-existing-user
+              namespace: milo-system
+            contactGroupRef:
+              name: enrollment-retroactive-test-group
+              namespace: milo-system
+    catch:
+    - script:
+        timeout: 10s
+        content: |
+          echo "=== All ContactGroupMemberships in milo-system ==="
+          kubectl get contactgroupmemberships -n milo-system -o wide 2>&1 || true
+          echo "=== user-enrollment-existing-user annotations ==="
+          kubectl get contact user-enrollment-existing-user -n milo-system -o jsonpath='{.metadata.annotations}' 2>&1 || true
+
+  # -----------------------------------------------------------------------
+  # Scenario 6: Full pipeline — User creation triggers enrollment
+  # -----------------------------------------------------------------------
+  - name: full-pipeline-user-signup
+    description: |
+      Create a User and verify the full enrollment chain:
+        User → (UserContactController) → Contact → (ContactGroupEnrollmentController) → ContactGroupMembership
+    try:
+    - apply:
+        file: 09-signup-user.yaml
+    # Wait for UserContactController to create the Contact
+    - wait:
+        apiVersion: notification.miloapis.com/v1alpha1
+        kind: Contact
+        name: user-enrollment-signup-user
+        namespace: milo-system
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.subject.name}'
+            value: enrollment-signup-user
+    # Wait for the enrollment controller to create the membership
+    - script:
+        timeout: 30s
+        content: |
+          for i in $(seq 1 15); do
+            name=$(kubectl get contactgroupmembership \
+              enrollment-enrollment-basic-policy-user-enrollment-signup-user \
+              -n milo-system -o jsonpath='{.spec.contactRef.name}' 2>/dev/null || echo "")
+            if [ "$name" = "user-enrollment-signup-user" ]; then
+              echo "Signup user membership created"
+              exit 0
+            fi
+            echo "Waiting for signup membership... (attempt $i)"
+            sleep 2
+          done
+          echo "Signup membership was not created in time"
+          exit 1
+    - assert:
+        resource:
+          apiVersion: notification.miloapis.com/v1alpha1
+          kind: ContactGroupMembership
+          metadata:
+            name: enrollment-enrollment-basic-policy-user-enrollment-signup-user
+            namespace: milo-system
+          spec:
+            contactRef:
+              name: user-enrollment-signup-user
+              namespace: milo-system
+            contactGroupRef:
+              name: enrollment-test-group
+              namespace: milo-system
+    catch:
+    - script:
+        timeout: 10s
+        content: |
+          echo "=== User status ==="
+          kubectl get user enrollment-signup-user -o yaml 2>&1 || true
+          echo "=== Contacts in milo-system ==="
+          kubectl get contacts -n milo-system -o wide 2>&1 || true
+          echo "=== ContactGroupMemberships in milo-system ==="
+          kubectl get contactgroupmemberships -n milo-system -o wide 2>&1 || true
+
+  # -----------------------------------------------------------------------
+  # Cleanup
+  # -----------------------------------------------------------------------
+  - name: cleanup
+    description: Remove all resources created by this test
+    try:
+    - script:
+        timeout: 60s
+        content: |
+          # ContactGroupMemberships created by the controller (delete by label selector to
+          # catch all contact × policy combinations without enumerating each name)
+          kubectl delete contactgroupmembership -n milo-system \
+            -l 'enrollment.notification.miloapis.com/policy in (enrollment-basic-policy,enrollment-retroactive-policy,enrollment-opt-out-test-policy)' \
+            --ignore-not-found
+
+          echo "Cleanup completed"

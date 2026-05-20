@@ -1,0 +1,9 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: Contact
+metadata:
+  name: enrollment-bare-contact
+  namespace: milo-system
+spec:
+  givenName: Bare
+  familyName: Contact
+  email: bare-contact@example.com

@@ -1,0 +1,18 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: notification.miloapis.com-contactgroupenrollmentpolicy
+spec:
+  serviceRef:
+    name: "notification.miloapis.com"
+  kind: ContactGroupEnrollmentPolicy
+  plural: contactgroupenrollmentpolicies
+  singular: contactgroupenrollmentpolicy
+  permissions:
+    - list
+    - get
+    - create
+    - update
+    - delete
+    - patch
+    - watch
