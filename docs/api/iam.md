@@ -3052,6 +3052,27 @@ UserPreferenceSpec defines the desired state of UserPreference
             <i>Default</i>: system<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b>displayName</b></td>
+        <td>string</td>
+        <td>
+          DisplayName is the user's preferred display name.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>title</b></td>
+        <td>string</td>
+        <td>
+          Title is the user's title or role.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>timeZone</b></td>
+        <td>string</td>
+        <td>
+          The user's time zone preference.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
