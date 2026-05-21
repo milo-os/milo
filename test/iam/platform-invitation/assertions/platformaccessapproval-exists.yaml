@@ -1,0 +1,7 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccessApproval
+metadata:
+  name: (join('-', [$pi.metadata.uid, 'platform-invitation-e2e']))
+spec:
+  subjectRef:
+    email: invited.user@example.com

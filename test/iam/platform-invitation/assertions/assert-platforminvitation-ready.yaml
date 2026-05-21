@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformInvitation
+metadata:
+  name: platform-invitation-e2e
+status:
+  conditions:
+  - type: Ready
+    status: "True"
+    reason: Reconciled
+
+

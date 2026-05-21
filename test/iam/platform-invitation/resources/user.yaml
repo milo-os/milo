@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: platform-invited-user
+spec:
+  email: invited.user@example.com
+  givenName: Invited
+  familyName: User
+
+
