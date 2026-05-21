@@ -1,0 +1,5 @@
+groups:
+  - name: smoke
+    rules:
+      - record: heap_bytes
+        expr: avg_over_time(go_memstats_heap_inuse_bytes{job="milo-apiserver"}[2m])
