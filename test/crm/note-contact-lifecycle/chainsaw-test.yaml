@@ -13,6 +13,22 @@ spec:
     - Deleting a User causes owned Notes to be garbage-collected via ownerReferences
 
   steps:
+    - name: setup-notes-quota-grant
+      description: Create a ResourceGrant granting notes quota capacity for this test
+      try:
+        - apply:
+            file: 00-notes-quota-grant.yaml
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceGrant
+            name: crm-note-lifecycle-test-grant
+            namespace: milo-system
+            timeout: 30s
+            for:
+              condition:
+                name: Active
+                value: 'True'
+
     - name: create-user-contact-and-notes
       description: Create IAM User, Notification Contact, and CRM Notes, then verify Note status
       try:
