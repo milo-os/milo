@@ -147,6 +147,16 @@ spec:
                   - type
                   type: object
                 type: array
+              lastLoginPerProvider:
+                additionalProperties:
+                  type: string
+                description: |-
+                  LastLoginPerProvider tracks the most recent login timestamp for each identity provider
+                  that the user has used to authenticate. The map key is the provider name (e.g., "github", "google")
+                  and the value is the RFC3339 timestamp of the last successful login via that provider.
+                  This field is updated by the auth provider when processing idpintent.succeeded events.
+                  Note: This event is only triggered during actual IDP login, not on token refresh.
+                type: object
               lastLoginProvider:
                 allOf:
                 - enum:
@@ -159,6 +169,14 @@ spec:
                   LastLoginProvider records the identity provider that was most recently used by the
                   user to log in (e.g., "github" or "google"). This field is set by the auth provider
                   based on authentication events.
+                type: string
+              lastTokenIntrospection:
+                description: |-
+                  LastTokenIntrospection records the timestamp of the most recent successful token introspection
+                  for this user. This is updated during authentication webhook calls when validating access tokens,
+                  which occurs more frequently than actual IDP logins (including token refreshes).
+                  The value is an RFC3339 timestamp.
+                format: date-time
                 type: string
               registrationApproval:
                 description: |-
