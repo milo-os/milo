@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for PaymentMethod resources.
+# A PaymentMethod represents a single tokenized payment instrument owned by a
+# BillingAccount. Card details (brand, last4, etc.) only exist on .status
+# after the provider controller has attached the upstream PaymentMethod, and
+# audit events for updates are dominated by controller status writes —
+# the user-visible mutations are create (add a card) and delete (remove it).
+#
+# Audit rules handle CRUD operations captured by the Kubernetes API server audit log.
+# eventRules surface the provider controller's phase transition Events
+# (PaymentMethodAttached, PaymentMethodFailed) so the timeline reflects the
+# asynchronous outcome of card collection without leaking SDK detail.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: billing.miloapis.com-paymentmethod
+spec:
+  resource:
+    apiGroup: billing.miloapis.com
+    kind: PaymentMethod
+
+  auditRules:
+    - name: create-with-display-name
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.displayName)"
+      summary: "{{ actor }} added payment method {{ audit.requestObject.spec.displayName }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} added payment method {{ link(audit.objectRef.name, audit.objectRef) }}"
+
+    - name: delete
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} removed payment method {{ audit.objectRef.name }}"
+
+    - name: update
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource)"
+      summary: "{{ actor }} updated payment method {{ link(audit.objectRef.name, audit.objectRef) }}"
