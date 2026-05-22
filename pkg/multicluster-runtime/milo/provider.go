@@ -129,10 +129,10 @@ type Provider struct {
 }
 
 // Get returns the cluster with the given name, if it is known.
-func (p *Provider) Get(_ context.Context, clusterName string) (cluster.Cluster, error) {
+func (p *Provider) Get(_ context.Context, clusterName multicluster.ClusterName) (cluster.Cluster, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if cl, ok := p.projects[clusterName]; ok {
+	if cl, ok := p.projects[clusterName.String()]; ok {
 		return cl, nil
 	}
 
@@ -288,7 +288,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Engaging cluster with multicluster manager", "key", key)
 
 	// engage manager.
-	if err := p.mcMgr.Engage(clusterCtx, key, cl); err != nil {
+	if err := p.mcMgr.Engage(clusterCtx, multicluster.ClusterName(key), cl); err != nil {
 		log.Error(err, "Failed to engage cluster with multicluster manager", "key", key)
 		delete(p.projects, key)
 		delete(p.cancelFns, key)

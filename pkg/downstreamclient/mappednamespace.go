@@ -287,6 +287,10 @@ func (c *mappedNamespaceClient) Update(ctx context.Context, obj client.Object, o
 	return c.client.Update(ctx, obj, opts...)
 }
 
+func (c *mappedNamespaceClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+	return c.client.Apply(ctx, obj, opts...)
+}
+
 func (c *mappedNamespaceClient) GroupVersionKindFor(obj runtime.Object) (schema.GroupVersionKind, error) {
 	return c.client.GroupVersionKindFor(obj)
 }

@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 )
 
@@ -33,7 +34,7 @@ import (
 // downstream resources. The scheme is resolved per-cluster at handler
 // construction time; a panic is raised if the type cannot be found.
 func TypedEnqueueRequestsForUpstreamOwner[object client.Object](ownerType client.Object) mchandler.TypedEventHandlerFunc[object, mcreconcile.Request] {
-	return func(clusterName string, cl cluster.Cluster) handler.TypedEventHandler[object, mcreconcile.Request] {
+	return func(clusterName multicluster.ClusterName, cl cluster.Cluster) handler.TypedEventHandler[object, mcreconcile.Request] {
 		e := &enqueueRequestForOwner[object]{
 			ownerType: ownerType,
 		}
@@ -124,6 +125,6 @@ func (e *enqueueRequestForOwner[object]) getOwnerReconcileRequest(obj metav1.Obj
 				Namespace: labels[UpstreamOwnerNamespaceLabel],
 			},
 		},
-		ClusterName: clusterName,
+		ClusterName: multicluster.ClusterName(clusterName),
 	}] = struct{}{}
 }
