@@ -51,7 +51,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref common.ReferenceCal
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
 						},
 					},
 					"spec": {
@@ -70,7 +70,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec", "go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec", "go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
 	}
 }
 
@@ -98,7 +98,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref common.Referenc
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
 						},
 					},
 					"items": {
@@ -119,7 +119,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref common.Referenc
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
 	}
 }
 
@@ -141,7 +141,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref common.Referenc
 					"expirationDate": {
 						SchemaProps: spec.SchemaProps{
 							Description: "ExpirationDate is the date and time when the ServiceAccountKey will expire. If not specified, the ServiceAccountKey will never expire.",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
 						},
 					},
 					"publicKey": {
@@ -156,7 +156,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref common.Referenc
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Time"},
 	}
 }
 
@@ -197,7 +197,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyStatus(ref common.Refere
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Condition"),
+										Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.Condition"),
 									},
 								},
 							},
@@ -207,7 +207,7 @@ func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyStatus(ref common.Refere
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Condition"},
 	}
 }
 
@@ -234,7 +234,7 @@ func schema_pkg_apis_identity_v1alpha1_Session(ref common.ReferenceCallback) com
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
 						},
 					},
 					"status": {
@@ -247,7 +247,7 @@ func schema_pkg_apis_identity_v1alpha1_Session(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
 	}
 }
 
@@ -274,7 +274,7 @@ func schema_pkg_apis_identity_v1alpha1_SessionList(ref common.ReferenceCallback)
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
 						},
 					},
 					"items": {
@@ -295,7 +295,7 @@ func schema_pkg_apis_identity_v1alpha1_SessionList(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
 	}
 }
 
@@ -340,13 +340,13 @@ func schema_pkg_apis_identity_v1alpha1_SessionStatus(ref common.ReferenceCallbac
 						SchemaProps: spec.SchemaProps{
 							Description: "CreatedAt is when the session was created.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
 						},
 					},
 					"lastUpdatedAt": {
 						SchemaProps: spec.SchemaProps{
 							Description: "LastUpdatedAt is the last time the provider updated this session (e.g. Zitadel change_date).",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
 						},
 					},
 					"userAgent": {
@@ -361,7 +361,7 @@ func schema_pkg_apis_identity_v1alpha1_SessionStatus(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Time"},
 	}
 }
 
@@ -389,7 +389,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentity(ref common.ReferenceCallback
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
 						},
 					},
 					"status": {
@@ -402,7 +402,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentity(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
 	}
 }
 
@@ -430,7 +430,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref common.ReferenceCall
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
 						},
 					},
 					"items": {
@@ -451,7 +451,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
 	}
 }
 
