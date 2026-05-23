@@ -52,8 +52,9 @@ import (
 	"k8s.io/component-base/metrics/prometheus/slis"
 	"k8s.io/component-base/term"
 	"k8s.io/component-base/version"
-	utilversion "k8s.io/component-base/version"
 	"k8s.io/component-base/version/verflag"
+	basecompatibility "k8s.io/component-base/compatibility"
+	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	genericcontrollermanager "k8s.io/controller-manager/app"
 	"k8s.io/controller-manager/controller"
 	"k8s.io/controller-manager/pkg/clientbuilder"
@@ -204,8 +205,8 @@ const (
 
 // NewCommand creates a *cobra.Command object with default parameters
 func NewCommand() *cobra.Command {
-	_, _ = featuregate.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
-		featuregate.DefaultKubeComponent, utilversion.DefaultBuildEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
+	_, _ = apiservercompat.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
+		basecompatibility.DefaultKubeComponent, apiservercompat.DefaultBuildEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
 
 	s, err := NewOptions()
 	if err != nil {
@@ -245,13 +246,13 @@ func NewCommand() *cobra.Command {
 				ProjectOwnerRoleNamespace = SystemNamespace
 			}
 
-			c, err := s.Config(KnownControllers(), nil, ControllerAliases())
+			c, err := s.Config(cmd.Context(), KnownControllers(), nil, ControllerAliases())
 			if err != nil {
 				return err
 			}
 
 			// add feature enablement metrics
-			fg := s.ComponentGlobalsRegistry.FeatureGateFor(featuregate.DefaultKubeComponent)
+			fg := s.ComponentGlobalsRegistry.FeatureGateFor(basecompatibility.DefaultKubeComponent)
 			fg.(featuregate.MutableFeatureGate).AddMetrics()
 			return Run(context.Background(), c.Complete(), s)
 		},
@@ -837,11 +838,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.CoordinatedLeaderElection) {
-		binaryVersion, err := semver.ParseTolerant(featuregate.DefaultComponentGlobalsRegistry.EffectiveVersionFor(featuregate.DefaultKubeComponent).BinaryVersion().String())
+		binaryVersion, err := semver.ParseTolerant(apiservercompat.DefaultComponentGlobalsRegistry.EffectiveVersionFor(basecompatibility.DefaultKubeComponent).BinaryVersion().String())
 		if err != nil {
 			return err
 		}
-		emulationVersion, err := semver.ParseTolerant(featuregate.DefaultComponentGlobalsRegistry.EffectiveVersionFor(featuregate.DefaultKubeComponent).EmulationVersion().String())
+		emulationVersion, err := semver.ParseTolerant(apiservercompat.DefaultComponentGlobalsRegistry.EffectiveVersionFor(basecompatibility.DefaultKubeComponent).EmulationVersion().String())
 		if err != nil {
 			return err
 		}

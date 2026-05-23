@@ -27,14 +27,14 @@ import (
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
-	"k8s.io/component-base/featuregate"
 	"k8s.io/component-base/logs"
 	logsapi "k8s.io/component-base/logs/api/v1"
 	_ "k8s.io/component-base/metrics/prometheus/workqueue"
 	"k8s.io/component-base/term"
 	"k8s.io/component-base/version"
-	utilversion "k8s.io/component-base/version"
 	"k8s.io/component-base/version/verflag"
+	basecompatibility "k8s.io/component-base/compatibility"
+	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	"k8s.io/klog/v2"
 	aggregatorapiserver "k8s.io/kube-aggregator/pkg/apiserver"
 
@@ -106,7 +106,7 @@ func NewCommand() *cobra.Command {
 			cliflag.PrintFlags(fs)
 			s.SystemNamespaces = []string{metav1.NamespaceSystem, metav1.NamespaceDefault, SystemNamespace}
 
-			completedOptions, err := s.Complete(cmd.Context(), namedFlagSets, []string{}, []net.IP{})
+			completedOptions, err := s.Complete(cmd.Context(), []string{}, []net.IP{})
 			if err != nil {
 				return err
 			}
@@ -132,9 +132,9 @@ func NewCommand() *cobra.Command {
 		},
 	}
 
-	s.GenericServerRunOptions.ComponentGlobalsRegistry = featuregate.NewComponentGlobalsRegistry()
-	s.GenericServerRunOptions.ComponentGlobalsRegistry.ComponentGlobalsOrRegister(
-		featuregate.DefaultKubeComponent, utilversion.DefaultKubeEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
+	s.GenericServerRunOptions.ComponentGlobalsRegistry = apiservercompat.DefaultComponentGlobalsRegistry
+	apiservercompat.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
+		basecompatibility.DefaultKubeComponent, apiservercompat.DefaultBuildEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
 	s.GenericServerRunOptions.AddUniversalFlags(namedFlagSets.FlagSet("generic"))
 	s.Etcd.AddFlags(namedFlagSets.FlagSet("etcd"))
 	s.SecureServing.AddFlags(namedFlagSets.FlagSet("secure serving"))

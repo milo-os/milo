@@ -9,7 +9,6 @@ import (
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	"go.miloapis.com/milo/pkg/email/templating"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,8 +22,7 @@ var emailLog = logf.Log.WithName("email-resource")
 func SetupEmailWebhooksWithManager(mgr ctrl.Manager) error {
 	emailLog.Info("Setting up notification.miloapis.com email webhooks")
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&notificationv1alpha1.Email{}).
+	return ctrl.NewWebhookManagedBy(mgr, &notificationv1alpha1.Email{}).
 		WithValidator(&EmailValidator{
 			Client: mgr.GetClient(),
 		}).
@@ -39,11 +37,7 @@ type EmailValidator struct {
 }
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (v *EmailValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	email, ok := obj.(*notificationv1alpha1.Email)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast object to Email")
-	}
+func (v *EmailValidator) ValidateCreate(ctx context.Context, email *notificationv1alpha1.Email) (admission.Warnings, error) {
 	emailLog.Info("validate create", "name", email.Name)
 
 	var errs field.ErrorList
@@ -111,15 +105,11 @@ func (v *EmailValidator) ValidateCreate(ctx context.Context, obj runtime.Object)
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
 // We do not allow updates to Email resources as they are immutable.
-func (v *EmailValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	_, ok := newObj.(*notificationv1alpha1.Email)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast object to Email")
-	}
+func (v *EmailValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *notificationv1alpha1.Email) (admission.Warnings, error) {
 	return nil, errors.NewMethodNotSupported(notificationv1alpha1.SchemeGroupVersion.WithResource("emails").GroupResource(), "update")
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (v *EmailValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *EmailValidator) ValidateDelete(ctx context.Context, obj *notificationv1alpha1.Email) (admission.Warnings, error) {
 	return nil, nil
 }

@@ -9,7 +9,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,8 +43,7 @@ func SetupPlatformInvitationWebhooksWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to index platforminvitation email key: %w", err)
 	}
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&iamv1alpha1.PlatformInvitation{}).
+	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.PlatformInvitation{}).
 		WithDefaulter(&PlatformInvitationMutator{client: mgr.GetClient()}).
 		WithValidator(&PlatformInvitationValidator{client: mgr.GetClient()}).
 		Complete()
@@ -59,12 +57,7 @@ type PlatformInvitationMutator struct {
 }
 
 // Default sets the InvitedBy field to the requesting user.
-func (m *PlatformInvitationMutator) Default(ctx context.Context, obj runtime.Object) error {
-	pi, ok := obj.(*iamv1alpha1.PlatformInvitation)
-	if !ok {
-		return fmt.Errorf("failed to cast object to PlatformInvitation")
-	}
-
+func (m *PlatformInvitationMutator) Default(ctx context.Context, pi *iamv1alpha1.PlatformInvitation) error {
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		platforminvitationlog.Error(err, "failed to get admission request from context", "name", pi.GetName())
@@ -91,11 +84,7 @@ type PlatformInvitationValidator struct {
 	client client.Client
 }
 
-func (v *PlatformInvitationValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	pi, ok := obj.(*iamv1alpha1.PlatformInvitation)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast object to PlatformInvitation")
-	}
+func (v *PlatformInvitationValidator) ValidateCreate(ctx context.Context, pi *iamv1alpha1.PlatformInvitation) (admission.Warnings, error) {
 	platforminvitationlog.Info("Validating PlatformInvitation", "name", pi.Name)
 
 	var errs field.ErrorList
@@ -142,10 +131,10 @@ func (v *PlatformInvitationValidator) ValidateCreate(ctx context.Context, obj ru
 	return nil, nil
 }
 
-func (v *PlatformInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *PlatformInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.PlatformInvitation) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *PlatformInvitationValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *PlatformInvitationValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.PlatformInvitation) (admission.Warnings, error) {
 	return nil, nil
 }
