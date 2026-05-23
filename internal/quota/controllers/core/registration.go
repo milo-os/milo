@@ -140,7 +140,7 @@ func (r *ResourceRegistrationController) SetupWithManager(mgr mcmanager.Manager)
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.ResourceRegistration{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true)).
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		Named("resource-registration").
 		Complete(r)
 }

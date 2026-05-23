@@ -176,7 +176,7 @@ func (r *ClaimCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.ClaimCreationPolicy{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true)).
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		// Watch ResourceRegistrations to revalidate policies when registrations change
 		Watches(
 			&quotav1alpha1.ResourceRegistration{},
@@ -186,7 +186,7 @@ func (r *ClaimCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 				},
 			),
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Named("claim-creation-policy").
 		Complete(r)

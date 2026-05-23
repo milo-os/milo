@@ -194,7 +194,7 @@ func (r *GrantCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.GrantCreationPolicy{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true)).
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		// Watch ResourceRegistrations to revalidate policies when registrations change
 		Watches(
 			&quotav1alpha1.ResourceRegistration{},
@@ -204,7 +204,7 @@ func (r *GrantCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 				},
 			),
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Named("grant-creation-policy").
 		Complete(r)
