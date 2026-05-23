@@ -676,15 +676,8 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			// Start concurrently to resolve circular dependency between provider and manager
-			go func() {
-				logger.Info("Starting Datum cluster provider")
-				if err := provider.Run(ctx, mcMgr); err != nil {
-					logger.Error(err, "Datum cluster provider failed")
-					panic(err)
-				}
-			}()
-
+			// The multicluster manager automatically starts the provider because
+			// Provider implements multicluster.ProviderRunnable (Start method).
 			go func() {
 				logger.Info("Starting multicluster manager for quota system")
 				if err := mcMgr.Start(ctx); err != nil {

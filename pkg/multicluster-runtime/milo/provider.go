@@ -26,7 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
 
@@ -122,7 +121,7 @@ type Provider struct {
 	client            client.Client
 
 	lock      sync.Mutex
-	mcMgr     mcmanager.Manager
+	mcMgr     multicluster.Aware
 	projects  map[string]cluster.Cluster
 	cancelFns map[string]context.CancelFunc
 	indexers  []index
@@ -139,12 +138,12 @@ func (p *Provider) Get(_ context.Context, clusterName multicluster.ClusterName) 
 	return nil, fmt.Errorf("cluster %s not found", clusterName)
 }
 
-// Run starts the provider and blocks.
-func (p *Provider) Run(ctx context.Context, mgr mcmanager.Manager) error {
+// Start implements multicluster.ProviderRunnable and blocks until ctx is cancelled.
+func (p *Provider) Start(ctx context.Context, aware multicluster.Aware) error {
 	p.log.Info("Starting Datum cluster provider")
 
 	p.lock.Lock()
-	p.mcMgr = mgr
+	p.mcMgr = aware
 	p.lock.Unlock()
 
 	<-ctx.Done()
