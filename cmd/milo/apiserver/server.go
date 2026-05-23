@@ -132,8 +132,8 @@ func NewCommand() *cobra.Command {
 		},
 	}
 
-	s.GenericServerRunOptions.ComponentGlobalsRegistry = apiservercompat.DefaultComponentGlobalsRegistry
-	apiservercompat.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
+	s.GenericServerRunOptions.ComponentGlobalsRegistry = basecompatibility.NewComponentGlobalsRegistry()
+	s.GenericServerRunOptions.ComponentGlobalsRegistry.ComponentGlobalsOrRegister(
 		basecompatibility.DefaultKubeComponent, apiservercompat.DefaultBuildEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
 	s.GenericServerRunOptions.AddUniversalFlags(namedFlagSets.FlagSet("generic"))
 	s.Etcd.AddFlags(namedFlagSets.FlagSet("etcd"))
