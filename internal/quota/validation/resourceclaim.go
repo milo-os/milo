@@ -42,10 +42,10 @@ func (v *resourceClaimValidator) Validate(ctx context.Context, claim *quotav1alp
 		errs = append(errs, requestErrs...)
 	}
 
-	if claim.Spec.ResourceRef.Kind == "" {
+	if claim.Spec.ResourceRef == nil || claim.Spec.ResourceRef.Kind == "" {
 		errs = append(errs, field.Required(resourceRefPath.Child("kind"), "resourceRef.kind is required"))
 	}
-	if claim.Spec.ResourceRef.Name == "" {
+	if claim.Spec.ResourceRef == nil || claim.Spec.ResourceRef.Name == "" {
 		errs = append(errs, field.Required(resourceRefPath.Child("name"), "resourceRef.name is required"))
 	}
 
@@ -58,7 +58,7 @@ func (v *resourceClaimValidator) validateResourceRequests(ctx context.Context, c
 	var errs field.ErrorList
 	requestsPath := field.NewPath("spec", "requests")
 	seenResourceTypes := make(map[string]int)
-	resourceRefComplete := claim.Spec.ResourceRef.Kind != "" && claim.Spec.ResourceRef.Name != ""
+	resourceRefComplete := claim.Spec.ResourceRef != nil && claim.Spec.ResourceRef.Kind != "" && claim.Spec.ResourceRef.Name != ""
 
 	for i, request := range claim.Spec.Requests {
 		requestPath := requestsPath.Index(i)
@@ -122,7 +122,7 @@ func (v *resourceClaimValidator) validateClaimingRulesForRequest(
 	}
 
 	if !allowed {
-		claimingResourceStr := claim.Spec.ResourceRef.Kind
+		claimingResourceStr := claim.Spec.ResourceRef.Kind // ResourceRef is non-nil; checked by resourceRefComplete guard
 		if claim.Spec.ResourceRef.APIGroup != "" {
 			claimingResourceStr = fmt.Sprintf("%s/%s", claim.Spec.ResourceRef.APIGroup, claim.Spec.ResourceRef.Kind)
 		}

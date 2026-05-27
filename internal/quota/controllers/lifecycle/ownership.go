@@ -228,6 +228,9 @@ func (r *ResourceClaimOwnershipController) resolveOwner(ctx context.Context, clu
 		return nil, schema.GroupVersionKind{}, "", fmt.Errorf("failed to create dynamic client for cluster: %w", err)
 	}
 
+	if claim.Spec.ResourceRef == nil {
+		return nil, schema.GroupVersionKind{}, "", fmt.Errorf("claim %s/%s has no resourceRef", claim.Namespace, claim.Name)
+	}
 	gk := schema.GroupKind{Group: claim.Spec.ResourceRef.APIGroup, Kind: claim.Spec.ResourceRef.Kind}
 	mapping, err := r.restMapper.RESTMapping(gk)
 	if err != nil {
