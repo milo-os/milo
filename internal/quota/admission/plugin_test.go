@@ -91,7 +91,7 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 										Amount:       1,
 									},
 								},
-								ResourceRef: quotav1alpha1.UnversionedObjectReference{
+								ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 									APIGroup:  "networking.datumapis.com",
 									Kind:      "HTTPProxy",
 									Name:      "test-proxy",
@@ -189,7 +189,7 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 										Amount:       1,
 									},
 								},
-								ResourceRef: quotav1alpha1.UnversionedObjectReference{
+								ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 									APIGroup:  "apps",
 									Kind:      "Deployment",
 									Name:      "test-deploy",
@@ -255,7 +255,7 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 										Amount:       1,
 									},
 								},
-								ResourceRef: quotav1alpha1.UnversionedObjectReference{
+								ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 									APIGroup:  "apps",
 									Kind:      "Deployment",
 									Name:      "test-deploy",
@@ -322,7 +322,7 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 										Amount:       1,
 									},
 								},
-								ResourceRef: quotav1alpha1.UnversionedObjectReference{
+								ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 									APIGroup:  "apps",
 									Kind:      "Deployment",
 									Name:      "test-deployment",
@@ -644,7 +644,7 @@ func TestResourceQuotaEnforcementPlugin_ResourceClaimValidation(t *testing.T) {
 							Amount:       5,
 						},
 					},
-					ResourceRef: quotav1alpha1.UnversionedObjectReference{
+					ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 						APIGroup:  "apps",
 						Kind:      "Deployment",
 						Name:      "test-deployment",
@@ -674,7 +674,7 @@ func TestResourceQuotaEnforcementPlugin_ResourceClaimValidation(t *testing.T) {
 							Amount:       5,
 						},
 					},
-					ResourceRef: quotav1alpha1.UnversionedObjectReference{
+					ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 						APIGroup:  "apps",
 						Kind:      "Deployment",
 						Name:      "test-deployment",
@@ -704,7 +704,7 @@ func TestResourceQuotaEnforcementPlugin_ResourceClaimValidation(t *testing.T) {
 							Amount:       -1,
 						},
 					},
-					ResourceRef: quotav1alpha1.UnversionedObjectReference{
+					ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 						APIGroup:  "apps",
 						Kind:      "Deployment",
 						Name:      "test-deployment",
@@ -738,7 +738,7 @@ func TestResourceQuotaEnforcementPlugin_ResourceClaimValidation(t *testing.T) {
 							Amount:       2,
 						},
 					},
-					ResourceRef: quotav1alpha1.UnversionedObjectReference{
+					ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 						APIGroup:  "apps",
 						Kind:      "Deployment",
 						Name:      "test-deployment",
@@ -1033,7 +1033,7 @@ func TestClaimWaitScenarios(t *testing.T) {
 										Amount:       1,
 									},
 								},
-								ResourceRef: quotav1alpha1.UnversionedObjectReference{
+								ResourceRef: &quotav1alpha1.UnversionedObjectReference{
 									APIGroup:  "apps",
 									Kind:      "Deployment",
 									Name:      "test-deployment",
