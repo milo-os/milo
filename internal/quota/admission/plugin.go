@@ -796,7 +796,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	claim.Namespace = namespace
 	claim.GenerateName = ""
 
-	claim.Spec.ResourceRef = quotav1alpha1.UnversionedObjectReference{
+	claim.Spec.ResourceRef = &quotav1alpha1.UnversionedObjectReference{
 		APIGroup:  evalContext.GVK.Group,
 		Kind:      evalContext.GVK.Kind,
 		Name:      attrs.GetName(),
