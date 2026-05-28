@@ -6,6 +6,7 @@ import (
 
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,7 +31,7 @@ func SetupContactGroupMembershipRemovalWebhooksWithManager(mgr ctrl.Manager) err
 	}
 
 	return ctrl.NewWebhookManagedBy(mgr, &notificationv1alpha1.ContactGroupMembershipRemoval{}).
-		WithValidator(&ContactGroupMembershipRemovalValidator{Client: mgr.GetClient()}).
+		WithCustomValidator(&ContactGroupMembershipRemovalValidator{Client: mgr.GetClient()}).
 		Complete()
 }
 
@@ -40,7 +41,11 @@ type ContactGroupMembershipRemovalValidator struct {
 	Client client.Client
 }
 
-func (v *ContactGroupMembershipRemovalValidator) ValidateCreate(ctx context.Context, removal *notificationv1alpha1.ContactGroupMembershipRemoval) (admission.Warnings, error) {
+func (v *ContactGroupMembershipRemovalValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	removal, ok := obj.(*notificationv1alpha1.ContactGroupMembershipRemoval)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to ContactGroupMembershipRemoval"))
+	}
 	var errs field.ErrorList
 
 	// Ensure Contact exists
@@ -82,11 +87,16 @@ func (v *ContactGroupMembershipRemovalValidator) ValidateCreate(ctx context.Cont
 	return nil, nil
 }
 
-func (v *ContactGroupMembershipRemovalValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *notificationv1alpha1.ContactGroupMembershipRemoval) (admission.Warnings, error) {
+func (v *ContactGroupMembershipRemovalValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	return nil, errors.NewBadRequest("ContactGroupMembershipRemoval is immutable; delete and recreate to modify")
 }
 
-func (v *ContactGroupMembershipRemovalValidator) ValidateDelete(ctx context.Context, removal *notificationv1alpha1.ContactGroupMembershipRemoval) (admission.Warnings, error) {
+func (v *ContactGroupMembershipRemovalValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	removal, ok := obj.(*notificationv1alpha1.ContactGroupMembershipRemoval)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to ContactGroupMembershipRemoval"))
+	}
+
 	// Validate contact ownership when in user context
 	// Retrieve the referenced Contact to check its ownership
 	contact := &notificationv1alpha1.Contact{}

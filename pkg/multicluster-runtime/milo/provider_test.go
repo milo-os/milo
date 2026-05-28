@@ -62,7 +62,7 @@ func TestReadyProject(t *testing.T) {
 	assert.Zero(t, result.RequeueAfter)
 	assert.Len(t, provider.projects, 1)
 
-	cl, err := provider.Get(context.Background(), "test-project")
+	cl, err := provider.Get(context.Background(), multicluster.ClusterName("test-project"))
 	assert.NoError(t, err)
 	apiHost, err := url.Parse(cl.GetConfig().Host)
 	assert.NoError(t, err)
@@ -108,8 +108,8 @@ func TestLabelSelectorFiltering(t *testing.T) {
 		projectRestConfig: &rest.Config{
 			Host: "https://localhost",
 		},
-		projects:  map[string]cluster.Cluster{},
-		cancelFns: map[string]context.CancelFunc{},
+		projects:  map[multicluster.ClusterName]cluster.Cluster{},
+		cancelFns: map[multicluster.ClusterName]context.CancelFunc{},
 		opts: Options{
 			LabelSelector: labelSelector,
 			ClusterOptions: []cluster.Option{
@@ -172,8 +172,8 @@ func TestLabelSelectorFilteringExcludesNonMatching(t *testing.T) {
 		projectRestConfig: &rest.Config{
 			Host: "https://localhost",
 		},
-		projects:  map[string]cluster.Cluster{},
-		cancelFns: map[string]context.CancelFunc{},
+		projects:  map[multicluster.ClusterName]cluster.Cluster{},
+		cancelFns: map[multicluster.ClusterName]context.CancelFunc{},
 		opts: Options{
 			LabelSelector: labelSelector,
 			ClusterOptions: []cluster.Option{
@@ -228,8 +228,8 @@ func newTestProvider(projectStatus metav1.ConditionStatus, labelSelector *metav1
 		projectRestConfig: &rest.Config{
 			Host: "https://localhost",
 		},
-		projects:  map[string]cluster.Cluster{},
-		cancelFns: map[string]context.CancelFunc{},
+		projects:  map[multicluster.ClusterName]cluster.Cluster{},
+		cancelFns: map[multicluster.ClusterName]context.CancelFunc{},
 		opts: Options{
 			LabelSelector: labelSelector,
 			ClusterOptions: []cluster.Option{

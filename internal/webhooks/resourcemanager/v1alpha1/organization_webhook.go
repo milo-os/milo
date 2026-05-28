@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,7 +29,7 @@ func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace stri
 	organizationlog.Info("Setting up resourcemanager.miloapis.com organization webhooks")
 
 	return ctrl.NewWebhookManagedBy(mgr, &resourcemanagerv1alpha1.Organization{}).
-		WithValidator(&OrganizationValidator{
+		WithCustomValidator(&OrganizationValidator{
 			client:             mgr.GetClient(),
 			systemNamespace:    systemNamespace,
 			ownerRoleName:      organizationOwnerRoleName,
@@ -46,7 +47,8 @@ type OrganizationValidator struct {
 	ownerRoleNamespace string
 }
 
-func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
+func (v *OrganizationValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	org := obj.(*resourcemanagerv1alpha1.Organization)
 	organizationlog.Info("Validating Organization", "name", org.Name)
 
 	// Validate organization name length
@@ -107,7 +109,9 @@ func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourc
 	return nil, nil
 }
 
-func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newOrg *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
+func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	newOrg := newObj.(*resourcemanagerv1alpha1.Organization)
+
 	// Validate organization name length
 	if len(newOrg.Name) > 50 {
 		return nil, apierrors.NewInvalid(
@@ -126,7 +130,7 @@ func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newO
 	return nil, nil
 }
 
-func (v *OrganizationValidator) ValidateDelete(ctx context.Context, obj *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
+func (v *OrganizationValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 

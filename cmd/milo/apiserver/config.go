@@ -15,7 +15,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/endpoints/filterlatency"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
-	impersonationfilters "k8s.io/apiserver/pkg/endpoints/filters/impersonation"
+	impersonationfilter "k8s.io/apiserver/pkg/endpoints/filters/impersonation"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 	"k8s.io/component-base/tracing"
-	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
+	utilversionscompat "k8s.io/apiserver/pkg/util/compatibility"
 	"k8s.io/klog/v2"
 	aggregatorapiserver "k8s.io/kube-aggregator/pkg/apiserver"
 	aggregatorscheme "k8s.io/kube-aggregator/pkg/apiserver/scheme"
@@ -388,7 +388,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		return nil, err
 	}
 	c.ControlPlane = kubeAPIs
-	c.ControlPlane.Generic.EffectiveVersion = apiservercompat.DefaultBuildEffectiveVersion()
+	c.ControlPlane.Generic.EffectiveVersion = utilversionscompat.DefaultBuildEffectiveVersion()
 
 	if kubeAPIs.Generic.LoopbackClientConfig != nil && kubeAPIs.Generic.TracerProvider != nil {
 		kubeAPIs.Generic.LoopbackClientConfig.Wrap(tracing.WrapperFor(kubeAPIs.Generic.TracerProvider))
@@ -438,7 +438,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 	c.Aggregator = aggregator
 	c.Aggregator.ExtraConfig.DisableRemoteAvailableConditionController = true
-	c.Aggregator.GenericConfig.EffectiveVersion = apiservercompat.DefaultBuildEffectiveVersion()
+	c.Aggregator.GenericConfig.EffectiveVersion = utilversionscompat.DefaultBuildEffectiveVersion()
 
 	return c, nil
 }
@@ -476,7 +476,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 	failedHandler = genericapifilters.WithFailedAuthenticationAudit(failedHandler, c.AuditBackend, c.AuditPolicyRuleEvaluator)
 
 	handler = filterlatency.TrackCompleted(handler)
-	handler = impersonationfilters.WithImpersonation(handler, c.Authorization.Authorizer, c.Serializer)
+	handler = impersonationfilter.WithImpersonation(handler, c.Authorization.Authorizer, c.Serializer)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "impersonation")
 
 	failedHandler = filterlatency.TrackCompleted(failedHandler)

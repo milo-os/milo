@@ -28,13 +28,13 @@ var noteLog = logf.Log.WithName("note-resource")
 func SetupNoteWebhooksWithManager(mgr ctrl.Manager, mcMgr mcmanager.Manager) error {
 	noteLog.Info("Setting up notes.miloapis.com note webhooks")
 	return ctrl.NewWebhookManagedBy(mgr, &notesv1alpha1.Note{}).
-		WithDefaulter(&NoteMutator{
+		WithCustomDefaulter(&NoteMutator{
 			Client:         mgr.GetClient(),
 			Scheme:         mgr.GetScheme(),
 			RESTMapper:     mgr.GetRESTMapper(),
 			ClusterManager: mcMgr,
 		}).
-		WithValidator(&NoteValidator{
+		WithCustomValidator(&NoteValidator{
 			Client: mgr.GetClient(),
 		}).
 		Complete()
@@ -49,9 +49,13 @@ type NoteMutator struct {
 	ClusterManager mcmanager.Manager
 }
 
-var _ admission.Defaulter[*notesv1alpha1.Note] = &NoteMutator{}
+var _ admission.CustomDefaulter = &NoteMutator{}
 
-func (m *NoteMutator) Default(ctx context.Context, note *notesv1alpha1.Note) error {
+func (m *NoteMutator) Default(ctx context.Context, obj runtime.Object) error {
+	note, ok := obj.(*notesv1alpha1.Note)
+	if !ok {
+		return errors.NewInternalError(fmt.Errorf("failed to cast object to Note"))
+	}
 	noteLog.Info("Defaulting Note", "name", note.Name, "namespace", note.Namespace)
 
 	req, err := admission.RequestFromContext(ctx)
@@ -133,15 +137,27 @@ type NoteValidator struct {
 	Client client.Client
 }
 
-var _ admission.Validator[*notesv1alpha1.Note] = &NoteValidator{}
+var _ admission.CustomValidator = &NoteValidator{}
 
-func (v *NoteValidator) ValidateCreate(ctx context.Context, note *notesv1alpha1.Note) (admission.Warnings, error) {
+func (v *NoteValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	note, ok := obj.(*notesv1alpha1.Note)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to Note"))
+	}
 	noteLog.Info("Validating Note creation", "name", note.Name, "namespace", note.Namespace)
 
 	return nil, v.validateNote(ctx, note, false)
 }
 
-func (v *NoteValidator) ValidateUpdate(ctx context.Context, oldNote, note *notesv1alpha1.Note) (admission.Warnings, error) {
+func (v *NoteValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	note, ok := newObj.(*notesv1alpha1.Note)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to Note"))
+	}
+	oldNote, ok := oldObj.(*notesv1alpha1.Note)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast old object to Note"))
+	}
 	noteLog.Info("Validating Note update", "name", note.Name, "namespace", note.Namespace)
 
 	skipNextActionTimeValidation := oldNote.Spec.NextActionTime != nil &&
@@ -151,7 +167,7 @@ func (v *NoteValidator) ValidateUpdate(ctx context.Context, oldNote, note *notes
 	return nil, v.validateNote(ctx, note, skipNextActionTimeValidation)
 }
 
-func (v *NoteValidator) ValidateDelete(ctx context.Context, obj *notesv1alpha1.Note) (admission.Warnings, error) {
+func (v *NoteValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 

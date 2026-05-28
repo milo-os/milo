@@ -62,11 +62,11 @@ func SetupContactWebhooksWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewWebhookManagedBy(mgr, &notificationv1alpha1.Contact{}).
-		WithDefaulter(&ContactMutator{
+		WithCustomDefaulter(&ContactMutator{
 			client: mgr.GetClient(),
 			scheme: mgr.GetScheme(),
 		}).
-		WithValidator(&ContactValidator{
+		WithCustomValidator(&ContactValidator{
 			Client: mgr.GetClient(),
 		}).
 		Complete()
@@ -80,7 +80,11 @@ type ContactMutator struct {
 	scheme *runtime.Scheme
 }
 
-func (m *ContactMutator) Default(ctx context.Context, contact *notificationv1alpha1.Contact) error {
+func (m *ContactMutator) Default(ctx context.Context, obj runtime.Object) error {
+	contact, ok := obj.(*notificationv1alpha1.Contact)
+	if !ok {
+		return errors.NewInternalError(fmt.Errorf("failed to cast object to Contact"))
+	}
 	contactLog.Info("Defaulting Contact", "name", contact.Name)
 
 	if contact.Spec.SubjectRef != nil {
@@ -106,8 +110,12 @@ type ContactValidator struct {
 	Client client.Client
 }
 
-func (v *ContactValidator) ValidateCreate(ctx context.Context, contact *notificationv1alpha1.Contact) (admission.Warnings, error) {
+func (v *ContactValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	errs := field.ErrorList{}
+	contact, ok := obj.(*notificationv1alpha1.Contact)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to Contact"))
+	}
 	contactLog.Info("Validating Contact", "name", contact.Name)
 
 	// Validate Email format
@@ -242,12 +250,17 @@ func contactValidationResult(errs field.ErrorList, contact *notificationv1alpha1
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (v *ContactValidator) ValidateDelete(ctx context.Context, obj *notificationv1alpha1.Contact) (admission.Warnings, error) {
+func (v *ContactValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (v *ContactValidator) ValidateUpdate(ctx context.Context, contactOld, contactNew *notificationv1alpha1.Contact) (admission.Warnings, error) {
+func (v *ContactValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	contactNew, okNew := newObj.(*notificationv1alpha1.Contact)
+	contactOld, okOld := oldObj.(*notificationv1alpha1.Contact)
+	if !okNew || !okOld {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object(s) to Contact"))
+	}
 	errs := field.ErrorList{}
 
 	// If the SubjectRef changed, reject the update.
