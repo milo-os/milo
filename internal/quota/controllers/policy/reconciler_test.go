@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,7 +22,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/go-logr/logr"
-	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/tools/record"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
@@ -50,8 +50,8 @@ func (c *testCluster) GetConfig() *rest.Config                        { return n
 func (c *testCluster) GetCache() cache.Cache                          { return nil }
 func (c *testCluster) GetFieldIndexer() client.FieldIndexer           { return nil }
 func (c *testCluster) GetEventRecorderFor(string) record.EventRecorder { return nil }
-func (c *testCluster) GetEventRecorder(string) events.EventRecorder   { return nil }
-func (c *testCluster) GetRESTMapper() meta.RESTMapper                 { return nil }
+func (c *testCluster) GetEventRecorder(string) events.EventRecorder    { return nil }
+func (c *testCluster) GetRESTMapper() meta.RESTMapper                  { return nil }
 func (c *testCluster) GetAPIReader() client.Reader                    { return nil }
 func (c *testCluster) Start(context.Context) error                    { return nil }
 

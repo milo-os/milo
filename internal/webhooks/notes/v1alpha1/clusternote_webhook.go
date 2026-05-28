@@ -28,13 +28,13 @@ var clusterNoteLog = logf.Log.WithName("clusternote-resource")
 func SetupClusterNoteWebhooksWithManager(mgr ctrl.Manager, mcMgr mcmanager.Manager) error {
 	clusterNoteLog.Info("Setting up notes.miloapis.com clusternote webhooks")
 	return ctrl.NewWebhookManagedBy(mgr, &notesv1alpha1.ClusterNote{}).
-		WithDefaulter(&ClusterNoteMutator{
+		WithCustomDefaulter(&ClusterNoteMutator{
 			Client:         mgr.GetClient(),
 			Scheme:         mgr.GetScheme(),
 			RESTMapper:     mgr.GetRESTMapper(),
 			ClusterManager: mcMgr,
 		}).
-		WithValidator(&ClusterNoteValidator{
+		WithCustomValidator(&ClusterNoteValidator{
 			Client: mgr.GetClient(),
 		}).
 		Complete()
@@ -49,9 +49,13 @@ type ClusterNoteMutator struct {
 	ClusterManager mcmanager.Manager
 }
 
-var _ admission.Defaulter[*notesv1alpha1.ClusterNote] = &ClusterNoteMutator{}
+var _ admission.CustomDefaulter = &ClusterNoteMutator{}
 
-func (m *ClusterNoteMutator) Default(ctx context.Context, clusterNote *notesv1alpha1.ClusterNote) error {
+func (m *ClusterNoteMutator) Default(ctx context.Context, obj runtime.Object) error {
+	clusterNote, ok := obj.(*notesv1alpha1.ClusterNote)
+	if !ok {
+		return errors.NewInternalError(fmt.Errorf("failed to cast object to ClusterNote"))
+	}
 	clusterNoteLog.Info("Defaulting ClusterNote", "name", clusterNote.Name)
 
 	req, err := admission.RequestFromContext(ctx)
@@ -132,15 +136,27 @@ type ClusterNoteValidator struct {
 	Client client.Client
 }
 
-var _ admission.Validator[*notesv1alpha1.ClusterNote] = &ClusterNoteValidator{}
+var _ admission.CustomValidator = &ClusterNoteValidator{}
 
-func (v *ClusterNoteValidator) ValidateCreate(ctx context.Context, clusterNote *notesv1alpha1.ClusterNote) (admission.Warnings, error) {
+func (v *ClusterNoteValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	clusterNote, ok := obj.(*notesv1alpha1.ClusterNote)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to ClusterNote"))
+	}
 	clusterNoteLog.Info("Validating ClusterNote creation", "name", clusterNote.Name)
 
 	return nil, v.validateClusterNote(ctx, clusterNote, false)
 }
 
-func (v *ClusterNoteValidator) ValidateUpdate(ctx context.Context, oldClusterNote, clusterNote *notesv1alpha1.ClusterNote) (admission.Warnings, error) {
+func (v *ClusterNoteValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	clusterNote, ok := newObj.(*notesv1alpha1.ClusterNote)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to ClusterNote"))
+	}
+	oldClusterNote, ok := oldObj.(*notesv1alpha1.ClusterNote)
+	if !ok {
+		return nil, errors.NewInternalError(fmt.Errorf("failed to cast old object to ClusterNote"))
+	}
 	clusterNoteLog.Info("Validating ClusterNote update", "name", clusterNote.Name)
 
 	skipNextActionTimeValidation := oldClusterNote.Spec.NextActionTime != nil &&
@@ -150,7 +166,7 @@ func (v *ClusterNoteValidator) ValidateUpdate(ctx context.Context, oldClusterNot
 	return nil, v.validateClusterNote(ctx, clusterNote, skipNextActionTimeValidation)
 }
 
-func (v *ClusterNoteValidator) ValidateDelete(ctx context.Context, obj *notesv1alpha1.ClusterNote) (admission.Warnings, error) {
+func (v *ClusterNoteValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 

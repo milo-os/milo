@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -64,10 +65,10 @@ func SetupUserInvitationWebhooksWithManager(mgr ctrl.Manager, systemNamespace, a
 	}
 
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.UserInvitation{}).
-		WithDefaulter(&UserInvitationMutator{
+		WithCustomDefaulter(&UserInvitationMutator{
 			client: mgr.GetClient(),
 		}).
-		WithValidator(&UserInvitationValidator{
+		WithCustomValidator(&UserInvitationValidator{
 			client:                   mgr.GetClient(),
 			systemNamespace:          systemNamespace,
 			assignableRolesNamespace: assignableRolesNamespace,
@@ -83,7 +84,12 @@ type UserInvitationMutator struct {
 }
 
 // Default sets the InvitedBy field to the requesting user if not already set.
-func (m *UserInvitationMutator) Default(ctx context.Context, ui *iamv1alpha1.UserInvitation) error {
+func (m *UserInvitationMutator) Default(ctx context.Context, obj runtime.Object) error {
+	ui, ok := obj.(*iamv1alpha1.UserInvitation)
+	if !ok {
+		return fmt.Errorf("failed to cast object to UserInvitation")
+	}
+
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		userinvitationlog.Error(err, "failed to get admission request from context", "name", ui.GetName())
@@ -113,7 +119,11 @@ type UserInvitationValidator struct {
 }
 
 // ValidateCreate ensures the expiration date, if provided, is not already expired.
-func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1alpha1.UserInvitation) (admission.Warnings, error) {
+func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	ui, ok := obj.(*iamv1alpha1.UserInvitation)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast object to UserInvitation")
+	}
 	userinvitationlog.Info("Validating UserInvitation", "name", ui.Name)
 
 	req, err := admission.RequestFromContext(ctx)
@@ -189,11 +199,11 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 	return nil, nil
 }
 
-func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.UserInvitation) (admission.Warnings, error) {
+func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *UserInvitationValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.UserInvitation) (admission.Warnings, error) {
+func (v *UserInvitationValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 

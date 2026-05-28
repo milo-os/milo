@@ -22,8 +22,8 @@ func SetupUserDeactivationWebhooksWithManager(mgr ctrl.Manager, systemNamespace 
 	userdeactivationlog.Info("Setting up iam.miloapis.com userdeactivation webhooks")
 
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.UserDeactivation{}).
-		WithDefaulter(&UserDeactivationMutator{client: mgr.GetClient(), scheme: mgr.GetScheme()}).
-		WithValidator(&UserDeactivationValidator{
+		WithCustomDefaulter(&UserDeactivationMutator{client: mgr.GetClient(), scheme: mgr.GetScheme()}).
+		WithCustomValidator(&UserDeactivationValidator{
 			client:          mgr.GetClient(),
 			systemNamespace: systemNamespace,
 		}).
@@ -39,7 +39,11 @@ type UserDeactivationMutator struct {
 }
 
 // Default sets the deactivatedBy field to the username of the requesting user if it is not already set.
-func (m *UserDeactivationMutator) Default(ctx context.Context, ud *iamv1alpha1.UserDeactivation) error {
+func (m *UserDeactivationMutator) Default(ctx context.Context, obj runtime.Object) error {
+	ud, ok := obj.(*iamv1alpha1.UserDeactivation)
+	if !ok {
+		return fmt.Errorf("failed to cast object to UserDeactivation")
+	}
 	userdeactivationlog.Info("Defaulting UserDeactivation", "name", ud.GetName())
 
 	req, err := admission.RequestFromContext(ctx)
@@ -74,7 +78,8 @@ type UserDeactivationValidator struct {
 	systemNamespace string
 }
 
-func (v *UserDeactivationValidator) ValidateCreate(ctx context.Context, userDeactivation *iamv1alpha1.UserDeactivation) (admission.Warnings, error) {
+func (v *UserDeactivationValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	userDeactivation := obj.(*iamv1alpha1.UserDeactivation)
 	userdeactivationlog.Info("Validating UserDeactivation", "name", userDeactivation.Name)
 
 	var errs field.ErrorList
@@ -118,10 +123,10 @@ func (v *UserDeactivationValidator) ValidateCreate(ctx context.Context, userDeac
 	return nil, nil
 }
 
-func (v *UserDeactivationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.UserDeactivation) (admission.Warnings, error) {
+func (v *UserDeactivationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *UserDeactivationValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.UserDeactivation) (admission.Warnings, error) {
+func (v *UserDeactivationValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }

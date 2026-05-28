@@ -2,13 +2,13 @@ package v1alpha1
 
 import (
 	"context"
-	stderrors "errors"
 	"fmt"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	"go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,13 +24,13 @@ func SetupProjectWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, p
 	projectlog.Info("Setting up resourcemanager.miloapis.com project webhooks")
 
 	ctrl.NewWebhookManagedBy(mgr, &v1alpha1.Project{}).
-		WithValidator(&ProjectValidator{
+		WithCustomValidator(&ProjectValidator{
 			Client:                    mgr.GetClient(),
 			SystemNamespace:           systemNamespace,
 			ProjectOwnerRoleName:      projectOwnerRoleName,
 			ProjectOwnerRoleNamespace: projectOwnerRoleNamespace,
 		}).
-		WithDefaulter(&ProjectMutator{
+		WithCustomDefaulter(&ProjectMutator{
 			client: mgr.GetClient(),
 		}).
 		Complete()
@@ -45,7 +45,12 @@ type ProjectMutator struct {
 	client client.Client
 }
 
-func (m *ProjectMutator) Default(ctx context.Context, project *v1alpha1.Project) error {
+func (m *ProjectMutator) Default(ctx context.Context, obj runtime.Object) error {
+	project, ok := obj.(*v1alpha1.Project)
+	if !ok {
+		return fmt.Errorf("failed to cast object to Project")
+	}
+
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get request from context: %w", err)
@@ -59,15 +64,15 @@ func (m *ProjectMutator) Default(ctx context.Context, project *v1alpha1.Project)
 	parentAPIGroup, parentAPIGroupOk := req.UserInfo.Extra[iamv1alpha1.ParentAPIGroupExtraKey]
 
 	if !parentNameOk || !parentKindOk || !parentAPIGroupOk {
-		const errMsg = "request context does not have the required parent information"
-		projectlog.Error(stderrors.New(errMsg), errMsg)
-		return stderrors.New(errMsg)
+		errMsg := "request context does not have the required parent information"
+		projectlog.Error(fmt.Errorf(errMsg), errMsg)
+		return fmt.Errorf(errMsg)
 	}
 
 	if len(parentKind) != 1 || parentKind[0] != "Organization" || parentAPIGroup[0] != v1alpha1.GroupVersion.Group {
-		const errMsg = "request context has invalid parent information, must be Organization from the resourcemanager.miloapis.com API group"
-		projectlog.Error(stderrors.New(errMsg), errMsg)
-		return stderrors.New(errMsg)
+		errMsg := "request context has invalid parent information, must be Organization from the resourcemanager.miloapis.com API group"
+		projectlog.Error(fmt.Errorf(errMsg), errMsg)
+		return fmt.Errorf(errMsg)
 	}
 
 	requestContextOrgID := parentName[0]
@@ -113,7 +118,12 @@ type ProjectValidator struct {
 
 // ValidateCreate validates the Project and creates the associated PolicyBinding
 // to provide the authenticated user with ownership access to the project.
-func (v *ProjectValidator) ValidateCreate(ctx context.Context, project *v1alpha1.Project) (admission.Warnings, error) {
+func (v *ProjectValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	project, ok := obj.(*v1alpha1.Project)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast object to Project")
+	}
+
 	projectlog.Info("Validating Project", "name", project.Name)
 	errs := field.ErrorList{}
 
@@ -159,7 +169,17 @@ func (v *ProjectValidator) ValidateCreate(ctx context.Context, project *v1alpha1
 	return nil, nil
 }
 
-func (v *ProjectValidator) ValidateUpdate(ctx context.Context, oldProject, newProject *v1alpha1.Project) (admission.Warnings, error) {
+func (v *ProjectValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	oldProject, ok := oldObj.(*v1alpha1.Project)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast old object to Project")
+	}
+
+	newProject, ok := newObj.(*v1alpha1.Project)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast new object to Project")
+	}
+
 	projectlog.Info("Validating Project update", "name", newProject.Name)
 	errs := field.ErrorList{}
 
@@ -189,7 +209,7 @@ func (v *ProjectValidator) ValidateUpdate(ctx context.Context, oldProject, newPr
 	return nil, nil
 }
 
-func (v *ProjectValidator) ValidateDelete(ctx context.Context, obj *v1alpha1.Project) (admission.Warnings, error) {
+func (v *ProjectValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 

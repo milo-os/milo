@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,10 +53,10 @@ func SetupPlatformAccessApprovalWebhooksWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.PlatformAccessApproval{}).
-		WithDefaulter(&PlatformAccessApprovalMutator{
+		WithCustomDefaulter(&PlatformAccessApprovalMutator{
 			client: mgr.GetClient(),
 		}).
-		WithValidator(&PlatformAccessApprovalValidator{
+		WithCustomValidator(&PlatformAccessApprovalValidator{
 			client: mgr.GetClient(),
 		}).
 		Complete()
@@ -68,7 +69,11 @@ type PlatformAccessApprovalMutator struct {
 	client client.Client
 }
 
-func (m *PlatformAccessApprovalMutator) Default(ctx context.Context, paa *iamv1alpha1.PlatformAccessApproval) error {
+func (m *PlatformAccessApprovalMutator) Default(ctx context.Context, obj runtime.Object) error {
+	paa, ok := obj.(*iamv1alpha1.PlatformAccessApproval)
+	if !ok {
+		return errors.NewInternalError(fmt.Errorf("failed to cast object to PlatformAccessApproval"))
+	}
 	log := logf.FromContext(ctx).WithValues("Defaulting PlatformAccessApproval", "name", paa.GetName())
 
 	// Approver is the user who is approving the access request.
@@ -111,7 +116,8 @@ type PlatformAccessApprovalValidator struct {
 	client client.Client
 }
 
-func (v *PlatformAccessApprovalValidator) ValidateCreate(ctx context.Context, paa *iamv1alpha1.PlatformAccessApproval) (admission.Warnings, error) {
+func (v *PlatformAccessApprovalValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	paa := obj.(*iamv1alpha1.PlatformAccessApproval)
 	log := logf.FromContext(ctx).WithValues("Validating PlatformAccessApproval", "name", paa.GetName())
 
 	var errs field.ErrorList
@@ -186,10 +192,10 @@ func (v *PlatformAccessApprovalValidator) ValidateCreate(ctx context.Context, pa
 	return nil, nil
 }
 
-func (v *PlatformAccessApprovalValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.PlatformAccessApproval) (admission.Warnings, error) {
+func (v *PlatformAccessApprovalValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *PlatformAccessApprovalValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.PlatformAccessApproval) (admission.Warnings, error) {
+func (v *PlatformAccessApprovalValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }

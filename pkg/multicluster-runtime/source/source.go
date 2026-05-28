@@ -23,8 +23,8 @@ func NewClusterSource[object client.Object, request mcreconcile.ClusterAware[req
 		predicates...,
 	)
 
-	typedSrc, _, err := src.ForCluster(multicluster.ClusterName(""), cl)
-	return typedSrc, err
+	s, _, err := src.ForCluster(multicluster.ClusterName(""), cl)
+	return s, err
 }
 
 func MustNewClusterSource[object client.Object, request mcreconcile.ClusterAware[request]](
