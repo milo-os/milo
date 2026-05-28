@@ -26,7 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
 
@@ -34,6 +33,7 @@ import (
 // See: https://sigs.k8s.io/multicluster-runtime/blob/7abad14c6d65fdaf9b83a2b1d9a2c99140d18e7d/providers/cluster-api/provider.go
 
 var _ multicluster.Provider = &Provider{}
+var _ multicluster.ProviderRunnable = &Provider{}
 
 var projectGVK = resourcemanagerv1alpha1.GroupVersion.WithKind("Project")
 var projectControlPlaneGVK = infrastructurev1alpha1.GroupVersion.WithKind("ProjectControlPlane")
@@ -121,9 +121,9 @@ type Provider struct {
 	projectRestConfig *rest.Config
 	client            client.Client
 
-	lock      sync.Mutex
-	mcMgr     mcmanager.Manager
-	projects  map[multicluster.ClusterName]cluster.Cluster
+	lock     sync.Mutex
+	mcAware  multicluster.Aware
+	projects map[multicluster.ClusterName]cluster.Cluster
 	cancelFns map[multicluster.ClusterName]context.CancelFunc
 	indexers  []index
 }
@@ -139,16 +139,15 @@ func (p *Provider) Get(_ context.Context, clusterName multicluster.ClusterName) 
 	return nil, fmt.Errorf("cluster %s not found", clusterName)
 }
 
-// Run starts the provider and blocks.
-func (p *Provider) Run(ctx context.Context, mgr mcmanager.Manager) error {
+// Start implements multicluster.ProviderRunnable and is called by the
+// multicluster manager to provide it with an Aware handle before controllers
+// start reconciling.
+func (p *Provider) Start(ctx context.Context, aware multicluster.Aware) error {
 	p.log.Info("Starting Datum cluster provider")
-
 	p.lock.Lock()
-	p.mcMgr = mgr
+	p.mcAware = aware
 	p.lock.Unlock()
-
 	<-ctx.Done()
-
 	return ctx.Err()
 }
 
@@ -193,9 +192,8 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	// Make sure the manager has started
-	// TODO(jreese) what condition would lead to this?
-	if p.mcMgr == nil {
+	// Make sure the manager has started and set mcAware via Start().
+	if p.mcAware == nil {
 		log.Info("Multicluster manager not yet started, requeueing", "key", key)
 		return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 	}
@@ -288,7 +286,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Engaging cluster with multicluster manager", "key", key)
 
 	// engage manager.
-	if err := p.mcMgr.Engage(clusterCtx, key, cl); err != nil {
+	if err := p.mcAware.Engage(clusterCtx, key, cl); err != nil {
 		log.Error(err, "Failed to engage cluster with multicluster manager", "key", key)
 		delete(p.projects, key)
 		delete(p.cancelFns, key)
