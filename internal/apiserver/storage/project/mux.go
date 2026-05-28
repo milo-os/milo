@@ -173,13 +173,7 @@ func (i *instrumentedStorage) GuaranteedUpdate(ctx context.Context, key string, 
 	i.markSuccess()
 	return nil
 }
-func (i *instrumentedStorage) ReadinessCheck() error { return i.inner.ReadinessCheck() }
-func (i *instrumentedStorage) RequestWatchProgress(ctx context.Context) error {
-	if err := i.inner.RequestWatchProgress(ctx); err != nil {
-		return i.markReinit("watch_progress", err)
-	}
-	return nil
-}
+func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRevision() }
 func (i *instrumentedStorage) Stats(ctx context.Context) (storage.Stats, error) {
 	return i.inner.Stats(ctx)
 }
@@ -189,7 +183,13 @@ func (i *instrumentedStorage) GetCurrentResourceVersion(ctx context.Context) (ui
 func (i *instrumentedStorage) EnableResourceSizeEstimation(fn storage.KeysFunc) error {
 	return i.inner.EnableResourceSizeEstimation(fn)
 }
-func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRevision() }
+func (i *instrumentedStorage) ReadinessCheck() error { return i.inner.ReadinessCheck() }
+func (i *instrumentedStorage) RequestWatchProgress(ctx context.Context) error {
+	if err := i.inner.RequestWatchProgress(ctx); err != nil {
+		return i.markReinit("watch_progress", err)
+	}
+	return nil
+}
 
 // -------------------- mux --------------------
 
@@ -374,6 +374,22 @@ func (m *projectMux) GuaranteedUpdate(ctx context.Context, key string, out runti
 	return s.GuaranteedUpdate(ctx, key, out, ignoreNotFound, precond, tryUpdate, suggestion)
 }
 
+// CompactRevision proxies to the appropriate child (defaults to the "" project).
+func (m *projectMux) CompactRevision() int64 {
+	m.mu.RLock()
+	c := m.children[""]
+	m.mu.RUnlock()
+	if c == nil {
+		if _, err := m.childForProject(""); err != nil {
+			return 0
+		}
+		m.mu.RLock()
+		c = m.children[""]
+		m.mu.RUnlock()
+	}
+	return c.s.CompactRevision()
+}
+
 // ReadinessCheck proxies to the appropriate child (defaults to the "" project).
 func (m *projectMux) ReadinessCheck() error {
 	m.mu.RLock()
@@ -423,14 +439,4 @@ func (m *projectMux) EnableResourceSizeEstimation(fn storage.KeysFunc) error {
 		}
 	}
 	return nil
-}
-
-func (m *projectMux) CompactRevision() int64 {
-	m.mu.RLock()
-	c := m.children[""]
-	m.mu.RUnlock()
-	if c == nil {
-		return 0
-	}
-	return c.s.CompactRevision()
 }

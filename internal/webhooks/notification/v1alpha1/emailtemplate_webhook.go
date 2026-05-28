@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -19,7 +20,7 @@ func SetupEmailTemplateWebhooksWithManager(mgr ctrl.Manager, _ string) error {
 	emailTemplateLog.Info("Setting up notification.miloapis.com emailtemplates webhooks")
 
 	return ctrl.NewWebhookManagedBy(mgr, &notificationv1alpha1.EmailTemplate{}).
-		WithValidator(&EmailTemplateValidator{}).
+		WithCustomValidator(&EmailTemplateValidator{}).
 		Complete()
 }
 
@@ -27,7 +28,8 @@ func SetupEmailTemplateWebhooksWithManager(mgr ctrl.Manager, _ string) error {
 
 type EmailTemplateValidator struct{}
 
-func (v *EmailTemplateValidator) ValidateCreate(ctx context.Context, emailTemplate *notificationv1alpha1.EmailTemplate) (admission.Warnings, error) {
+func (v *EmailTemplateValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	emailTemplate := obj.(*notificationv1alpha1.EmailTemplate)
 	emailTemplateLog.Info("Validating EmailTemplate", "name", emailTemplate.Name)
 
 	errs := field.ErrorList{}
@@ -48,12 +50,12 @@ func (v *EmailTemplateValidator) ValidateCreate(ctx context.Context, emailTempla
 	return nil, nil
 }
 
-func (v *EmailTemplateValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *notificationv1alpha1.EmailTemplate) (admission.Warnings, error) {
+func (v *EmailTemplateValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	// For updates we simply re-run the same validation against the new object.
 	return v.ValidateCreate(ctx, newObj)
 }
 
-func (v *EmailTemplateValidator) ValidateDelete(ctx context.Context, obj *notificationv1alpha1.EmailTemplate) (admission.Warnings, error) {
+func (v *EmailTemplateValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	// No special validation on delete.
 	return nil, nil
 }

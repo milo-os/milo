@@ -279,16 +279,16 @@ func (c *mappedNamespaceClient) List(ctx context.Context, list client.ObjectList
 	return c.client.List(ctx, list, opts...)
 }
 
+func (c *mappedNamespaceClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+	return c.client.Apply(ctx, obj, opts...)
+}
+
 func (c *mappedNamespaceClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 	return c.client.Patch(ctx, obj, patch, opts...)
 }
 
 func (c *mappedNamespaceClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 	return c.client.Update(ctx, obj, opts...)
-}
-
-func (c *mappedNamespaceClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-	return c.client.Apply(ctx, obj, opts...)
 }
 
 func (c *mappedNamespaceClient) GroupVersionKindFor(obj runtime.Object) (schema.GroupVersionKind, error) {

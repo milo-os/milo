@@ -33,6 +33,7 @@ import (
 // See: https://sigs.k8s.io/multicluster-runtime/blob/7abad14c6d65fdaf9b83a2b1d9a2c99140d18e7d/providers/cluster-api/provider.go
 
 var _ multicluster.Provider = &Provider{}
+var _ multicluster.ProviderRunnable = &Provider{}
 
 var projectGVK = resourcemanagerv1alpha1.GroupVersion.WithKind("Project")
 var projectControlPlaneGVK = infrastructurev1alpha1.GroupVersion.WithKind("ProjectControlPlane")
@@ -66,8 +67,8 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 		log:               log.Log.WithName("datum-cluster-provider"),
 		client:            localMgr.GetClient(),
 		projectRestConfig: opts.ProjectRestConfig,
-		projects:          map[string]cluster.Cluster{},
-		cancelFns:         map[string]context.CancelFunc{},
+		projects:          map[multicluster.ClusterName]cluster.Cluster{},
+		cancelFns:         map[multicluster.ClusterName]context.CancelFunc{},
 	}
 
 	if p.projectRestConfig == nil {
@@ -120,10 +121,10 @@ type Provider struct {
 	projectRestConfig *rest.Config
 	client            client.Client
 
-	lock      sync.Mutex
-	mcMgr     multicluster.Aware
-	projects  map[string]cluster.Cluster
-	cancelFns map[string]context.CancelFunc
+	lock     sync.Mutex
+	mcAware  multicluster.Aware
+	projects map[multicluster.ClusterName]cluster.Cluster
+	cancelFns map[multicluster.ClusterName]context.CancelFunc
 	indexers  []index
 }
 
@@ -131,23 +132,22 @@ type Provider struct {
 func (p *Provider) Get(_ context.Context, clusterName multicluster.ClusterName) (cluster.Cluster, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if cl, ok := p.projects[clusterName.String()]; ok {
+	if cl, ok := p.projects[clusterName]; ok {
 		return cl, nil
 	}
 
 	return nil, fmt.Errorf("cluster %s not found", clusterName)
 }
 
-// Start implements multicluster.ProviderRunnable and blocks until ctx is cancelled.
+// Start implements multicluster.ProviderRunnable and is called by the
+// multicluster manager to provide it with an Aware handle before controllers
+// start reconciling.
 func (p *Provider) Start(ctx context.Context, aware multicluster.Aware) error {
 	p.log.Info("Starting Datum cluster provider")
-
 	p.lock.Lock()
-	p.mcMgr = aware
+	p.mcAware = aware
 	p.lock.Unlock()
-
 	<-ctx.Done()
-
 	return ctx.Err()
 }
 
@@ -157,7 +157,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	// Use just the project name as the key for cluster lookup.
 	// This matches the project name used in URL paths and ParentNameExtraKey.
-	key := req.Name
+	key := multicluster.ClusterName(req.Name)
 	var project unstructured.Unstructured
 
 	if p.opts.InternalServiceDiscovery {
@@ -192,9 +192,8 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	// Make sure the manager has started
-	// TODO(jreese) what condition would lead to this?
-	if p.mcMgr == nil {
+	// Make sure the manager has started and set mcAware via Start().
+	if p.mcAware == nil {
 		log.Info("Multicluster manager not yet started, requeueing", "key", key)
 		return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 	}
@@ -287,7 +286,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Engaging cluster with multicluster manager", "key", key)
 
 	// engage manager.
-	if err := p.mcMgr.Engage(clusterCtx, multicluster.ClusterName(key), cl); err != nil {
+	if err := p.mcAware.Engage(clusterCtx, key, cl); err != nil {
 		log.Error(err, "Failed to engage cluster with multicluster manager", "key", key)
 		delete(p.projects, key)
 		delete(p.cancelFns, key)
