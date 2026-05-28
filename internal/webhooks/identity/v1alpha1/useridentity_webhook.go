@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -20,8 +19,7 @@ var useridentitylog = logf.Log.WithName("useridentity-resource")
 func SetupUserIdentityWebhooksWithManager(mgr ctrl.Manager) error {
 	useridentitylog.Info("Setting up identity.miloapis.com useridentity webhooks")
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&identityv1alpha1.UserIdentity{}).
+	return ctrl.NewWebhookManagedBy(mgr, &identityv1alpha1.UserIdentity{}).
 		WithValidator(&UserIdentityValidator{}).
 		Complete()
 }
@@ -29,16 +27,15 @@ func SetupUserIdentityWebhooksWithManager(mgr ctrl.Manager) error {
 // UserIdentityValidator validates UserIdentity resources
 type UserIdentityValidator struct{}
 
-func (v *UserIdentityValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *UserIdentityValidator) ValidateCreate(ctx context.Context, obj *identityv1alpha1.UserIdentity) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *UserIdentityValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *UserIdentityValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *identityv1alpha1.UserIdentity) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *UserIdentityValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	userIdentity := obj.(*identityv1alpha1.UserIdentity)
+func (v *UserIdentityValidator) ValidateDelete(ctx context.Context, userIdentity *identityv1alpha1.UserIdentity) (admission.Warnings, error) {
 	useridentitylog.Info("Blocking UserIdentity deletion", "name", userIdentity.Name)
 
 	return nil, fmt.Errorf(

@@ -6,7 +6,6 @@ import (
 
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,8 +34,7 @@ func SetupContactGroupWebhooksWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to set contactgroup field index: %w", err)
 	}
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&notificationv1alpha1.ContactGroup{}).
+	return ctrl.NewWebhookManagedBy(mgr, &notificationv1alpha1.ContactGroup{}).
 		WithValidator(&ContactGroupValidator{
 			Client: mgr.GetClient(),
 		}).
@@ -50,12 +48,7 @@ type ContactGroupValidator struct {
 }
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (v *ContactGroupValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	cg, ok := obj.(*notificationv1alpha1.ContactGroup)
-	if !ok {
-		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to ContactGroup"))
-	}
-
+func (v *ContactGroupValidator) ValidateCreate(ctx context.Context, cg *notificationv1alpha1.ContactGroup) (admission.Warnings, error) {
 	contactGroupLog.Info("Validating ContactGroup", "name", cg.Name)
 
 	var errs field.ErrorList
@@ -78,11 +71,11 @@ func (v *ContactGroupValidator) ValidateCreate(ctx context.Context, obj runtime.
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (v *ContactGroupValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *ContactGroupValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *notificationv1alpha1.ContactGroup) (admission.Warnings, error) {
 	return nil, nil
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (v *ContactGroupValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *ContactGroupValidator) ValidateDelete(ctx context.Context, obj *notificationv1alpha1.ContactGroup) (admission.Warnings, error) {
 	return nil, nil
 }

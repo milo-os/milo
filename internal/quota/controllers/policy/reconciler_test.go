@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/go-logr/logr"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/tools/record"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
@@ -49,6 +50,7 @@ func (c *testCluster) GetConfig() *rest.Config                        { return n
 func (c *testCluster) GetCache() cache.Cache                          { return nil }
 func (c *testCluster) GetFieldIndexer() client.FieldIndexer           { return nil }
 func (c *testCluster) GetEventRecorderFor(string) record.EventRecorder { return nil }
+func (c *testCluster) GetEventRecorder(string) events.EventRecorder   { return nil }
 func (c *testCluster) GetRESTMapper() meta.RESTMapper                 { return nil }
 func (c *testCluster) GetAPIReader() client.Reader                    { return nil }
 func (c *testCluster) Start(context.Context) error                    { return nil }
@@ -58,7 +60,7 @@ type testManager struct {
 	cluster cluster.Cluster
 }
 
-func (m *testManager) GetCluster(_ context.Context, _ string) (cluster.Cluster, error) {
+func (m *testManager) GetCluster(_ context.Context, _ multicluster.ClusterName) (cluster.Cluster, error) {
 	return m.cluster, nil
 }
 
@@ -75,13 +77,15 @@ func (m *testManager) GetControllerOptions() config.Controller                 {
 func (m *testManager) ClusterFromContext(context.Context) (cluster.Cluster, error) {
 	return nil, nil
 }
-func (m *testManager) GetManager(context.Context, string) (manager.Manager, error) {
+func (m *testManager) GetManager(context.Context, multicluster.ClusterName) (manager.Manager, error) {
 	return nil, nil
 }
 func (m *testManager) GetLocalManager() manager.Manager { return nil }
 func (m *testManager) GetProvider() multicluster.Provider { return nil }
 func (m *testManager) GetFieldIndexer() client.FieldIndexer { return nil }
-func (m *testManager) Engage(context.Context, string, cluster.Cluster) error { return nil }
+func (m *testManager) Engage(context.Context, multicluster.ClusterName, cluster.Cluster) error {
+	return nil
+}
 
 // newFakeClient creates a fake client builder with the test scheme and status subresource support.
 func newFakeClient(scheme *runtime.Scheme, objs ...client.Object) client.Client {

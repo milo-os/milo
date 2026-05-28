@@ -6,7 +6,6 @@ import (
 
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,8 +44,7 @@ func SetupContactGroupMembershipWebhooksWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to index contactgroupmembershipremoval composite key: %w", err)
 	}
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&notificationv1alpha1.ContactGroupMembership{}).
+	return ctrl.NewWebhookManagedBy(mgr, &notificationv1alpha1.ContactGroupMembership{}).
 		WithValidator(&ContactGroupMembershipValidator{Client: mgr.GetClient()}).
 		Complete()
 }
@@ -58,12 +56,7 @@ type ContactGroupMembershipValidator struct {
 }
 
 // ValidateCreate implements webhook.Validator for ContactGroupMembership
-func (v *ContactGroupMembershipValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	cgm, ok := obj.(*notificationv1alpha1.ContactGroupMembership)
-	if !ok {
-		return nil, errors.NewInternalError(fmt.Errorf("failed to cast object to ContactGroupMembership"))
-	}
-
+func (v *ContactGroupMembershipValidator) ValidateCreate(ctx context.Context, cgm *notificationv1alpha1.ContactGroupMembership) (admission.Warnings, error) {
 	cgmLog.Info("Validating ContactGroupMembership", "name", cgm.Name)
 	var errs field.ErrorList
 
@@ -118,10 +111,10 @@ func (v *ContactGroupMembershipValidator) ValidateCreate(ctx context.Context, ob
 	return nil, nil
 }
 
-func (v *ContactGroupMembershipValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *ContactGroupMembershipValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *notificationv1alpha1.ContactGroupMembership) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *ContactGroupMembershipValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *ContactGroupMembershipValidator) ValidateDelete(ctx context.Context, obj *notificationv1alpha1.ContactGroupMembership) (admission.Warnings, error) {
 	return nil, nil
 }
