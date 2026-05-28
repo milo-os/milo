@@ -2,11 +2,12 @@ package v1alpha1
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	"go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -65,14 +66,16 @@ func (m *ProjectMutator) Default(ctx context.Context, obj runtime.Object) error 
 
 	if !parentNameOk || !parentKindOk || !parentAPIGroupOk {
 		errMsg := "request context does not have the required parent information"
-		projectlog.Error(fmt.Errorf(errMsg), errMsg)
-		return fmt.Errorf(errMsg)
+		err := errors.New(errMsg)
+		projectlog.Error(err, errMsg)
+		return err
 	}
 
 	if len(parentKind) != 1 || parentKind[0] != "Organization" || parentAPIGroup[0] != v1alpha1.GroupVersion.Group {
 		errMsg := "request context has invalid parent information, must be Organization from the resourcemanager.miloapis.com API group"
-		projectlog.Error(fmt.Errorf(errMsg), errMsg)
-		return fmt.Errorf(errMsg)
+		err := errors.New(errMsg)
+		projectlog.Error(err, errMsg)
+		return err
 	}
 
 	requestContextOrgID := parentName[0]
@@ -149,7 +152,7 @@ func (v *ProjectValidator) ValidateCreate(ctx context.Context, obj runtime.Objec
 	}
 
 	if len(errs) > 0 {
-		return nil, errors.NewInvalid(project.GroupVersionKind().GroupKind(), project.Name, errs)
+		return nil, apierrors.NewInvalid(project.GroupVersionKind().GroupKind(), project.Name, errs)
 	}
 
 	req, err := admission.RequestFromContext(ctx)
@@ -203,7 +206,7 @@ func (v *ProjectValidator) ValidateUpdate(ctx context.Context, oldObj, newObj ru
 	}
 
 	if len(errs) > 0 {
-		return nil, errors.NewInvalid(newProject.GroupVersionKind().GroupKind(), newProject.Name, errs)
+		return nil, apierrors.NewInvalid(newProject.GroupVersionKind().GroupKind(), newProject.Name, errs)
 	}
 
 	return nil, nil
