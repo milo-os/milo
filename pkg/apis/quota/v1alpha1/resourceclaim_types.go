@@ -89,7 +89,9 @@ type ResourceClaimSpec struct {
 	//   - Project resource triggering Project quota claim
 	//   - User resource triggering User quota claim
 	//   - Organization resource triggering storage quota claim
-	ResourceRef UnversionedObjectReference `json:"resourceRef,omitempty"`
+	//
+	// +optional
+	ResourceRef *UnversionedObjectReference `json:"resourceRef,omitempty"`
 }
 
 // ResourceClaimAllocationStatus tracks the allocation status for a specific resource

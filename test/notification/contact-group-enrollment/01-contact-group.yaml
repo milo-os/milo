@@ -1,0 +1,8 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroup
+metadata:
+  name: enrollment-test-group
+  namespace: milo-system
+spec:
+  displayName: Enrollment Test Group
+  visibility: public

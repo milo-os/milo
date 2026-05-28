@@ -43,6 +43,9 @@ resources:
   - notification-contact-group-membership-removal-reader.yaml
   - notification-contact-group-membership-removal-editor.yaml
   - notification-contact-group-membership-removal-admin.yaml
+  - notification-contact-group-enrollment-policy-reader.yaml
+  - notification-contact-group-enrollment-policy-editor.yaml
+  - notification-contact-group-enrollment-policy-admin.yaml
   - organizationmembership-reader.yaml
   - organizationmembership-editor.yaml
   - organizationmembership-admin.yaml
