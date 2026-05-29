@@ -12,3 +12,5 @@ spec:
     - name: iam-admin
     - name: core-admin
     - name: apiextensions-reader
+    - name: billing.miloapis.com-admin
+      namespace: milo-system
