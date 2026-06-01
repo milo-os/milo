@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/mux"
+	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
@@ -43,6 +44,7 @@ import (
 	certutil "k8s.io/client-go/util/cert"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
+	basecompatibility "k8s.io/component-base/compatibility"
 	"k8s.io/component-base/configz"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/component-base/logs"
@@ -53,8 +55,6 @@ import (
 	"k8s.io/component-base/term"
 	"k8s.io/component-base/version"
 	"k8s.io/component-base/version/verflag"
-	basecompatibility "k8s.io/component-base/compatibility"
-	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	genericcontrollermanager "k8s.io/controller-manager/app"
 	"k8s.io/controller-manager/controller"
 	"k8s.io/controller-manager/pkg/clientbuilder"
@@ -69,6 +69,8 @@ import (
 	garbagecollector "k8s.io/kubernetes/pkg/controller/garbagecollector"
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	controllerruntime "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -630,6 +632,15 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				ClusterOptions: []cluster.Option{
 					func(o *cluster.Options) {
 						o.Scheme = Scheme
+						o.Cache = cache.Options{
+							ByObject: map[client.Object]cache.ByObject{
+								&quotav1alpha1.ResourceClaim{}:   {},
+								&quotav1alpha1.ResourceGrant{}:   {},
+								&quotav1alpha1.AllowanceBucket{}: {},
+							},
+							DefaultTransform:            cache.TransformStripManagedFields(),
+							ReaderFailOnMissingInformer: true,
+						}
 					},
 				},
 				InternalServiceDiscovery: false, // Use Project resources for user-facing API
