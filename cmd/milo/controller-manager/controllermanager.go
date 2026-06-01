@@ -436,6 +436,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 
 			infraCluster, err := cluster.New(infraClient, func(o *cluster.Options) {
 				o.Scheme = Scheme
+				o.Cache = cache.Options{
+					DefaultTransform: cache.TransformStripManagedFields(),
+				}
 			})
 			if err != nil {
 				logger.Error(err, "Error building infrastructure cluster")
@@ -463,6 +466,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 					// Leader election is handled further up the stack.
 					LeaderElection: false,
 					Scheme:         Scheme,
+					// Strip managedFields from every cached object to cut per-object
+					// heap. Reconcilers do not read managedFields.
+					Cache: cache.Options{
+						DefaultTransform: cache.TransformStripManagedFields(),
+					},
 					// The existing controller manage endpoint already exposes a health
 					// probe endpoint. We can disable this one to avoid conflicts.
 					HealthProbeBindAddress: "0",
