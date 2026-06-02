@@ -93,6 +93,13 @@ func (r *ResourceClaimOwnershipController) Reconcile(ctx context.Context, req mc
 		return ctrl.Result{}, nil
 	}
 
+	// Only process claims created by the admission plugin; manually created claims
+	// are managed externally and must not have owner references imposed on them.
+	if !isAutoCreatedClaim(&claim) {
+		logger.V(2).Info("Skipping manually created claim", "name", claim.Name, "ns", claim.Namespace)
+		return ctrl.Result{}, nil
+	}
+
 	// Only process granted claims
 	if !isResourceClaimGranted(&claim) {
 		logger.V(2).Info("Claim not granted; skipping", "name", claim.Name, "ns", claim.Namespace)
@@ -186,11 +193,14 @@ func (r *ResourceClaimOwnershipController) SetupWithManager(mgr mcmanager.Manage
 			if !ok {
 				return false
 			}
-			return isResourceClaimGranted(claim) && len(claim.GetOwnerReferences()) == 0
+			return isAutoCreatedClaim(claim) && isResourceClaimGranted(claim) && len(claim.GetOwnerReferences()) == 0
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			newClaim, ok := e.ObjectNew.(*quotav1alpha1.ResourceClaim)
 			if !ok {
+				return false
+			}
+			if !isAutoCreatedClaim(newClaim) {
 				return false
 			}
 			if !(isResourceClaimGranted(newClaim) && len(newClaim.GetOwnerReferences()) == 0) {
@@ -289,4 +299,11 @@ func (r *ResourceClaimOwnershipController) applyOwnerReferenceSSA(ctx context.Co
 // isResourceClaimGranted checks if the claim has Granted=True.
 func isResourceClaimGranted(claim *quotav1alpha1.ResourceClaim) bool {
 	return meta.IsStatusConditionTrue(claim.Status.Conditions, quotav1alpha1.ResourceClaimGranted)
+}
+
+// isAutoCreatedClaim returns true when the claim was created by the admission
+// plugin, identified by both the auto-created label and created-by annotation.
+func isAutoCreatedClaim(claim *quotav1alpha1.ResourceClaim) bool {
+	return claim.Labels["quota.miloapis.com/auto-created"] == "true" &&
+		claim.Annotations["quota.miloapis.com/created-by"] == "claim-creation-plugin"
 }
