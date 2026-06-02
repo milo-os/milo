@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: manual-claim-test-org
+  labels:
+    test.miloapis.com/scenario: "manual-claim-preservation"
+spec:
+  type: Standard
