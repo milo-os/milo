@@ -157,15 +157,11 @@ func (r *DeniedAutoClaimCleanupController) stalePendingAge() time.Duration {
 // isAutoCreatedClaim checks if a ResourceClaim was automatically created by the admission plugin.
 // Returns true only if both the label and annotation markers are present.
 func (r *DeniedAutoClaimCleanupController) isAutoCreatedClaim(claim *quotav1alpha1.ResourceClaim) bool {
-	autoCreatedLabel := claim.Labels["quota.miloapis.com/auto-created"] == "true"
-	createdByPlugin := claim.Annotations["quota.miloapis.com/created-by"] == "claim-creation-plugin"
-
 	r.logger.V(3).Info("Checking auto-created markers",
 		"claim", claim.Name,
-		"autoCreatedLabel", autoCreatedLabel,
-		"createdByPlugin", createdByPlugin)
-
-	return autoCreatedLabel && createdByPlugin
+		"autoCreatedLabel", claim.Labels["quota.miloapis.com/auto-created"] == "true",
+		"createdByPlugin", claim.Annotations["quota.miloapis.com/created-by"] == "claim-creation-plugin")
+	return isAutoCreatedClaim(claim)
 }
 
 // isClaimDenied checks if a ResourceClaim has been denied due to quota exceeded.
@@ -217,12 +213,7 @@ func (r *DeniedAutoClaimCleanupController) SetupWithManager(mgr mcmanager.Manage
 			if !ok {
 				return false
 			}
-
-			// Only watch auto-created claims to reduce controller load
-			autoCreated := claim.Labels["quota.miloapis.com/auto-created"] == "true"
-			createdByPlugin := claim.Annotations["quota.miloapis.com/created-by"] == "claim-creation-plugin"
-
-			return autoCreated && createdByPlugin
+			return isAutoCreatedClaim(claim)
 		})).
 		Named("denied-auto-claim-cleanup").
 		Complete(r)
