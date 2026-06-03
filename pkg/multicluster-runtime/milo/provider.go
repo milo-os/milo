@@ -175,10 +175,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 			if _, wasRegistered := p.projects[key]; wasRegistered {
 				log.Info("Removing previously registered cluster for project", "key", key)
 			}
-			delete(p.projects, key)
-			if cancel, ok := p.cancelFns[key]; ok {
-				cancel()
-			}
+			p.disengageProject(key)
 
 			return ctrl.Result{}, nil
 		}
@@ -199,14 +196,6 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 		return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 	}
 
-	// already engaged?
-	if _, ok := p.projects[key]; ok {
-		log.V(1).Info("Project already engaged, skipping", "key", key)
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("Project not yet engaged, checking readiness", "key", key)
-
 	// ready and provisioned?
 	conditions, err := extractUnstructuredConditions(project.Object)
 	if err != nil {
@@ -216,16 +205,30 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.V(1).Info("Checking project readiness conditions", "key", key, "conditionCount", len(conditions))
 
+	readyConditionType := "Ready"
 	if p.opts.InternalServiceDiscovery {
-		if !apimeta.IsStatusConditionTrue(conditions, "ControlPlaneReady") {
-			log.Info("ProjectControlPlane is not ready, skipping registration", "key", key, "conditions", conditions)
-			return ctrl.Result{}, nil
+		readyConditionType = "ControlPlaneReady"
+	}
+	ready := apimeta.IsStatusConditionTrue(conditions, readyConditionType)
+
+	_, engaged := p.projects[key]
+
+	if engaged {
+		// A project that was engaged while Ready may later transition to
+		// NotReady. Tear it down so its cluster cache, informers, goroutines
+		// and context do not stay alive indefinitely.
+		if !ready {
+			log.Info("Engaged project no longer ready, disengaging", "key", key, "conditions", conditions)
+			p.disengageProject(key)
+		} else {
+			log.V(1).Info("Project already engaged, skipping", "key", key)
 		}
-	} else {
-		if !apimeta.IsStatusConditionTrue(conditions, "Ready") {
-			log.Info("Project is not ready, skipping registration", "key", key, "conditions", conditions)
-			return ctrl.Result{}, nil
-		}
+		return ctrl.Result{}, nil
+	}
+
+	if !ready {
+		log.Info("Project is not ready, skipping registration", "key", key, "conditionType", readyConditionType, "conditions", conditions)
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("Project is ready, proceeding with cluster registration", "key", key)
@@ -297,6 +300,18 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Successfully registered and engaged new cluster", "key", key, "endpoint", cfg.Host)
 
 	return ctrl.Result{}, nil
+}
+
+// disengageProject tears down any cluster engaged for key: it cancels the
+// cluster's context (stopping its cache/informers/goroutines) and removes it
+// from the provider's maps. Callers must hold p.lock. Safe to call when key
+// is not engaged.
+func (p *Provider) disengageProject(key string) {
+	if cancel, ok := p.cancelFns[key]; ok {
+		cancel()
+		delete(p.cancelFns, key)
+	}
+	delete(p.projects, key)
 }
 
 func (p *Provider) IndexField(ctx context.Context, obj client.Object, field string, extractValue client.IndexerFunc) error {
