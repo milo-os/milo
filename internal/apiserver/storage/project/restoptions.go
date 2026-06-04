@@ -3,44 +3,35 @@ package projectstorage
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
 
 	generic "k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 )
 
-// Wrap the upstream RESTOptionsGetter to install a per-project decorator.
+// WithProjectAwareDecorator wraps the upstream RESTOptionsGetter to install
+// a shared-storage decorator that isolates tenants by rewriting etcd keys to
+// embed /clusters/<projID>/ from the request context.
 func WithProjectAwareDecorator(inner generic.RESTOptionsGetter) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, loopbackConfig: nil}
-}
-
-// WithProjectAwareDecoratorAndConfig wraps the RESTOptionsGetter with project-aware storage
-// and provides a loopback config for bootstrapping project namespaces.
-func WithProjectAwareDecoratorAndConfig(inner generic.RESTOptionsGetter, loopbackConfig *rest.Config) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, loopbackConfig: loopbackConfig}
+	return roGetter{inner: inner}
 }
 
 type roGetter struct {
-	inner          generic.RESTOptionsGetter
-	loopbackConfig *rest.Config
+	inner generic.RESTOptionsGetter
 }
 
-// NOTE: matches your two-arg signature (GroupResource, runtime.Object).
 func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object) (generic.RESTOptions, error) {
 	opts, err := g.inner.GetRESTOptions(gr, example)
 	if err != nil {
 		return opts, err
 	}
-	// 🔒 Leave CRD *definitions* global so discovery is shared cluster-wide
+	// Leave CRD *definitions* global so discovery is shared cluster-wide.
 	if gr.Group == "apiextensions.k8s.io" && gr.Resource == "customresourcedefinitions" {
 		return opts, nil
 	}
-
-	// Ensure we always wrap with our project-aware decorator.
 	if opts.Decorator == nil {
-		opts.Decorator = ProjectAwareDecorator(gr, genericregistry.StorageWithCacher(), g.loopbackConfig)
+		opts.Decorator = ProjectAwareDecorator(gr, genericregistry.StorageWithCacher())
 	} else {
-		opts.Decorator = ProjectAwareDecorator(gr, opts.Decorator, g.loopbackConfig)
+		opts.Decorator = ProjectAwareDecorator(gr, opts.Decorator)
 	}
 	return opts, nil
 }
