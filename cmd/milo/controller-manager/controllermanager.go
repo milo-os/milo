@@ -701,8 +701,13 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			go func() {
 				logger.Info("Starting multicluster manager for quota system")
 				if err := mcMgr.Start(ctx); err != nil {
-					logger.Error(err, "Multicluster manager failed")
-					panic(err)
+					// Exit deterministically (code 1) and flush logs instead of
+					// panicking (which exits 2 with a stack that obscures the
+					// real cause, e.g. a missed graceful-shutdown deadline under
+					// load). FlushAndExit terminates the process, stopping the
+					// sibling managers and releasing the leader lease.
+					logger.Error(err, "Multicluster manager failed; shutting down controller-manager")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 				}
 			}()
 
@@ -811,13 +816,15 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 
 			go func() {
 				if err := infraCluster.Start(ctx); err != nil {
-					panic(err)
+					logger.Error(err, "Infrastructure cluster failed; shutting down controller-manager")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 				}
 			}()
 
 			go func() {
 				if err := ctrl.Start(ctx); err != nil {
-					panic(err)
+					logger.Error(err, "Controller manager failed; shutting down controller-manager")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 				}
 			}()
 		}
