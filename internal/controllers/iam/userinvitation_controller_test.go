@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlfinalizer "sigs.k8s.io/controller-runtime/pkg/finalizer"
 )
 
 // getTestScheme returns a runtime.Scheme with all Milo APIs registered.
@@ -27,6 +28,29 @@ func getTestScheme() *runtime.Scheme {
 	_ = resourcemanagerv1alpha1.AddToScheme(scheme)
 	_ = notificationv1alpha1.AddToScheme(scheme)
 	return scheme
+}
+
+// initFinalizer wires up the userInvitationFinalizer on a UserInvitationController so
+// that unit tests exercise the full finalizer lifecycle without a live manager.
+func initFinalizer(t *testing.T, uic *UserInvitationController) {
+	t.Helper()
+	uic.finalizer = ctrlfinalizer.NewFinalizers()
+	if err := uic.finalizer.Register(userInvitationFinalizerKey, &userInvitationFinalizer{
+		client:         uic.Client,
+		uiRelatedRoles: uic.uiRelatedRoles,
+	}); err != nil {
+		t.Fatalf("failed to register userInvitation finalizer: %v", err)
+	}
+}
+
+// containsFinalizer returns true when the UserInvitation carries the standard finalizer string.
+func containsFinalizer(ui *iamv1alpha1.UserInvitation) bool {
+	for _, f := range ui.Finalizers {
+		if f == userInvitationFinalizerKey {
+			return true
+		}
+	}
+	return false
 }
 
 // TestUserInvitationController_createPolicyBinding verifies that createPolicyBinding creates a PolicyBinding CR.
@@ -659,10 +683,21 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 		SystemNamespace: "milo-system",
 		uiRelatedRoles:  []iamv1alpha1.RoleReference{invitationRoleRef},
 	}
+	initFinalizer(t, uic)
 
-	// First reconcile (Pending)
+	// First reconcile registers the finalizer and returns early.
 	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-		t.Fatalf("first reconcile error: %v", err)
+		t.Fatalf("first reconcile (finalizer registration) error: %v", err)
+	}
+	registered := &iamv1alpha1.UserInvitation{}
+	_ = c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, registered)
+	if !containsFinalizer(registered) {
+		t.Fatalf("expected finalizer to be registered after first reconcile")
+	}
+
+	// Second reconcile (Pending) — business logic now runs.
+	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
+		t.Fatalf("second reconcile error: %v", err)
 	}
 
 	// Verify invitation-related PolicyBinding exists
@@ -671,11 +706,11 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 		t.Fatalf("expected invitation PolicyBinding created: %v", err)
 	}
 
-	// Check Pending condition true, Ready false
+	// Check Pending condition true, Ready false after the business-logic reconcile.
 	afterFirst := &iamv1alpha1.UserInvitation{}
 	_ = c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, afterFirst)
 	if !meta.IsStatusConditionTrue(afterFirst.Status.Conditions, string(iamv1alpha1.UserInvitationPendingCondition)) {
-		t.Fatalf("Pending condition should be true after first reconcile")
+		t.Fatalf("Pending condition should be true after pending reconcile")
 	}
 	if meta.IsStatusConditionTrue(afterFirst.Status.Conditions, string(iamv1alpha1.UserInvitationReadyCondition)) {
 		t.Fatalf("Ready condition should not be true before acceptance")
@@ -713,9 +748,9 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 		t.Fatalf("failed to update UI state: %v", err)
 	}
 
-	// Second reconcile after state change
+	// Third reconcile after state change (first two were finalizer registration + pending business logic).
 	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-		t.Fatalf("second reconcile error: %v", err)
+		t.Fatalf("third reconcile error: %v", err)
 	}
 
 	// Verify OrganizationMembership created with roles
@@ -732,7 +767,13 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 		t.Fatalf("unexpected role on OrganizationMembership: %+v", om.Spec.Roles[0])
 	}
 
-	// The UserInvitation should now be deleted
+	// The acceptance path calls Delete which sets DeletionTimestamp (object has finalizer).
+	// A fourth reconcile triggers the finalizer, which strips the finalizer and lets the object be removed.
+	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
+		t.Fatalf("fourth reconcile (finalizer cleanup) error: %v", err)
+	}
+
+	// The UserInvitation should now be fully removed.
 	if err := c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, &iamv1alpha1.UserInvitation{}); err == nil {
 		t.Fatalf("UserInvitation should be deleted after acceptance")
 	} else if !apierr.IsNotFound(err) {
@@ -786,10 +827,16 @@ func TestUserInvitationController_Reconcile_UserCreatedLater(t *testing.T) {
 	c := builder.Build()
 
 	uic := &UserInvitationController{Client: c, SystemNamespace: "milo-system", uiRelatedRoles: []iamv1alpha1.RoleReference{invitationRoleRef}}
+	initFinalizer(t, uic)
 
-	// First reconcile: no User yet
+	// First reconcile registers the finalizer and returns early.
 	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-		t.Fatalf("first reconcile error: %v", err)
+		t.Fatalf("first reconcile (finalizer registration) error: %v", err)
+	}
+
+	// Second reconcile: no User yet — business logic runs but no PolicyBinding created.
+	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
+		t.Fatalf("second reconcile error: %v", err)
 	}
 
 	// Expect no PolicyBindings created
@@ -804,9 +851,9 @@ func TestUserInvitationController_Reconcile_UserCreatedLater(t *testing.T) {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	// Second reconcile: should create invitation PB and Pending condition
+	// Third reconcile: should create invitation PB and Pending condition
 	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-		t.Fatalf("second reconcile error: %v", err)
+		t.Fatalf("third reconcile error: %v", err)
 	}
 
 	// Verify InviteeUser now populated after user appears (before acceptance)
@@ -830,9 +877,9 @@ func TestUserInvitationController_Reconcile_UserCreatedLater(t *testing.T) {
 		t.Fatalf("update UI state: %v", err)
 	}
 
-	// Third reconcile
+	// Fourth reconcile: accepted state — creates OrganizationMembership and deletes the UserInvitation.
 	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-		t.Fatalf("third reconcile error: %v", err)
+		t.Fatalf("fourth reconcile error: %v", err)
 	}
 
 	// Invitation should be deleted after acceptance; verified later
@@ -852,7 +899,13 @@ func TestUserInvitationController_Reconcile_UserCreatedLater(t *testing.T) {
 		}
 	}
 
-	// UserInvitation should be deleted
+	// The acceptance path calls Delete which sets DeletionTimestamp (object has finalizer).
+	// A fifth reconcile triggers the finalizer, which strips the finalizer and lets the object be removed.
+	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
+		t.Fatalf("fifth reconcile (finalizer cleanup) error: %v", err)
+	}
+
+	// UserInvitation should now be fully removed.
 	if err := c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, &iamv1alpha1.UserInvitation{}); err == nil {
 		t.Fatalf("UserInvitation should be deleted after acceptance")
 	} else if !apierr.IsNotFound(err) {
@@ -1058,5 +1111,132 @@ func TestUserInvitationController_grantAccessApproval(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestUserInvitationController_Reconcile_FinalizerRegisteredOnFirstReconcile verifies that the first
+// reconcile adds the finalizer string to the UserInvitation and returns without running business logic.
+func TestUserInvitationController_Reconcile_FinalizerRegisteredOnFirstReconcile(t *testing.T) {
+	ctx := context.TODO()
+	scheme := getTestScheme()
+
+	ui := &iamv1alpha1.UserInvitation{
+		ObjectMeta: metav1.ObjectMeta{Name: "inv", Namespace: "default", UID: types.UID("ui-uid")},
+		Spec: iamv1alpha1.UserInvitationSpec{
+			Email:           "test@example.com",
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "org"},
+			State:           iamv1alpha1.UserInvitationStatePending,
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&iamv1alpha1.UserInvitation{}).
+		WithObjects(ui.DeepCopy()).
+		Build()
+
+	uic := &UserInvitationController{
+		Client:          c,
+		SystemNamespace: "milo-system",
+	}
+	initFinalizer(t, uic)
+
+	// Before first reconcile: no finalizer present.
+	before := &iamv1alpha1.UserInvitation{}
+	_ = c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, before)
+	if containsFinalizer(before) {
+		t.Fatalf("expected no finalizer before first reconcile")
+	}
+
+	// First reconcile should register the finalizer and return early.
+	result, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}})
+	if err != nil {
+		t.Fatalf("first reconcile returned error: %v", err)
+	}
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Fatalf("expected empty result after finalizer registration, got %+v", result)
+	}
+
+	// Finalizer should now be present.
+	after := &iamv1alpha1.UserInvitation{}
+	if err := c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, after); err != nil {
+		t.Fatalf("failed to fetch UserInvitation: %v", err)
+	}
+	if !containsFinalizer(after) {
+		t.Fatalf("expected finalizer %q to be set after first reconcile, got finalizers: %v", userInvitationFinalizerKey, after.Finalizers)
+	}
+
+	// No status conditions should have been set (business logic did not run).
+	if len(after.Status.Conditions) != 0 {
+		t.Fatalf("expected no status conditions after finalizer-only reconcile, got %+v", after.Status.Conditions)
+	}
+}
+
+// TestUserInvitationController_Reconcile_PolicyBindingsGCOnDeletion verifies that when a UserInvitation is
+// deleted the finalizer removes any invitation-related PolicyBindings before allowing the object to be removed.
+func TestUserInvitationController_Reconcile_PolicyBindingsGCOnDeletion(t *testing.T) {
+	ctx := context.TODO()
+	scheme := getTestScheme()
+
+	invitationRoleRef := iamv1alpha1.RoleReference{Name: "get-invitation-role", Namespace: "milo-system"}
+	acceptRoleRef := iamv1alpha1.RoleReference{Name: "accept-invitation-role", Namespace: "milo-system"}
+
+	ui := &iamv1alpha1.UserInvitation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "inv",
+			Namespace:  "default",
+			UID:        types.UID("ui-uid"),
+			Finalizers: []string{userInvitationFinalizerKey},
+		},
+		Spec: iamv1alpha1.UserInvitationSpec{
+			Email:           "test@example.com",
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "org"},
+			State:           iamv1alpha1.UserInvitationStatePending,
+		},
+	}
+
+	// Pre-create the PolicyBindings that should be GC-ed by the finalizer.
+	pbGet := &iamv1alpha1.PolicyBinding{ObjectMeta: metav1.ObjectMeta{
+		Name:      getDeterministicRoleName(&invitationRoleRef, *ui),
+		Namespace: invitationRoleRef.Namespace,
+	}}
+	pbAccept := &iamv1alpha1.PolicyBinding{ObjectMeta: metav1.ObjectMeta{
+		Name:      getDeterministicRoleName(&acceptRoleRef, *ui),
+		Namespace: acceptRoleRef.Namespace,
+	}}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&iamv1alpha1.UserInvitation{}).
+		WithObjects(ui.DeepCopy(), pbGet, pbAccept).
+		Build()
+
+	uic := &UserInvitationController{
+		Client:          c,
+		SystemNamespace: "milo-system",
+		uiRelatedRoles:  []iamv1alpha1.RoleReference{invitationRoleRef, acceptRoleRef},
+	}
+	initFinalizer(t, uic)
+
+	// Mark the UserInvitation for deletion by setting DeletionTimestamp.
+	toDelete := &iamv1alpha1.UserInvitation{}
+	if err := c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, toDelete); err != nil {
+		t.Fatalf("failed to get UserInvitation: %v", err)
+	}
+	if err := c.Delete(ctx, toDelete); err != nil {
+		t.Fatalf("failed to delete UserInvitation: %v", err)
+	}
+
+	// Reconcile on the deletion event — the finalizer should run and clean up PolicyBindings.
+	if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
+		t.Fatalf("reconcile on deletion returned error: %v", err)
+	}
+
+	// Both PolicyBindings should now be gone.
+	for _, ref := range []iamv1alpha1.RoleReference{invitationRoleRef, acceptRoleRef} {
+		pbName := getDeterministicRoleName(&ref, *ui)
+		if err := c.Get(ctx, types.NamespacedName{Name: pbName, Namespace: ref.Namespace}, &iamv1alpha1.PolicyBinding{}); err == nil {
+			t.Fatalf("expected PolicyBinding %s to be deleted by finalizer, but it still exists", pbName)
+		} else if !apierr.IsNotFound(err) {
+			t.Fatalf("unexpected error checking PolicyBinding %s: %v", pbName, err)
+		}
 	}
 }

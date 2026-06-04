@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,8 +27,7 @@ var organizationlog = logf.Log.WithName("organization-resource")
 func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, organizationOwnerRoleName string, organizationOwnerRoleNamespace string) error {
 	organizationlog.Info("Setting up resourcemanager.miloapis.com organization webhooks")
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&resourcemanagerv1alpha1.Organization{}).
+	return ctrl.NewWebhookManagedBy(mgr, &resourcemanagerv1alpha1.Organization{}).
 		WithValidator(&OrganizationValidator{
 			client:             mgr.GetClient(),
 			systemNamespace:    systemNamespace,
@@ -48,8 +46,7 @@ type OrganizationValidator struct {
 	ownerRoleNamespace string
 }
 
-func (v *OrganizationValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	org := obj.(*resourcemanagerv1alpha1.Organization)
+func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
 	organizationlog.Info("Validating Organization", "name", org.Name)
 
 	// Validate organization name length
@@ -110,9 +107,7 @@ func (v *OrganizationValidator) ValidateCreate(ctx context.Context, obj runtime.
 	return nil, nil
 }
 
-func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	newOrg := newObj.(*resourcemanagerv1alpha1.Organization)
-
+func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newOrg *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
 	// Validate organization name length
 	if len(newOrg.Name) > 50 {
 		return nil, apierrors.NewInvalid(
@@ -131,7 +126,7 @@ func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newO
 	return nil, nil
 }
 
-func (v *OrganizationValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *OrganizationValidator) ValidateDelete(ctx context.Context, obj *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
 	return nil, nil
 }
 
@@ -181,6 +176,14 @@ func (v *OrganizationValidator) createOrganizationMembership(ctx context.Context
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("member-%s", user.Name),
 			Namespace: fmt.Sprintf("organization-%s", org.Name),
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: iamv1alpha1.SchemeGroupVersion.String(),
+					Kind:       "User",
+					Name:       user.Name,
+					UID:        user.UID,
+				},
+			},
 		},
 		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
 			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{

@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: st-test-org
+  labels:
+    test.miloapis.com/quota: "structured-type"
+spec:
+  type: Standard

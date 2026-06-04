@@ -52,6 +52,7 @@ const (
 // +kubebuilder:selectablefield:JSONPath=".spec.contactRef.name"
 // +kubebuilder:selectablefield:JSONPath=".spec.contactGroupRef.name"
 // +kubebuilder:selectablefield:JSONPath=".status.username"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform,User"
 type ContactGroupMembership struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

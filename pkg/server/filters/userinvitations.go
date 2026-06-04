@@ -35,7 +35,7 @@ func UserUserInvitationListConstraintDecorator(handler http.Handler) http.Handle
 			return
 		}
 
-		if info.APIGroup == iamv1alpha1.SchemeGroupVersion.Group && info.Resource == "userinvitations" && info.Verb == "list" {
+		if info.APIGroup == iamv1alpha1.SchemeGroupVersion.Group && info.Resource == "userinvitations" && (info.Verb == "list" || info.Verb == "watch") {
 			userID, ok := ctx.Value(UserIDContextKey).(string)
 			if ok {
 				currentSelector, err := fields.ParseSelector(info.FieldSelector)

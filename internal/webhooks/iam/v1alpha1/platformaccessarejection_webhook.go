@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,8 +17,7 @@ import (
 const platformAccessRejectionIndexKey = "iam.miloapis.com/platformaccessrejection"
 
 func SetupPlatformAccessRejectionWebhooksWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&iamv1alpha1.PlatformAccessRejection{}).
+	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.PlatformAccessRejection{}).
 		WithDefaulter(&PlatformAccessRejectionMutator{
 			client: mgr.GetClient(),
 		}).
@@ -36,11 +34,7 @@ type PlatformAccessRejectionMutator struct {
 	client client.Client
 }
 
-func (m *PlatformAccessRejectionMutator) Default(ctx context.Context, obj runtime.Object) error {
-	par, ok := obj.(*iamv1alpha1.PlatformAccessRejection)
-	if !ok {
-		return errors.NewInternalError(fmt.Errorf("failed to cast object to PlatformAccessRejection"))
-	}
+func (m *PlatformAccessRejectionMutator) Default(ctx context.Context, par *iamv1alpha1.PlatformAccessRejection) error {
 	log := logf.FromContext(ctx).WithValues("Defaulting PlatformAccessRejection", "name", par.GetName())
 
 	// Rejecter is the user who is rejecting the access request.
@@ -73,8 +67,7 @@ type PlatformAccessRejectionValidator struct {
 	client client.Client
 }
 
-func (v *PlatformAccessRejectionValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	par := obj.(*iamv1alpha1.PlatformAccessRejection)
+func (v *PlatformAccessRejectionValidator) ValidateCreate(ctx context.Context, par *iamv1alpha1.PlatformAccessRejection) (admission.Warnings, error) {
 	log := logf.FromContext(ctx).WithValues("Validating PlatformAccessRejection", "name", par.GetName())
 
 	var errs field.ErrorList
@@ -121,10 +114,10 @@ func (v *PlatformAccessRejectionValidator) ValidateCreate(ctx context.Context, o
 	return nil, nil
 }
 
-func (v *PlatformAccessRejectionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *PlatformAccessRejectionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.PlatformAccessRejection) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *PlatformAccessRejectionValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *PlatformAccessRejectionValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.PlatformAccessRejection) (admission.Warnings, error) {
 	return nil, nil
 }

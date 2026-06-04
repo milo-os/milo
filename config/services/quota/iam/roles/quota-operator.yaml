@@ -3,6 +3,9 @@ kind: Role
 metadata:
   name: quota.miloapis.com-operator
   namespace: milo-system
+  annotations:
+    kubernetes.io/display-name: Quota Operator
+    kubernetes.io/description: Operational access to quota resources for system reconciliation, including full management of allowance buckets
   labels:
     quota.miloapis.com/role-type: operator
     quota.miloapis.com/service: quota

@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+configurations:
+  - kustomizeconfig.yaml
+
+resources:
+  - authenticated-user-resource-registration-read.yaml

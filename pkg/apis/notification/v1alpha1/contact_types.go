@@ -49,6 +49,7 @@ const (
 // +kubebuilder:selectablefield:JSONPath=".spec.email"
 // +kubebuilder:selectablefield:JSONPath=".spec.subject.name"
 // +kubebuilder:selectablefield:JSONPath=".spec.subject.kind"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform,User"
 type Contact struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

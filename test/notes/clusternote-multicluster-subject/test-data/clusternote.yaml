@@ -1,0 +1,12 @@
+apiVersion: notes.miloapis.com/v1alpha1
+kind: ClusterNote
+metadata:
+  name: test-namespace-clusternote
+  labels:
+    test.miloapis.com/notes: "clusternote-multicluster"
+spec:
+  content: "This ClusterNote references a Namespace in the project control plane"
+  subjectRef:
+    apiGroup: ""
+    kind: Namespace
+    name: cn-test-namespace

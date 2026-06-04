@@ -1,0 +1,136 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: user-deletion-org-membership-cleanup
+spec:
+  description: |
+    Regression test for GitHub issue #536: OrganizationMembership resources are
+    not cleaned up when a User is deleted.
+
+    The UserController adds a finalizer (iam.miloapis.com/user-membership-cleanup)
+    to every active User. When a User is deleted the finalizer runs
+    cleanupOrganizationMemberships, which lists and deletes all OrganizationMembership
+    resources that reference the user before the finalizer is removed and the User
+    object is garbage-collected.
+
+    The OrganizationMembership validation webhook is extended to bypass the
+    last-owner guard when the referenced user has a non-zero DeletionTimestamp or
+    no longer exists in the API server, allowing the controller to proceed.
+
+  steps:
+  - name: setup-organization
+    description: Create the Organization and wait for its namespace.
+    try:
+    - apply:
+        file: 01-organization.yaml
+    - wait:
+        apiVersion: v1
+        kind: Namespace
+        name: organization-org-membership-gc-test
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.status.phase}'
+            value: Active
+
+  - name: setup-user
+    description: |
+      Create a User and wait for it to become Ready. The UserController will add
+      the membership-cleanup finalizer on the first reconcile.
+    try:
+    - apply:
+        file: 02-user.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: org-membership-gc-user
+        timeout: 30s
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - description: Verify the membership-cleanup finalizer was added
+      assert:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          metadata:
+            name: org-membership-gc-user
+            finalizers:
+            - iam.miloapis.com/user-membership-cleanup
+
+  - name: create-membership
+    description: |
+      Create the owner role fixture and an OrganizationMembership linking the
+      user to the organization. The membership controller reconciles it to Ready.
+    try:
+    - description: Create the owner role so the membership webhook validates it
+      script:
+        timeout: 30s
+        content: |
+          cat <<'ROLE' | kubectl apply -f -
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: Role
+          metadata:
+            name: resourcemanager.miloapis.com-organizationowner
+            namespace: milo-system
+          spec:
+            launchStage: Beta
+            includedPermissions:
+            - resourcemanager.miloapis.com/organizations.get
+            - resourcemanager.miloapis.com/organizations.update
+            - resourcemanager.miloapis.com/organizations.delete
+          ROLE
+    - apply:
+        resource:
+          apiVersion: resourcemanager.miloapis.com/v1alpha1
+          kind: OrganizationMembership
+          metadata:
+            name: member-org-membership-gc-user
+            namespace: organization-org-membership-gc-test
+          spec:
+            organizationRef:
+              name: org-membership-gc-test
+            userRef:
+              name: org-membership-gc-user
+            roles:
+            - name: resourcemanager.miloapis.com-organizationowner
+              namespace: milo-system
+    - wait:
+        apiVersion: resourcemanager.miloapis.com/v1alpha1
+        kind: OrganizationMembership
+        name: member-org-membership-gc-user
+        namespace: organization-org-membership-gc-test
+        timeout: 30s
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+
+  - name: delete-user-and-verify-membership-cleaned-up
+    description: |
+      Delete the User and verify the OrganizationMembership is removed by the
+      membership-cleanup finalizer.
+    try:
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          name: org-membership-gc-user
+    - description: Wait for the User to be fully removed
+      error:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          metadata:
+            name: org-membership-gc-user
+        timeout: 60s
+    - description: Assert the OrganizationMembership was deleted by the finalizer
+      error:
+        resource:
+          apiVersion: resourcemanager.miloapis.com/v1alpha1
+          kind: OrganizationMembership
+          metadata:
+            name: member-org-membership-gc-user
+            namespace: organization-org-membership-gc-test
+        timeout: 60s

@@ -7,6 +7,9 @@ resources:
   - iam-viewer.yaml
   - iam-editor.yaml
   - iam-admin.yaml
+  - iam-organization-viewer.yaml
+  - iam-organization-editor.yaml
+  - iam-organization-admin.yaml
   - resourcemanager-reader.yaml
   - resourcemanager-editor.yaml
   - resourcemanager-admin.yaml
@@ -40,6 +43,9 @@ resources:
   - notification-contact-group-membership-removal-reader.yaml
   - notification-contact-group-membership-removal-editor.yaml
   - notification-contact-group-membership-removal-admin.yaml
+  - notification-contact-group-enrollment-policy-reader.yaml
+  - notification-contact-group-enrollment-policy-editor.yaml
+  - notification-contact-group-enrollment-policy-admin.yaml
   - organizationmembership-reader.yaml
   - organizationmembership-editor.yaml
   - organizationmembership-admin.yaml
@@ -62,9 +68,15 @@ resources:
   - iam-platform-invitations-reader.yaml
   - iam-platform-invitations-editor.yaml
   - iam-platform-invitations-admin.yaml
-  - crm-note-viewer.yaml
-  - crm-note-creator.yaml
-  - crm-note-editor.yaml
-  - crm-note-creator-editor.yaml
-  - crm-note-admin.yaml
+  - notes-viewer.yaml
+  - notes-creator.yaml
+  - notes-editor.yaml
+  - notes-creator-editor.yaml
+  - notes-admin.yaml
   - identity-user-session-viewer.yaml
+  - iam-service-accounts-viewer.yaml
+  - iam-service-accounts-editor.yaml
+  - iam-service-accounts-admin.yaml
+  - identity-service-account-keys-viewer.yaml
+  - identity-service-account-keys-editor.yaml
+  - identity-service-account-keys-admin.yaml

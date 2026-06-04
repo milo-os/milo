@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-platform-access-rejections-admin
+  annotations:
+    kubernetes.io/display-name: Platform Access Rejection Admin
+    kubernetes.io/description: Full access to platform access rejections
 spec:
   launchStage: Beta
   inheritedRoles:

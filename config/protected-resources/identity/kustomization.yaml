@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - session.yaml
   - useridentity.yaml
+  - serviceaccountkey.yaml

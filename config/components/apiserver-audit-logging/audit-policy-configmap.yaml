@@ -142,6 +142,14 @@ data:
         - group: "" # core API group
           resources: ["secrets", "configmaps"]
 
+      # Log ServiceAccountKey at Metadata level to redact private key from audit logs
+      # The privateKey is only returned in the response body on creation, so we omit
+      # the response to prevent credential leakage in audit logs
+      - level: Metadata
+        resources:
+        - group: "identity.miloapis.com"
+          resources: ["serviceaccountkeys"]
+
       # Log Milo API resources at RequestResponse level to capture full context
       - level: RequestResponse
         resources:

@@ -4,6 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
+    discovery.miloapis.com/parent-contexts: Organization,Project
   name: resourceclaims.quota.miloapis.com
 spec:
   group: quota.miloapis.com

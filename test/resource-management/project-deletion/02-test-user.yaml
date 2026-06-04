@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: user-admin
+  labels:
+    test.miloapis.com/scenario: "project-deletion"
+spec:
+  email: admin@test.local
+  givenName: ProjectDeleteTest
+  familyName: Admin

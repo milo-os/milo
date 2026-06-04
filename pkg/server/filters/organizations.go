@@ -24,6 +24,14 @@ type key int
 
 const orgId key = iota
 
+// OrganizationID returns the organization ID stashed on the request context by
+// OrganizationContextHandler, if any. Used by middleware that needs to detect
+// whether the current request is being made in the context of an organization.
+func OrganizationID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(orgId).(string)
+	return id, ok
+}
+
 // OrganizationContextHandler will react to requests sent to a pseudo API path
 // of `/apis/resourcemanager.miloapis.com/v1alpha1/organizations/` and injects
 // the provided organization ID into a request context value. This value will

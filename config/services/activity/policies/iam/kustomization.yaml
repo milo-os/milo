@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - user-policy.yaml
+  - role-policy.yaml
+  - group-policy.yaml
+  - groupmembership-policy.yaml
+  - policybinding-policy.yaml
+  - serviceaccount-policy.yaml
+  - userinvitation-policy.yaml
+  - userdeactivation-policy.yaml
+  - platforminvitation-policy.yaml
+  - platformaccessapproval-policy.yaml
+  - platformaccessrejection-policy.yaml

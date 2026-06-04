@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: resourcemanager-admin
+  annotations:
+    kubernetes.io/display-name: Resource Manager Admin
+    kubernetes.io/description: Full access to manage organizations and projects
 spec:
   launchStage: Beta
   inheritedRoles:

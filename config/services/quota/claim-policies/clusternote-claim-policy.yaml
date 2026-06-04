@@ -1,0 +1,26 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ClaimCreationPolicy
+metadata:
+  name: project-clusternote-claim-policy
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+spec:
+  trigger:
+    resource:
+      apiVersion: notes.miloapis.com/v1alpha1
+      kind: ClusterNote
+  target:
+    resourceClaimTemplate:
+      metadata:
+        name: "clusternote-{{ trigger.metadata.name }}"
+        namespace: "{{requestInfo.namespace}}"
+        labels:
+          app.kubernetes.io/name: milo
+          app.kubernetes.io/component: quota-system
+        annotations:
+          kubernetes.io/description: "Automatic quota claim for ClusterNote creation"
+      spec:
+        requests:
+          - resourceType: notes.miloapis.com/notes
+            amount: 1

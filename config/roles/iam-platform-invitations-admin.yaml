@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-platform-invitations-admin
+  annotations:
+    kubernetes.io/display-name: Platform Invitation Admin
+    kubernetes.io/description: Full access to platform invitations
 spec:
   launchStage: Beta
   inheritedRoles:

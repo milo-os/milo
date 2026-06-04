@@ -3,6 +3,7 @@ kind: Role
 metadata:
   name: iam-user-preferences-manager
   annotations:
+    kubernetes.io/display-name: User Preferences Manager
     kubernetes.io/description: "Allows users to manage their own user preferences only."
 spec:
   launchStage: Beta

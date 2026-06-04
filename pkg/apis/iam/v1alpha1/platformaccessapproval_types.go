@@ -19,6 +19,7 @@ const (
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:selectablefield:JSONPath=".spec.subjectRef.email"
 // +kubebuilder:selectablefield:JSONPath=".spec.subjectRef.userRef.name"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type PlatformAccessApproval struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

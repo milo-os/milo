@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-email-broadcast-admin
+  annotations:
+    kubernetes.io/display-name: Email Broadcast Admin
+    kubernetes.io/description: Full access to email broadcasts
 spec:
   launchStage: Beta
   inheritedRoles:

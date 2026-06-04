@@ -4,6 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
+    discovery.miloapis.com/parent-contexts: Organization,Platform
   name: policybindings.iam.miloapis.com
 spec:
   group: iam.miloapis.com
@@ -140,7 +141,7 @@ spec:
                 items:
                   description: |-
                     Subject contains a reference to the object or user identities a role binding applies to.
-                    This can be a User or Group.
+                    This can be a User, Group, or ServiceAccount.
                   properties:
                     kind:
                       description: Kind of object being referenced. Values defined
@@ -148,6 +149,7 @@ spec:
                       enum:
                       - User
                       - Group
+                      - ServiceAccount
                       type: string
                     name:
                       description: |-
@@ -157,8 +159,8 @@ spec:
                       type: string
                     namespace:
                       description: |-
-                        Namespace of the referenced object. If DNE, then for an SA it refers to the PolicyBinding resource's namespace.
-                        For a User or Group, it is ignored.
+                        Namespace of the referenced object.
+                        If not specified for a Group, User or ServiceAccount, it is ignored.
                       type: string
                     uid:
                       description: UID of the referenced object. Optional for system

@@ -1,0 +1,37 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: milo-apiserver
+  namespace: milo-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: milo-apiserver
+  retry:
+    numRetries: 3
+    retryOn:
+      triggers:
+        - gateway-error
+        - connect-failure
+        - reset
+    perRetry:
+      backOff:
+        baseInterval: 100ms
+        maxInterval: 1s
+      timeout: 2s
+  healthCheck:
+    active:
+      type: HTTP
+      http:
+        path: /readyz
+      interval: 5s
+      timeout: 3s
+      unhealthyThreshold: 2
+      healthyThreshold: 1
+    passive:
+      consecutive5XxErrors: 2
+      consecutiveGatewayErrors: 1
+      interval: 3s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 33

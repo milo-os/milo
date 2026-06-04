@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/mux"
+	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
@@ -43,6 +44,7 @@ import (
 	certutil "k8s.io/client-go/util/cert"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
+	basecompatibility "k8s.io/component-base/compatibility"
 	"k8s.io/component-base/configz"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/component-base/logs"
@@ -52,7 +54,6 @@ import (
 	"k8s.io/component-base/metrics/prometheus/slis"
 	"k8s.io/component-base/term"
 	"k8s.io/component-base/version"
-	utilversion "k8s.io/component-base/version"
 	"k8s.io/component-base/version/verflag"
 	genericcontrollermanager "k8s.io/controller-manager/app"
 	"k8s.io/controller-manager/controller"
@@ -68,6 +69,8 @@ import (
 	garbagecollector "k8s.io/kubernetes/pkg/controller/garbagecollector"
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	controllerruntime "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -78,25 +81,28 @@ import (
 	_ "k8s.io/component-base/logs/json/register"
 
 	controlplane "go.miloapis.com/milo/internal/control-plane"
-	crmcontroller "go.miloapis.com/milo/internal/controllers/crm"
 	iamcontroller "go.miloapis.com/milo/internal/controllers/iam"
+	notescontroller "go.miloapis.com/milo/internal/controllers/notes"
+	notificationcontroller "go.miloapis.com/milo/internal/controllers/notification"
 	remoteapiservicecontroller "go.miloapis.com/milo/internal/controllers/remoteapiservice"
 	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
 	infracluster "go.miloapis.com/milo/internal/infra-cluster"
 	quotacontroller "go.miloapis.com/milo/internal/quota/controllers"
-	crmv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/crm/v1alpha1"
 	iamv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/iam/v1alpha1"
 	identityv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/identity/v1alpha1"
+	notesv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notes/v1alpha1"
 	notificationv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notification/v1alpha1"
 	resourcemanagerv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/resourcemanager/v1alpha1"
 	crmv1alpha1 "go.miloapis.com/milo/pkg/apis/crm/v1alpha1"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	identityv1alpha1 "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
 	infrastructurev1alpha1 "go.miloapis.com/milo/pkg/apis/infrastructure/v1alpha1"
+	notesv1alpha1 "go.miloapis.com/milo/pkg/apis/notes/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	miloprovider "go.miloapis.com/milo/pkg/multicluster-runtime/milo"
+	milowebhook "go.miloapis.com/milo/pkg/webhook"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 )
 
@@ -176,6 +182,7 @@ func init() {
 	utilruntime.Must(infrastructurev1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(iamv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(identityv1alpha1.AddToScheme(Scheme))
+	utilruntime.Must(notesv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(notificationv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(crmv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(quotav1alpha1.AddToScheme(Scheme))
@@ -201,8 +208,8 @@ const (
 
 // NewCommand creates a *cobra.Command object with default parameters
 func NewCommand() *cobra.Command {
-	_, _ = featuregate.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
-		featuregate.DefaultKubeComponent, utilversion.DefaultBuildEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
+	_, _ = apiservercompat.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
+		basecompatibility.DefaultKubeComponent, apiservercompat.DefaultBuildEffectiveVersion(), utilfeature.DefaultMutableFeatureGate)
 
 	s, err := NewOptions()
 	if err != nil {
@@ -242,13 +249,13 @@ func NewCommand() *cobra.Command {
 				ProjectOwnerRoleNamespace = SystemNamespace
 			}
 
-			c, err := s.Config(KnownControllers(), nil, ControllerAliases())
+			c, err := s.Config(cmd.Context(), KnownControllers(), nil, ControllerAliases())
 			if err != nil {
 				return err
 			}
 
 			// add feature enablement metrics
-			fg := s.ComponentGlobalsRegistry.FeatureGateFor(featuregate.DefaultKubeComponent)
+			fg := s.ComponentGlobalsRegistry.FeatureGateFor(basecompatibility.DefaultKubeComponent)
 			fg.(featuregate.MutableFeatureGate).AddMetrics()
 			return Run(context.Background(), c.Complete(), s)
 		},
@@ -290,14 +297,14 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&AcceptInvitationRoleName, "accept-invitation-role-name", "iam.miloapis.com-acceptinvitation", "The name of the role that will be used to grant accept invitation permissions.")
 	fs.StringVar(&UserInvitationEmailTemplate, "user-invitation-email-template", "emailtemplates.notification.miloapis.com-userinvitationemailtemplate", "The name of the template that will be used to send the user invitation email.")
 	fs.StringVar(&UserWaitlistPendingEmailTemplate, "user-waitlist-pending-email-template", "emailtemplates.notification.miloapis.com-userwaitlistemailtemplate", "The name of the template that will be used to send the waitlist pending email.")
-	fs.StringVar(&UserWaitlistApprovedEmailTemplate, "user-waitlist-approved-email-template", "emailtemplates.notification.miloapis.com-userapprovedemailtemplate", "The name of the template that will be used to send the waitlist approved email.")
+	fs.StringVar(&UserWaitlistApprovedEmailTemplate, "user-waitlist-approved-email-template", "emailtemplates.notification.miloapis.com-userwelcomeemailtemplate", "The name of the template that will be used to send the waitlist approved email.")
 	fs.StringVar(&UserWaitlistRejectedEmailTemplate, "user-waitlist-rejected-email-template", "emailtemplates.notification.miloapis.com-userrejectedemailtemplate", "The name of the template that will be used to send the waitlist rejected email.")
 	fs.StringVar(&PlatformInvitationEmailTemplate, "platform-invitation-email-template", "emailtemplates.notification.miloapis.com-platforminvitationemailtemplate", "The name of the template that will be used to send the platform invitation email.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
 	fs.StringVar(&PlatformInvitationEmailVariableActionUrl, "platform-invitation-email-variable-action-url", "https://cloud.datum.net", "The action url for the platform invitation email.")
 	fs.StringVar(&OrganizationMembershipSelfDeleteRoleName, "organization-membership-self-delete-role-name", "organizationmembership-self-delete", "The name of the role that will be used to grant organization membership self delete actions.")
 	fs.StringVar(&OrganizationMembershipSelfDeleteRoleNamespace, "organization-membership-self-delete-role-namespace", "milo-system", "The namespace where the organization membership self delete role is located. Defaults to system-namespace if not specified.")
-	fs.StringVar(&NoteCreatorEditorRoleName, "note-creator-editor-role-name", "crm-note-creator-editor", "The name of the role that will be used to grant note creator edit permissions.")
+	fs.StringVar(&NoteCreatorEditorRoleName, "note-creator-editor-role-name", "notes-creator-editor", "The name of the role that will be used to grant note creator edit permissions.")
 
 	fs.IntVar(&s.ControllerRuntimeWebhookPort, "controller-runtime-webhook-port", 9443, "The port to use for the controller-runtime webhook server.")
 
@@ -429,6 +436,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 
 			infraCluster, err := cluster.New(infraClient, func(o *cluster.Options) {
 				o.Scheme = Scheme
+				o.Cache = cache.Options{
+					DefaultTransform: cache.TransformStripManagedFields(),
+				}
 			})
 			if err != nil {
 				logger.Error(err, "Error building infrastructure cluster")
@@ -456,6 +466,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 					// Leader election is handled further up the stack.
 					LeaderElection: false,
 					Scheme:         Scheme,
+					// Strip managedFields from every cached object to cut per-object
+					// heap. Reconcilers do not read managedFields.
+					Cache: cache.Options{
+						DefaultTransform: cache.TransformStripManagedFields(),
+					},
 					// The existing controller manage endpoint already exposes a health
 					// probe endpoint. We can disable this one to avoid conflicts.
 					HealthProbeBindAddress: "0",
@@ -464,7 +479,16 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 					Metrics: metricsserver.Options{
 						BindAddress: "0",
 					},
-					WebhookServer: webhook.NewServer(webhook.Options{
+					// Use the same REST mapper as the controller context to share the
+					// cached API discovery across the webhook manager and controllers.
+					MapperProvider: func(c *restclient.Config, httpClient *http.Client) (meta.RESTMapper, error) {
+						return controllerContext.RESTMapper, nil
+					},
+					// Wrap the webhook server with ClusterAwareServer to automatically inject
+					// project control plane context from UserInfo.Extra into the request context.
+					// This allows webhook handlers to use mccontext.ClusterFrom(ctx) to determine
+					// which project control plane the request is targeting.
+					WebhookServer: milowebhook.NewClusterAwareServer(webhook.NewServer(webhook.Options{
 						Port:    opts.ControllerRuntimeWebhookPort,
 						CertDir: opts.SecureServing.ServerCert.CertDirectory,
 						// The webhook server expects the key and cert files to be in the
@@ -474,7 +498,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 						// key and cert file names.
 						KeyName:  strings.TrimPrefix(opts.SecureServing.ServerCert.CertKey.KeyFile, opts.SecureServing.ServerCert.CertDirectory+"/"),
 						CertName: strings.TrimPrefix(opts.SecureServing.ServerCert.CertKey.CertFile, opts.SecureServing.ServerCert.CertDirectory+"/"),
-					}),
+					})),
 				},
 			)
 			if err != nil {
@@ -546,10 +570,8 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				logger.Error(err, "Error setting up platform access rejection webhook")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
-			if err := crmv1alpha1webhook.SetupNoteWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up note webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
+			// Note webhooks are set up later after the multicluster manager is created,
+			// so they can use it for project control plane lookups.
 
 			projectCtrl := resourcemanagercontroller.ProjectController{
 				ControlPlaneClient: ctrl.GetClient(),
@@ -618,6 +640,15 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				ClusterOptions: []cluster.Option{
 					func(o *cluster.Options) {
 						o.Scheme = Scheme
+						o.Cache = cache.Options{
+							ByObject: map[client.Object]cache.ByObject{
+								&quotav1alpha1.ResourceClaim{}:   {},
+								&quotav1alpha1.ResourceGrant{}:   {},
+								&quotav1alpha1.AllowanceBucket{}: {},
+							},
+							DefaultTransform:            cache.TransformStripManagedFields(),
+							ReaderFailOnMissingInformer: true,
+						}
 					},
 				},
 				InternalServiceDiscovery: false, // Use Project resources for user-facing API
@@ -655,20 +686,28 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			logger.Info("Local cluster engaged successfully")
 
-			// Start concurrently to resolve circular dependency between provider and manager
-			go func() {
-				logger.Info("Starting Datum cluster provider")
-				if err := provider.Run(ctx, mcMgr); err != nil {
-					logger.Error(err, "Datum cluster provider failed")
-					panic(err)
-				}
-			}()
+			// Set up note webhooks with multicluster manager for project control plane lookups
+			if err := notesv1alpha1webhook.SetupNoteWebhooksWithManager(ctrl, mcMgr); err != nil {
+				logger.Error(err, "Error setting up note webhook")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+			if err := notesv1alpha1webhook.SetupClusterNoteWebhooksWithManager(ctrl, mcMgr); err != nil {
+				logger.Error(err, "Error setting up clusternote webhook")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
 
+			// The multicluster manager automatically starts the provider because
+			// Provider implements multicluster.ProviderRunnable (Start method).
 			go func() {
 				logger.Info("Starting multicluster manager for quota system")
 				if err := mcMgr.Start(ctx); err != nil {
-					logger.Error(err, "Multicluster manager failed")
-					panic(err)
+					// Exit deterministically (code 1) and flush logs instead of
+					// panicking (which exits 2 with a stack that obscures the
+					// real cause, e.g. a missed graceful-shutdown deadline under
+					// load). FlushAndExit terminates the process, stopping the
+					// sibling managers and releasing the leader lease.
+					logger.Error(err, "Multicluster manager failed; shutting down controller-manager")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 				}
 			}()
 
@@ -722,6 +761,16 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			// ContactGroupEnrollmentController automatically enrolls new Contacts into
+			// the ContactGroups configured by ContactGroupEnrollmentPolicy resources.
+			contactGroupEnrollmentCtrl := notificationcontroller.ContactGroupEnrollmentController{
+				Client: ctrl.GetClient(),
+			}
+			if err := contactGroupEnrollmentCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up contact group enrollment controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			userInvitationCtrl := iamcontroller.UserInvitationController{
 				Client:                          ctrl.GetClient(),
 				SystemNamespace:                 SystemNamespace,
@@ -734,13 +783,23 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			noteCtrl := crmcontroller.NoteController{
+			noteCtrl := notescontroller.NoteController{
 				Client:                     ctrl.GetClient(),
 				CreatorEditorRoleName:      NoteCreatorEditorRoleName,
 				CreatorEditorRoleNamespace: SystemNamespace,
 			}
 			if err := noteCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up note controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			clusterNoteCtrl := notescontroller.ClusterNoteController{
+				Client:                     ctrl.GetClient(),
+				CreatorEditorRoleName:      NoteCreatorEditorRoleName,
+				CreatorEditorRoleNamespace: SystemNamespace,
+			}
+			if err := clusterNoteCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up clusternote controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
@@ -757,13 +816,15 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 
 			go func() {
 				if err := infraCluster.Start(ctx); err != nil {
-					panic(err)
+					logger.Error(err, "Infrastructure cluster failed; shutting down controller-manager")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 				}
 			}()
 
 			go func() {
 				if err := ctrl.Start(ctx); err != nil {
-					panic(err)
+					logger.Error(err, "Controller manager failed; shutting down controller-manager")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 				}
 			}()
 		}
@@ -807,11 +868,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.CoordinatedLeaderElection) {
-		binaryVersion, err := semver.ParseTolerant(featuregate.DefaultComponentGlobalsRegistry.EffectiveVersionFor(featuregate.DefaultKubeComponent).BinaryVersion().String())
+		binaryVersion, err := semver.ParseTolerant(apiservercompat.DefaultComponentGlobalsRegistry.EffectiveVersionFor(basecompatibility.DefaultKubeComponent).BinaryVersion().String())
 		if err != nil {
 			return err
 		}
-		emulationVersion, err := semver.ParseTolerant(featuregate.DefaultComponentGlobalsRegistry.EffectiveVersionFor(featuregate.DefaultKubeComponent).EmulationVersion().String())
+		emulationVersion, err := semver.ParseTolerant(apiservercompat.DefaultComponentGlobalsRegistry.EffectiveVersionFor(basecompatibility.DefaultKubeComponent).EmulationVersion().String())
 		if err != nil {
 			return err
 		}

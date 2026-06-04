@@ -1,0 +1,9 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: project-deletion-test
+status:
+  conditions:
+  - type: ResourceCleanup
+    status: "False"
+    reason: CleanupComplete

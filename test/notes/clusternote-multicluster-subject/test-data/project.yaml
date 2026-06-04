@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: cn-mc-test-project-1
+  labels:
+    test.miloapis.com/notes: "clusternote-multicluster"
+spec:
+  ownerRef:
+    kind: Organization
+    name: cn-mc-test-org

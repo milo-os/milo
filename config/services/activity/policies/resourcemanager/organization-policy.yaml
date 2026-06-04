@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# ActivityPolicy for Organization resources.
+# Defines how Organization API operations appear in activity timelines.
+#
+# Audit rules handle CRUD operations captured by the Kubernetes API server audit log.
+# No eventRules — the controller sets conditions but does not emit Kubernetes Events.
+#
+# Design principles:
+# - Use the organization name as display text
+# - Action-oriented language ("created organization", "deleted organization")
+# - Exclude system actors to reduce reconciliation noise
+# - has() guards before accessing nested spec fields
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: resourcemanager.miloapis.com-organization
+spec:
+  resource:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+
+  # Audit log rules for CRUD operations.
+  # All rules exclude system components (!audit.user.username.startsWith('system:'))
+  # so controller reconciliation doesn't generate activity noise.
+  auditRules:
+    - name: create
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} created organization {{ link(audit.objectRef.name, audit.objectRef) }}"
+
+    - name: delete
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} deleted organization {{ audit.objectRef.name }}"
+
+    - name: update
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource)"
+      summary: "{{ actor }} updated organization {{ link(audit.objectRef.name, audit.objectRef) }}"

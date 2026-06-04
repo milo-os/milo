@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam.miloapis.com-acceptinvitation
+  annotations:
+    kubernetes.io/display-name: Accept Invitation
+    kubernetes.io/description: Accept user invitations to join organizations
 spec:
   launchStage: Beta
   includedPermissions:

@@ -78,9 +78,11 @@ func (r *ClaimCreationPolicyReconciler) Reconcile(ctx context.Context, req mcrec
 	// Update policy status based on validation results
 	r.updatePolicyStatus(&policy, validationErrs)
 
-	// Update status if it has changed
+	// Always track the latest generation so the diff captures generation-only changes
+	policy.Status.ObservedGeneration = policy.Generation
+
+	// Only write to the API if something actually changed
 	if !equality.Semantic.DeepEqual(&policy.Status, originalStatus) {
-		policy.Status.ObservedGeneration = policy.Generation
 		if err := clusterClient.Status().Update(ctx, &policy); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update ClaimCreationPolicy status: %w", err)
 		}
@@ -174,7 +176,7 @@ func (r *ClaimCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.ClaimCreationPolicy{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true)).
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		// Watch ResourceRegistrations to revalidate policies when registrations change
 		Watches(
 			&quotav1alpha1.ResourceRegistration{},
@@ -184,7 +186,7 @@ func (r *ClaimCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 				},
 			),
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Named("claim-creation-policy").
 		Complete(r)

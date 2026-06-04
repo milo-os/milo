@@ -11,27 +11,6 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
-      path: /mutate-crm-miloapis-com-v1alpha1-note
-      port: 9443
-  failurePolicy: Fail
-  name: mnote.crm.miloapis.com
-  rules:
-  - apiGroups:
-    - crm.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - notes
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
       path: /mutate-iam-miloapis-com-v1alpha1-platformaccessapproval
       port: 9443
   failurePolicy: Fail
@@ -137,6 +116,48 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
+      path: /mutate-notes-miloapis-com-v1alpha1-clusternote
+      port: 9443
+  failurePolicy: Fail
+  name: mclusternote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - clusternotes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /mutate-notes-miloapis-com-v1alpha1-note
+      port: 9443
+  failurePolicy: Fail
+  name: mnote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - notes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
       path: /mutate-notification-miloapis-com-v1alpha1-contact
       port: 9443
   failurePolicy: Fail
@@ -178,28 +199,6 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: resourcemanager.miloapis.com
 webhooks:
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-crm-miloapis-com-v1alpha1-note
-      port: 9443
-  failurePolicy: Fail
-  name: vnote.crm.miloapis.com
-  rules:
-  - apiGroups:
-    - crm.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - notes
-  sideEffects: None
 - admissionReviewVersions:
   - v1
   - v1beta1
@@ -347,6 +346,50 @@ webhooks:
     - DELETE
     resources:
     - useridentities
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-notes-miloapis-com-v1alpha1-clusternote
+      port: 9443
+  failurePolicy: Fail
+  name: vclusternote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - clusternotes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-notes-miloapis-com-v1alpha1-note
+      port: 9443
+  failurePolicy: Fail
+  name: vnote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - notes
   sideEffects: None
 - admissionReviewVersions:
   - v1

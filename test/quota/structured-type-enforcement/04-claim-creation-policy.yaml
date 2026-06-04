@@ -1,0 +1,28 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ClaimCreationPolicy
+metadata:
+  name: st-test-endpointslice-claim-policy
+  labels:
+    test.miloapis.com/quota: "structured-type"
+spec:
+  disabled: false
+  trigger:
+    resource:
+      apiVersion: "discovery.k8s.io/v1"
+      kind: "EndpointSlice"
+    # No constraints - trigger for all EndpointSlices (matches Secret test pattern)
+  target:
+    resourceClaimTemplate:
+      metadata:
+        # Deterministic claim name using trigger.metadata.name — this is the
+        # pattern that fails when structured types produce "objectMeta" instead
+        # of "metadata" during unstructured conversion.
+        name: "endpointslice-{{ trigger.metadata.name }}"
+        namespace: "{{requestInfo.namespace}}"
+        labels:
+          quota.miloapis.com/test: "true"
+          test.miloapis.com/quota: "structured-type"
+      spec:
+        requests:
+          - resourceType: "test.structuredtype.miloapis.com/endpointslices"
+            amount: 1

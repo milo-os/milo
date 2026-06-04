@@ -10,10 +10,11 @@ spec:
           expr: |
             (time() - milo_projects_created_timestamp) > 60
             unless ignoring(type, reason) (milo_projects_status_condition{type="Ready"} == 1)
-          for: 0s
+          for: 2m
           labels:
             severity: critical
             slo_violation: "true"
           annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
             summary: "Project {{ $labels.resource_name }} is stuck creating for over 60 seconds"
             description: "Project {{ $labels.resource_name }} has been in creation state for {{ $value }} seconds without reaching Ready status, which exceeds the 60-second SLO threshold."

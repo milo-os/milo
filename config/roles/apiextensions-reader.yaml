@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: apiextensions-reader
+  annotations:
+    kubernetes.io/display-name: API Extensions Viewer
+    kubernetes.io/description: View access to custom resource definitions
 spec:
   launchStage: Beta
   includedPermissions:

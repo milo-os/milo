@@ -1,0 +1,102 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clusternote-multicluster-subject
+spec:
+  skip: true
+  description: |
+    Tests that ClusterNotes can reference cluster-scoped subjects (Namespaces)
+    in project control planes.
+
+    Validates:
+    - ClusterNote in project control plane can reference cluster-scoped Namespace
+    - Owner reference is correctly set on the ClusterNote
+    - ClusterNote is garbage collected when Namespace is deleted
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org
+    project:
+      kubeconfig: kubeconfig-project-1
+
+  steps:
+    - name: setup-organization
+      description: Create test organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-cn-mc-test-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create project in org control plane
+      cluster: org
+      try:
+        - apply:
+            file: test-data/project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: cn-mc-test-project-1
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'true'
+
+    - name: create-namespace-in-project
+      description: Create cluster-scoped Namespace in project control plane
+      cluster: project
+      try:
+        - apply:
+            file: test-data/namespace.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: cn-test-namespace
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-clusternote-referencing-namespace
+      description: Create ClusterNote referencing the Namespace in project control plane
+      cluster: project
+      try:
+        - apply:
+            file: test-data/clusternote.yaml
+        - assert:
+            resource:
+              apiVersion: notes.miloapis.com/v1alpha1
+              kind: ClusterNote
+              metadata:
+                name: test-namespace-clusternote
+              (length(metadata.ownerReferences) > `0`): true
+
+    - name: delete-namespace-verify-clusternote-deletion
+      description: Delete Namespace and verify ClusterNote is garbage collected
+      cluster: project
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: cn-test-namespace
+        - wait:
+            apiVersion: notes.miloapis.com/v1alpha1
+            kind: ClusterNote
+            name: test-namespace-clusternote
+            timeout: 60s
+            for:
+              deletion: {}

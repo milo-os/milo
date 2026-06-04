@@ -17,11 +17,13 @@ const (
 	ScopeTypeKey = PlatformNamespace + "scope.type"
 	ScopeNameKey = PlatformNamespace + "scope.name"
 
-	// Scope type values
+	// Scope type values - use PascalCase to match Kubernetes Kind naming convention
+	// and align with how Milo sets parent-type in user.extra.
+	// "global" remains lowercase as it's an internal default, not from user.extra.
 	ScopeTypeGlobal       = "global"
-	ScopeTypeOrganization = "organization"
-	ScopeTypeProject      = "project"
-	ScopeTypeUser         = "user"
+	ScopeTypeOrganization = "Organization"
+	ScopeTypeProject      = "Project"
+	ScopeTypeUser         = "User"
 
 	// User extra keys (from iam.miloapis.com/v1alpha1/doc.go)
 	ParentTypeExtraKey = "iam.miloapis.com/parent-type"

@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	identityv1alpha1 "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
@@ -48,9 +49,20 @@ func (r *REST) List(ctx context.Context, opts *metainternalversion.ListOptions) 
 		uid = u.GetUID()
 		groups = u.GetGroups()
 	}
-	logger.V(4).Info("Listing sessions", "username", username, "uid", uid, "groups", groups)
-	// ignore selectors; self-scoped list delegated to provider
+	// Forward the caller's selectors to the backend so cross-user lookups
+	// (e.g. status.userUID=<uid>) reach the auth-provider-zitadel REST
+	// handler. The handler runs its own SAR check against milo using the
+	// caller identity preserved via X-Remote-* headers in DynamicProvider.
 	lo := metav1.ListOptions{}
+	if opts != nil {
+		if opts.FieldSelector != nil {
+			lo.FieldSelector = opts.FieldSelector.String()
+		}
+		if opts.LabelSelector != nil {
+			lo.LabelSelector = opts.LabelSelector.String()
+		}
+	}
+	logger.V(4).Info("Listing sessions", "username", username, "uid", uid, "groups", groups, "fieldSelector", lo.FieldSelector, "labelSelector", lo.LabelSelector)
 	res, err := r.backend.ListSessions(ctx, u, &lo)
 	if err != nil {
 		logger.Error(err, "List sessions failed")
@@ -97,14 +109,22 @@ func (r *REST) Delete(ctx context.Context, name string, _ rest.ValidateObjectFun
 
 func (r *REST) Destroy() {}
 
-// Satisfy rest.TableConvertor with a no-op conversion (returning nil uses default table printer)
+func truncateForTable(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return strings.TrimSpace(s[:max]) + "…"
+}
+
 func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
 	table := &metav1.Table{
 		ColumnDefinitions: []metav1.TableColumnDefinition{
-			{Name: "Name", Type: "string"},
-			{Name: "Provider", Type: "string"},
-			{Name: "UserUID", Type: "string"},
-			{Name: "Age", Type: "date"},
+			{Name: "Name", Type: "string", Format: "name", Description: "Metadata name of the session.", Priority: 0},
+			{Name: "Provider", Type: "string", Description: "Authentication provider.", Priority: 0},
+			{Name: "Age", Type: "date", Description: "Creation timestamp.", Priority: 0},
+			{Name: "User agent", Type: "string", Description: "Client User-Agent (truncated in table view).", Priority: 1},
+			{Name: "Last updated", Type: "string", Description: "Provider last update time (RFC3339), if known.", Priority: 1},
+			{Name: "UserUID", Type: "string", Description: "Owning user UID.", Priority: 1},
 		},
 	}
 
@@ -115,8 +135,19 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 			// metav1.Table wants a date in the cell; pass the timestamp
 			age = s.CreationTimestamp
 		}
+		lastUpdated := ""
+		if s.Status.LastUpdatedAt != nil {
+			lastUpdated = s.Status.LastUpdatedAt.Time.Format(time.RFC3339)
+		}
 		table.Rows = append(table.Rows, metav1.TableRow{
-			Cells:  []interface{}{s.Name, s.Status.Provider, s.Status.UserUID, age.Time.Format(time.RFC3339)},
+			Cells: []interface{}{
+				s.Name,
+				s.Status.Provider,
+				age.Time.Format(time.RFC3339),
+				truncateForTable(s.Status.UserAgent, 80),
+				lastUpdated,
+				s.Status.UserUID,
+			},
 			Object: runtime.RawExtension{Object: s},
 		})
 	}

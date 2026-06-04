@@ -4,3 +4,4 @@ kind: Component
 resources:
   - httproute.yaml
   - backend-tls-policy.yaml
+  - backend-traffic-policy.yaml

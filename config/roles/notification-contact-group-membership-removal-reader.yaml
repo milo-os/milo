@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-contact-group-membership-removal-reader
+  annotations:
+    kubernetes.io/display-name: Contact Group Membership Removal Viewer
+    kubernetes.io/description: View notification contact group membership removals
 spec:
   launchStage: Beta
   includedPermissions:

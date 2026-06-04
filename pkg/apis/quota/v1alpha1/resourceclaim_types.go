@@ -89,7 +89,9 @@ type ResourceClaimSpec struct {
 	//   - Project resource triggering Project quota claim
 	//   - User resource triggering User quota claim
 	//   - Organization resource triggering storage quota claim
-	ResourceRef UnversionedObjectReference `json:"resourceRef,omitempty"`
+	//
+	// +optional
+	ResourceRef *UnversionedObjectReference `json:"resourceRef,omitempty"`
 }
 
 // ResourceClaimAllocationStatus tracks the allocation status for a specific resource
@@ -355,6 +357,7 @@ const (
 // +kubebuilder:selectablefield:JSONPath=".spec.resourceRef.kind"
 // +kubebuilder:selectablefield:JSONPath=".spec.resourceRef.name"
 // +kubebuilder:selectablefield:JSONPath=".spec.resourceRef.namespace"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization,Project"
 type ResourceClaim struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

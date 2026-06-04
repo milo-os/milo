@@ -20,6 +20,7 @@ type GroupStatus struct {
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // Group is the Schema for the groups API
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization"
 type Group struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

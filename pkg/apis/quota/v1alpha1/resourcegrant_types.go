@@ -246,6 +246,7 @@ const (
 // +k8s:openapi-gen=true
 // +kubebuilder:selectablefield:JSONPath=".spec.consumerRef.kind"
 // +kubebuilder:selectablefield:JSONPath=".spec.consumerRef.name"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization,Project"
 type ResourceGrant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

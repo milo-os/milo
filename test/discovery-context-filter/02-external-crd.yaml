@@ -1,0 +1,27 @@
+# Models an external service tagging its CRD with the parent-contexts
+# annotation. We don't use a +kubebuilder marker here — this is the path a
+# third-party service would take when installing its API on top of Milo.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: discoverywidgets.discovery-filter-test.example.com
+  annotations:
+    discovery.miloapis.com/parent-contexts: "Organization"
+spec:
+  group: discovery-filter-test.example.com
+  scope: Namespaced
+  names:
+    kind: DiscoveryWidget
+    plural: discoverywidgets
+    singular: discoverywidget
+    listKind: DiscoveryWidgetList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object

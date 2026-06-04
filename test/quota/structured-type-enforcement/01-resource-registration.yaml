@@ -1,0 +1,19 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceRegistration
+metadata:
+  name: st-test-endpointslices-per-project
+  labels:
+    test.miloapis.com/quota: "structured-type"
+spec:
+  consumerType:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Project
+  type: "Entity"
+  resourceType: "test.structuredtype.miloapis.com/endpointslices"
+  description: "Test quota for EndpointSlices per project (structured type enforcement)"
+  baseUnit: "endpointslice"
+  displayUnit: "endpointslices"
+  unitConversionFactor: 1
+  claimingResources:
+    - apiGroup: "discovery.k8s.io"
+      kind: EndpointSlice

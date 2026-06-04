@@ -38,6 +38,7 @@ const (
 // +kubebuilder:resource:scope=Cluster
 
 // ProjectControlPlane is the Schema for the projectcontrolplanes API.
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type ProjectControlPlane struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

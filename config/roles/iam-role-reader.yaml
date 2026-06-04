@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: role-reader
+  annotations:
+    kubernetes.io/display-name: Role Viewer
+    kubernetes.io/description: View IAM roles
 spec:
   launchStage: Beta
   includedPermissions:

@@ -14,12 +14,200 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session":            schema_pkg_apis_identity_v1alpha1_Session(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionList":        schema_pkg_apis_identity_v1alpha1_SessionList(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus":      schema_pkg_apis_identity_v1alpha1_SessionStatus(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity":       schema_pkg_apis_identity_v1alpha1_UserIdentity(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityList":   schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus": schema_pkg_apis_identity_v1alpha1_UserIdentityStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey":       schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyList":   schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec":   schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus": schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session":                 schema_pkg_apis_identity_v1alpha1_Session(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionList":             schema_pkg_apis_identity_v1alpha1_SessionList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus":           schema_pkg_apis_identity_v1alpha1_SessionStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity":            schema_pkg_apis_identity_v1alpha1_UserIdentity(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityList":        schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus":      schema_pkg_apis_identity_v1alpha1_UserIdentityStatus(ref),
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ServiceAccountKey is the Schema for the serviceaccountkeys API",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec", "go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ServiceAccountKeyList contains a list of ServiceAccountKey",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ServiceAccountKeySpec defines the desired state of ServiceAccountKey",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"serviceAccountUserName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ServiceAccountUserName is the email address of the ServiceAccount that owns this key.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"expirationDate": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ExpirationDate is the date and time when the ServiceAccountKey will expire. If not specified, the ServiceAccountKey will never expire.",
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
+						},
+					},
+					"publicKey": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PublicKey is the public key of the ServiceAccountKey. If not specified, the ServiceAccountKey will be created with an auto-generated public key.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"serviceAccountUserName"},
+			},
+		},
+		Dependencies: []string{
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Time"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ServiceAccountKeyStatus defines the observed state of ServiceAccountKey",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"authProviderKeyID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AuthProviderKeyID is the unique identifier for the key in the auth provider. This field is populated by the controller after the key is created in the auth provider. For example, when using Zitadel, a typical value might be: \"326102453042806786\"",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"privateKey": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PrivateKey contains the PEM-encoded RSA private key generated during resource creation. This field is populated only in the creation response and is never persisted to etcd. Any value present on a GET or LIST response indicates a bug in the server implementation.\n\nNote: The private key is NOT logged in API server audit logs. The audit policy is configured to log ServiceAccountKey resources at the Metadata level only, which redacts the response body containing the private key.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions provide conditions that represent the current status of the ServiceAccountKey.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.Condition"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Condition"},
 	}
 }
 
@@ -46,7 +234,7 @@ func schema_pkg_apis_identity_v1alpha1_Session(ref common.ReferenceCallback) com
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
 						},
 					},
 					"status": {
@@ -59,7 +247,7 @@ func schema_pkg_apis_identity_v1alpha1_Session(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
 	}
 }
 
@@ -86,7 +274,7 @@ func schema_pkg_apis_identity_v1alpha1_SessionList(ref common.ReferenceCallback)
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
 						},
 					},
 					"items": {
@@ -107,7 +295,7 @@ func schema_pkg_apis_identity_v1alpha1_SessionList(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
 	}
 }
 
@@ -115,43 +303,57 @@ func schema_pkg_apis_identity_v1alpha1_SessionStatus(ref common.ReferenceCallbac
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
+				Description: "SessionStatus contains session metadata exposed for display and management. All fields except those required for identity are optional and populated by the authentication provider.",
+				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"userUID": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "UserUID is the unique identifier of the user who owns this session.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"provider": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Provider is the authentication provider for this session (e.g. \"zitadel\").",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"ip": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
+							Description: "IP is the client IP address associated with the session, if known.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"fingerprintID": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
+							Description: "FingerprintID is an optional device or client fingerprint from the provider.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"createdAt": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Description: "CreatedAt is when the session was created.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
 						},
 					},
-					"expiresAt": {
+					"lastUpdatedAt": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Description: "LastUpdatedAt is the last time the provider updated this session (e.g. Zitadel change_date).",
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
+						},
+					},
+					"userAgent": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UserAgent is the client User-Agent string for this session, if the provider supplies it.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},
@@ -159,7 +361,7 @@ func schema_pkg_apis_identity_v1alpha1_SessionStatus(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Time"},
 	}
 }
 
@@ -187,7 +389,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentity(ref common.ReferenceCallback
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
 						},
 					},
 					"status": {
@@ -200,7 +402,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentity(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
 	}
 }
 
@@ -228,7 +430,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref common.ReferenceCall
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
 						},
 					},
 					"items": {
@@ -249,7 +451,7 @@ func schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
 	}
 }
 

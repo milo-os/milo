@@ -3,6 +3,9 @@ kind: Role
 metadata:
   name: quota.miloapis.com-admin
   namespace: milo-system
+  annotations:
+    kubernetes.io/display-name: Quota Admin
+    kubernetes.io/description: Full access to quota resources including resource registrations, grants, claims, allowance buckets, and creation policies
   labels:
     quota.miloapis.com/role-type: admin
     quota.miloapis.com/service: quota

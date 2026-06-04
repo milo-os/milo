@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: milo-apiserver
+spec:
+  maxUnavailable: 20%
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milo-apiserver

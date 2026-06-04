@@ -1,0 +1,102 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: note-multicluster-subject
+spec:
+  skip: true
+  description: |
+    Tests that Notes can reference subjects (ConfigMaps) in project control planes.
+
+    Validates:
+    - Note created in project control plane can reference ConfigMap in same control plane
+    - Owner reference is correctly set on the Note
+    - Note is garbage collected when ConfigMap is deleted
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org
+    project:
+      kubeconfig: kubeconfig-project-1
+
+  steps:
+    - name: setup-organization
+      description: Create test organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-note-mc-test-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create project in org control plane
+      cluster: org
+      try:
+        - apply:
+            file: test-data/project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: note-mc-test-project-1
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'true'
+
+    - name: create-configmap-in-project
+      description: Create ConfigMap resource in project control plane
+      cluster: project
+      try:
+        - apply:
+            file: test-data/configmap.yaml
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: test-subject-configmap
+                namespace: default
+
+    - name: create-note-referencing-configmap
+      description: Create Note referencing the ConfigMap in project control plane
+      cluster: project
+      try:
+        - apply:
+            file: test-data/note.yaml
+        - assert:
+            resource:
+              apiVersion: notes.miloapis.com/v1alpha1
+              kind: Note
+              metadata:
+                name: test-configmap-note
+                namespace: default
+              (length(metadata.ownerReferences) > `0`): true
+
+    - name: delete-configmap-verify-note-deletion
+      description: Delete ConfigMap and verify Note is garbage collected
+      cluster: project
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: ConfigMap
+              name: test-subject-configmap
+              namespace: default
+        - wait:
+            apiVersion: notes.miloapis.com/v1alpha1
+            kind: Note
+            name: test-configmap-note
+            namespace: default
+            timeout: 60s
+            for:
+              deletion: {}

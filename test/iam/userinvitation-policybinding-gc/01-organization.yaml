@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: ui-gc-test-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-policybinding-gc"
+  annotations:
+    kubernetes.io/display-name: "UserInvitation GC Test Organization"
+spec:
+  type: Standard

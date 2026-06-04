@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: owner
+  annotations:
+    kubernetes.io/display-name: Owner
+    kubernetes.io/description: Full access to all platform resources including resource management, IAM, and core platform
 spec:
   launchStage: Beta
   inheritedRoles:
     - name: resourcemanager-admin
+    - name: iam-admin
     - name: core-admin
     - name: apiextensions-reader

@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-contact-group-membership-admin
+  annotations:
+    kubernetes.io/display-name: Contact Group Membership Admin
+    kubernetes.io/description: Full access to notification contact group memberships
 spec:
   launchStage: Beta
   inheritedRoles:

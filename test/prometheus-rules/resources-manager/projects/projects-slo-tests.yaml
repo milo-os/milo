@@ -22,6 +22,7 @@ tests:
               slo_violation: "true"
               resource_name: test-project
             exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
               summary: "Project test-project is stuck creating for over 60 seconds"
               description: "Project test-project has been in creation state for 120 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
 
@@ -72,6 +73,7 @@ tests:
               slo_violation: "true"
               resource_name: stuck-project
             exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
               summary: "Project stuck-project is stuck creating for over 60 seconds"
               description: "Project stuck-project has been in creation state for 90 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
 
@@ -97,5 +99,6 @@ tests:
               slo_violation: "true"
               resource_name: multi-stuck-project
             exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
               summary: "Project multi-stuck-project is stuck creating for over 60 seconds"
               description: "Project multi-stuck-project has been in creation state for 150 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."

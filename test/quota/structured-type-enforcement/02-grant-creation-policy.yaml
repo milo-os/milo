@@ -1,0 +1,35 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: GrantCreationPolicy
+metadata:
+  name: st-test-project-endpointslice-grant-policy
+  labels:
+    test.miloapis.com/quota: "structured-type"
+spec:
+  disabled: false
+  trigger:
+    resource:
+      apiVersion: "resourcemanager.miloapis.com/v1alpha1"
+      kind: "Project"
+    constraints:
+      - expression: 'has(trigger.metadata.labels) && "test.miloapis.com/quota" in trigger.metadata.labels && trigger.metadata.labels["test.miloapis.com/quota"] == "structured-type"'
+  target:
+    parentContext:
+      apiGroup: "resourcemanager.miloapis.com"
+      kind: "Project"
+      nameExpression: "trigger.metadata.name"
+    resourceGrantTemplate:
+      metadata:
+        name: "auto-grant-{{trigger.metadata.name}}"
+        namespace: "milo-system"
+        labels:
+          quota.miloapis.com/auto-created: "true"
+          test.miloapis.com/quota: "structured-type"
+      spec:
+        consumerRef:
+          apiGroup: "resourcemanager.miloapis.com"
+          kind: "Project"
+          name: "{{trigger.metadata.name}}"
+        allowances:
+          - resourceType: "test.structuredtype.miloapis.com/endpointslices"
+            buckets:
+              - amount: 5

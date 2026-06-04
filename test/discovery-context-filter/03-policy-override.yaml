@@ -1,0 +1,11 @@
+apiVersion: discovery.miloapis.com/v1alpha1
+kind: DiscoveryContextPolicy
+metadata:
+  name: test-policy-override
+spec:
+  rules:
+    # Override the CRD annotation that tags discoverywidgets as Organization-only.
+    # The policy sets it to Platform-only so it should appear at root but not in org context.
+    - group: "discovery-filter-test.example.com"
+      resources: ["discoverywidgets"]
+      contexts: ["Platform"]

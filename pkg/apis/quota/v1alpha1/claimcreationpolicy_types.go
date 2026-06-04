@@ -366,6 +366,7 @@ func (t *ClaimTriggerResource) GetGVK() schema.GroupVersionKind {
 // +kubebuilder:selectablefield:JSONPath=".spec.trigger.resource.kind"
 // +kubebuilder:selectablefield:JSONPath=".spec.trigger.resource.apiVersion"
 // +kubebuilder:selectablefield:JSONPath=".spec.disabled"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type ClaimCreationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

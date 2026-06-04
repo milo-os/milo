@@ -27,10 +27,13 @@ import (
 	legacyregistry "k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
+
 	"go.miloapis.com/milo/internal/quota/engine"
 	"go.miloapis.com/milo/internal/quota/validation"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	milorequest "go.miloapis.com/milo/pkg/request"
+	milofilters "go.miloapis.com/milo/pkg/server/filters"
 )
 
 const (
@@ -52,11 +55,25 @@ var (
 		},
 		[]string{"result", "policy_name", "policy_namespace", "resource_group", "resource_kind"},
 	)
+
+	// claimResolutionTotal tracks how often each pre-create resolution path
+	// fires for existing claims at the predetermined name. This provides
+	// visibility into stale-claim behavior that would otherwise be hidden.
+	claimResolutionTotal = metrics.NewCounterVec(
+		&metrics.CounterOpts{
+			Subsystem:      "milo_quota",
+			Name:           "admission_existing_claim_resolution_total",
+			Help:           "Total resolutions of existing ResourceClaims encountered during admission (granted=short-circuit, denied=conflict returned, deleted_pending=stale claim removed, create_conflict=Create returned AlreadyExists).",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"resolution"},
+	)
 )
 
 func init() {
 	// Register metrics with Kubernetes legacy registry so they are exposed on the apiserver /metrics.
 	legacyregistry.MustRegister(admissionResultTotal)
+	legacyregistry.MustRegister(claimResolutionTotal)
 }
 
 // ResourceQuotaEnforcementPlugin enforces quota by creating ResourceClaims for applicable resources.
@@ -456,11 +473,21 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 		// Already unstructured (CRDs from apiextensions-apiserver)
 		unstructuredObj = v
 	default:
-		// Structured type (native k8s types like Secret, ConfigMap, etc.)
-		// Convert to unstructured for consistent processing
-		unstructuredMap, convErr := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+		// Structured type (native k8s types) — the admission handler decodes
+		// these as internal Go types (e.g. pkg/apis/discovery.EndpointSlice),
+		// not the external versioned types (e.g. api/discovery/v1.EndpointSlice).
+		// Internal types inline ObjectMeta without a "metadata" wrapper, so
+		// both json.Marshal and ToUnstructured produce maps without a "metadata"
+		// key. Convert to the external versioned type first using the scheme,
+		// then use ToUnstructured to get proper Kubernetes JSON structure.
+		toConvert := obj
+		targetGV := schema.GroupVersion{Group: gvk.Group, Version: gvk.Version}
+		if versioned, convErr := legacyscheme.Scheme.ConvertToVersion(obj, targetGV); convErr == nil {
+			toConvert = versioned
+		}
+		unstructuredMap, convErr := runtime.DefaultUnstructuredConverter.ToUnstructured(toConvert)
 		if convErr != nil {
-			return fmt.Errorf("failed to convert %T to unstructured: %w", obj, convErr)
+			return fmt.Errorf("failed to convert %T to unstructured: %w", toConvert, convErr)
 		}
 		unstructuredObj = &unstructured.Unstructured{Object: unstructuredMap}
 	}
@@ -495,21 +522,28 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 	if err := p.createAndWaitForResourceClaim(ctx, attrs, policy, evalContext); err != nil {
 		// ResourceClaim creation or granting failed - block the resource creation
 
-		// Record denied admission decision with full context
-		admissionResultTotal.WithLabelValues("denied", policy.Name, policy.Namespace,
+		failure, ok := asClaimFailure(err)
+		if !ok {
+			// Unclassified errors bubble up as an infrastructure failure.
+			failure = newInternalFailure(err)
+		}
+
+		outcome := admissionOutcomeFor(failure.kind)
+		admissionResultTotal.WithLabelValues(outcome, policy.Name, policy.Namespace,
 			evalContext.GVK.Group, evalContext.GVK.Kind).Inc()
 
 		p.logger.Error(err, "ResourceClaim not granted, denying resource creation",
 			"policy", policy.Name,
 			"resourceName", attrs.GetName(),
-			"gvk", gvk)
+			"gvk", gvk,
+			"failureKind", outcome)
 
-		// Return quota exceeded error using Forbidden (403) - consistent with K8s core
-		// The error message clearly indicates it's a quota issue, not an auth failure
+		// Map the failure kind to a user-facing error. All paths return 403
+		// Forbidden (consistent with core Kubernetes quota behavior) but the
+		// message distinguishes the root cause so callers can take the right
+		// action.
 		gr := schema.GroupResource{Group: gvk.Group, Resource: attrs.GetResource().Resource}
-
-		//lint:ignore ST1005 "Error message intentionally capitalized for user-facing display"
-		return errors.NewForbidden(gr, attrs.GetName(), fmt.Errorf("Insufficient quota resources available. Review your quota usage and reach out to support if you need additional resources."))
+		return errors.NewForbidden(gr, attrs.GetName(), userFacingClaimError(failure))
 	}
 
 	// Record granted admission decision with full context
@@ -523,8 +557,61 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 	return nil // Allow original resource creation only if claim is granted
 }
 
+// admissionOutcomeFor maps a claim failure kind to the label emitted on
+// admission_result_total so operators can tell denials apart from timeouts
+// and infrastructure errors in metrics.
+func admissionOutcomeFor(kind claimFailureKind) string {
+	switch kind {
+	case claimFailureDenied:
+		return "denied"
+	case claimFailureTimeout:
+		return "timeout"
+	case claimFailureConflict:
+		return "conflict"
+	default:
+		return "internal_error"
+	}
+}
+
+// userFacingClaimError converts a typed claim failure into the error surfaced
+// in the 403 Forbidden response body.
+//
+// Tone guidelines for these messages:
+//   - Explain what happened in plain language (no "admission", "eval", etc).
+//   - Tell the user what they can do next (retry, free capacity, get help).
+//   - Keep it to one or two sentences.
+//   - Capitalize the leading word because the message is shown verbatim in
+//     kubectl / API client output.
+func userFacingClaimError(f *claimFailure) error {
+	switch f.kind {
+	case claimFailureDenied:
+		if f.message != "" {
+			//lint:ignore ST1005 user-facing message
+			return fmt.Errorf("You've reached your quota for this resource type (%s). Delete unused resources to free up capacity, or contact support to request a higher limit.", f.message)
+		}
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("You've reached your quota for this resource type. Delete unused resources to free up capacity, or contact support to request a higher limit.")
+	case claimFailureTimeout:
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("Your request took too long to be checked against your quota. Please try again in a moment — if this keeps happening, contact support.")
+	case claimFailureConflict:
+		if f.message != "" {
+			//lint:ignore ST1005 user-facing message
+			return fmt.Errorf("We're still cleaning up from a previous attempt to create this resource (%s). Please try again in a few seconds.", f.message)
+		}
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("We're still cleaning up from a previous attempt to create this resource. Please try again in a few seconds.")
+	default:
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("Something went wrong while checking your quota for this request. Please try again — if this keeps happening, contact support.")
+	}
+}
+
 // createAndWaitForResourceClaim creates a ResourceClaim and blocks until the claim is resolved.
 // The waiter is registered before claim creation to prevent missed events.
+//
+// All error returns are *claimFailure so the caller can produce precise
+// user-facing messages and metrics labels.
 func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx context.Context, attrs admission.Attributes, policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext) error {
 	ctx, span := p.startSpan(ctx, "quota.admission.ResourceQuotaEnforcement.createAndWaitForResourceClaim",
 		trace.WithAttributes(
@@ -538,7 +625,7 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to get watch manager")
-		return fmt.Errorf("failed to get watch manager: %w", err)
+		return newInternalFailure(fmt.Errorf("failed to get watch manager: %w", err))
 	}
 
 	// Determine claim name (must be deterministic to pre-register waiter before claim creation).
@@ -546,7 +633,7 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to determine claim name")
-		return fmt.Errorf("failed to determine claim name: %w", err)
+		return newInternalFailure(fmt.Errorf("failed to determine claim name: %w", err))
 	}
 	namespace := p.getClaimNamespace(policy, evalContext)
 
@@ -567,7 +654,7 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to register waiter")
-		return fmt.Errorf("failed to register waiter: %w", err)
+		return newInternalFailure(fmt.Errorf("failed to register waiter: %w", err))
 	}
 	defer cancelFunc()
 
@@ -576,11 +663,27 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		"namespace", namespace,
 		"timeout", timeout)
 
-	err = p.createResourceClaim(ctx, attrs, policy, evalContext, claimName, namespace)
-	if err != nil {
-		span.RecordError(err)
+	// createResourceClaim either creates a fresh ResourceClaim, returns a
+	// typed *claimFailure for a real failure, or returns an errAlreadyGranted
+	// sentinel when an existing Granted claim with the same name already
+	// reserves capacity for this resource.
+	createErr := p.createResourceClaim(ctx, attrs, policy, evalContext, claimName, namespace)
+	switch {
+	case createErr == nil:
+		// Claim was created fresh; fall through to wait for the controller.
+	case createErr == errAlreadyGranted:
+		span.SetAttributes(attribute.String("claim.result", "short_circuit_granted"))
+		p.logger.V(2).Info("Existing ResourceClaim already granted; short-circuiting admission",
+			"claimName", claimName,
+			"namespace", namespace)
+		return nil
+	default:
+		span.RecordError(createErr)
 		span.SetStatus(codes.Error, "Failed to create ResourceClaim")
-		return fmt.Errorf("failed to create ResourceClaim: %w", err)
+		if _, ok := asClaimFailure(createErr); ok {
+			return createErr
+		}
+		return newInternalFailure(createErr)
 	}
 
 	p.logger.V(2).Info("ResourceClaim created with predetermined name",
@@ -592,15 +695,18 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	case result, ok := <-resultChan:
 		if !ok {
 			span.SetStatus(codes.Error, "Result channel closed")
-			return fmt.Errorf("result channel closed unexpectedly")
+			return newInternalFailure(fmt.Errorf("result channel closed unexpectedly"))
 		}
 
-		// result.Error is only set for genuine errors (timeout, claim deleted)
-		// not for denials which use Granted=false
+		// Timeouts and deletions carry result.Error; denials do not (they
+		// come back as Granted=false with a denial Reason/message).
 		if result.Error != nil {
 			span.RecordError(result.Error)
 			span.SetStatus(codes.Error, "Wait failed")
-			return result.Error
+			if result.Reason == "timeout" {
+				return newTimeoutFailure(result.Error)
+			}
+			return newInternalFailure(result.Error)
 		}
 
 		if result.Granted {
@@ -611,22 +717,22 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 				"claimName", claimName,
 				"namespace", namespace)
 			return nil
-		} else {
-			span.SetAttributes(
-				attribute.String("claim.result", "denied"),
-				attribute.String("claim.denial_reason", result.Reason),
-			)
-			p.logger.Info("ResourceClaim denied",
-				"claimName", claimName,
-				"namespace", namespace,
-				"reason", result.Reason)
-			return fmt.Errorf("ResourceClaim was denied: %s", result.Reason)
 		}
+
+		span.SetAttributes(
+			attribute.String("claim.result", "denied"),
+			attribute.String("claim.denial_reason", result.Reason),
+		)
+		p.logger.Info("ResourceClaim denied",
+			"claimName", claimName,
+			"namespace", namespace,
+			"reason", result.Reason)
+		return newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, result.Reason)
 
 	case <-ctx.Done():
 		span.SetStatus(codes.Error, "Context cancelled")
 		watchManager.UnregisterClaimWaiter(claimName, namespace)
-		return ctx.Err()
+		return newInternalFailure(ctx.Err())
 	}
 }
 
@@ -652,6 +758,24 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 
 // createResourceClaim creates a ResourceClaim with the specified name and namespace.
 // The claim name must be predetermined to allow waiter registration before creation.
+//
+// Because claim names are deterministic, repeated admission attempts for the
+// same resource (for example when a client controller retries) can collide
+// with a leftover claim from a prior pass. Before attempting to Create this
+// function inspects any existing claim at the same name and:
+//
+//   - Granted (condition Granted=True) → returns errAlreadyGranted, which the
+//     caller treats as admission success. Quota has already been reserved
+//     for this resource, so there is nothing more to do.
+//   - Denied (Granted=False, reason=QuotaExceeded) → returns a
+//     claimFailureConflict. The DeniedAutoClaimCleanupController will remove
+//     the stale claim shortly; the user should retry.
+//   - Pending / no condition → deletes the stale claim and falls through to
+//     Create a fresh one. This covers claims left behind by a previous
+//     admission timeout.
+//
+// Any non-NotFound Get error falls through to Create so that transient API
+// read failures do not permanently block admission.
 func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context, attrs admission.Attributes, policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext, claimName, namespace string) error {
 	ctx, span := p.startSpan(ctx, "quota.admission.ResourceQuotaEnforcement.createResourceClaim",
 		trace.WithAttributes(
@@ -672,21 +796,30 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	claim.Namespace = namespace
 	claim.GenerateName = ""
 
-	claim.Spec.ResourceRef = quotav1alpha1.UnversionedObjectReference{
+	claim.Spec.ResourceRef = &quotav1alpha1.UnversionedObjectReference{
 		APIGroup:  evalContext.GVK.Group,
 		Kind:      evalContext.GVK.Kind,
 		Name:      attrs.GetName(),
 		Namespace: attrs.GetNamespace(),
 	}
 
-	// Derive consumer from project context when template doesn't specify one
+	// Derive consumer from the request's parent context when the
+	// ClaimCreationPolicy template doesn't specify one. Project context
+	// wins over Organization context when both are present (project
+	// control plane requests carry the org for telemetry but the
+	// consumer is the project).
 	if claim.Spec.ConsumerRef.Kind == "" || claim.Spec.ConsumerRef.Name == "" {
-		projectID, ok := milorequest.ProjectID(ctx)
-		if ok && projectID != "" {
+		if projectID, ok := milorequest.ProjectID(ctx); ok && projectID != "" {
 			claim.Spec.ConsumerRef = quotav1alpha1.ConsumerRef{
 				APIGroup: "resourcemanager.miloapis.com",
 				Kind:     "Project",
 				Name:     projectID,
+			}
+		} else if orgID, ok := milofilters.OrganizationID(ctx); ok && orgID != "" {
+			claim.Spec.ConsumerRef = quotav1alpha1.ConsumerRef{
+				APIGroup: "resourcemanager.miloapis.com",
+				Kind:     "Organization",
+				Name:     orgID,
 			}
 		}
 	}
@@ -726,12 +859,50 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 
 	client, err := p.getClient(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get client for context: %w", err)
+		return newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
+	}
+
+	// Resolve any existing claim at the same deterministic name before
+	// attempting to Create. See function doc comment for decision table.
+	if action, existing, getErr := p.resolveExistingClaim(ctx, client, gvr, claimName, namespace); getErr == nil {
+		switch action {
+		case existingClaimGranted:
+			claimResolutionTotal.WithLabelValues("granted").Inc()
+			return errAlreadyGranted
+		case existingClaimDenied:
+			claimResolutionTotal.WithLabelValues("denied").Inc()
+			denialMsg := extractGrantedConditionMessage(existing)
+			return newConflictFailure(denialMsg, nil)
+		case existingClaimPending:
+			// Stale pending claim - delete so we can create a fresh one. This
+			// mirrors what the stale-claim GC controller would eventually do,
+			// but doing it inline allows the current admission request to
+			// succeed on the fresh claim.
+			claimResolutionTotal.WithLabelValues("deleted_pending").Inc()
+			if delErr := client.Resource(gvr).Namespace(namespace).Delete(ctx, claimName, metav1.DeleteOptions{}); delErr != nil && !errors.IsNotFound(delErr) {
+				p.logger.Info("Failed to delete stale pending ResourceClaim before retry",
+					"claimName", claimName,
+					"namespace", namespace,
+					"error", delErr)
+				// Treat as conflict so the user retries once GC catches up.
+				return newConflictFailure("unable to clean up stale pending claim", delErr)
+			}
+			p.logger.V(2).Info("Deleted stale pending ResourceClaim before retry",
+				"claimName", claimName,
+				"namespace", namespace)
+		}
 	}
 
 	_, err = client.Resource(gvr).Namespace(namespace).Create(ctx, unstructuredObj, metav1.CreateOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to create ResourceClaim: %w", err)
+		if errors.IsAlreadyExists(err) {
+			// A concurrent admission pass (or our own Delete above racing
+			// with a replace) recreated the claim. Surface as conflict so
+			// the user retries.
+			claimResolutionTotal.WithLabelValues("create_conflict").Inc()
+			return newConflictFailure("concurrent quota evaluation in progress", err)
+		}
+		return newInternalFailure(fmt.Errorf("failed to create ResourceClaim: %w", err))
 	}
 
 	p.logger.V(2).Info("ResourceClaim created successfully",
@@ -741,6 +912,127 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	)
 
 	return nil
+}
+
+// existingClaimAction classifies how createResourceClaim should handle a
+// ResourceClaim that already exists at the predetermined name.
+type existingClaimAction int
+
+const (
+	// existingClaimAbsent indicates no existing claim (caller should Create).
+	existingClaimAbsent existingClaimAction = iota
+	// existingClaimGranted indicates capacity is already reserved; admission
+	// can short-circuit to allow.
+	existingClaimGranted
+	// existingClaimDenied indicates a previous denial awaiting GC; the user
+	// should retry.
+	existingClaimDenied
+	// existingClaimPending indicates a stale claim with no final condition;
+	// caller should delete and recreate.
+	existingClaimPending
+)
+
+// resolveExistingClaim inspects the predetermined name for a lingering
+// ResourceClaim from a prior admission pass and returns how to proceed.
+// Returns (existingClaimAbsent, nil, nil) when no claim exists or when the
+// read fails in a way that should fall through to Create.
+func (p *ResourceQuotaEnforcementPlugin) resolveExistingClaim(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, claimName, namespace string) (existingClaimAction, *unstructured.Unstructured, error) {
+	existing, err := client.Resource(gvr).Namespace(namespace).Get(ctx, claimName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return existingClaimAbsent, nil, nil
+		}
+		// Transient read error - log and fall through to Create. The Create
+		// will either succeed or return AlreadyExists, which is handled.
+		p.logger.V(2).Info("Failed to look up existing ResourceClaim, proceeding to Create",
+			"claimName", claimName,
+			"namespace", namespace,
+			"error", err)
+		return existingClaimAbsent, nil, nil
+	}
+
+	// Only apply pre-create handling to auto-created claims to avoid
+	// interfering with manually created ResourceClaims that happen to share
+	// a name. This is defense in depth: claim names are derived from the
+	// policy template plus the resource name, so collisions with manual
+	// claims should be rare.
+	labels := existing.GetLabels()
+	if labels["quota.miloapis.com/auto-created"] != "true" {
+		return existingClaimAbsent, nil, nil
+	}
+
+	switch classifyGrantedCondition(existing) {
+	case claimConditionGranted:
+		return existingClaimGranted, existing, nil
+	case claimConditionDenied:
+		return existingClaimDenied, existing, nil
+	default:
+		return existingClaimPending, existing, nil
+	}
+}
+
+// claimConditionState is the coarse Granted-condition state used by
+// resolveExistingClaim.
+type claimConditionState int
+
+const (
+	claimConditionPending claimConditionState = iota
+	claimConditionGranted
+	claimConditionDenied
+)
+
+// classifyGrantedCondition reads the Granted condition from a ResourceClaim
+// and returns the corresponding state. Missing conditions map to pending.
+func classifyGrantedCondition(claim *unstructured.Unstructured) claimConditionState {
+	conditions, found, err := unstructured.NestedSlice(claim.Object, "status", "conditions")
+	if err != nil || !found {
+		return claimConditionPending
+	}
+	for _, c := range conditions {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, _, _ := unstructured.NestedString(m, "type")
+		if condType != quotav1alpha1.ResourceClaimGranted {
+			continue
+		}
+		status, _, _ := unstructured.NestedString(m, "status")
+		reason, _, _ := unstructured.NestedString(m, "reason")
+		switch {
+		case status == string(metav1.ConditionTrue):
+			return claimConditionGranted
+		case status == string(metav1.ConditionFalse) && reason == quotav1alpha1.ResourceClaimDeniedReason:
+			return claimConditionDenied
+		default:
+			// Granted=False with any non-denied reason (e.g. PendingEvaluation,
+			// ValidationFailed) is not a final state from our perspective.
+			return claimConditionPending
+		}
+	}
+	return claimConditionPending
+}
+
+// extractGrantedConditionMessage returns the message from the Granted
+// condition if present, otherwise the empty string.
+func extractGrantedConditionMessage(claim *unstructured.Unstructured) string {
+	conditions, found, err := unstructured.NestedSlice(claim.Object, "status", "conditions")
+	if err != nil || !found {
+		return ""
+	}
+	for _, c := range conditions {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, _, _ := unstructured.NestedString(m, "type")
+		if condType != quotav1alpha1.ResourceClaimGranted {
+			continue
+		}
+		msg, _, _ := unstructured.NestedString(m, "message")
+		return msg
+	}
+	return ""
 }
 
 // validateResourceClaim validates ResourceClaim objects when they are created directly

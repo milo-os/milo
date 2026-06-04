@@ -1,0 +1,211 @@
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: milo-resourcemanager-metrics
+spec:
+  generators:
+    # resourcemanager.miloapis.com: OrganizationMembership
+    - name: resourcemanager-organization-memberships-info
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizationmemberships
+      families:
+        - name: milo_organization_memberships_info
+          help: "Information about resource manager organization memberships"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: organization_type
+                  value: "has(object.spec.type) ? object.spec.type : ''"
+
+    - name: resourcemanager-organization-memberships-created-timestamp
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizationmemberships
+      families:
+        - name: milo_organization_memberships_created_timestamp
+          help: "Creation timestamp of resource manager organization memberships"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: resourcemanager-organization-memberships-status-condition
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizationmemberships
+      families:
+        - name: milo_organization_memberships_status_condition
+          help: "Status conditions for resource manager organization memberships"
+          type: gauge
+          metrics:
+            - value: |
+                object.status.conditions.exists(c, c.type == 'Ready') ?
+                  (object.status.conditions.filter(c, c.type == 'Ready')[0].status == 'True' ? 1.0 : 0.0) :
+                  0.0
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "'Ready'"
+                - name: reason
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'Ready') ?
+                      object.status.conditions.filter(c, c.type == 'Ready')[0].reason : ''
+                - name: status
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'Ready') ?
+                      object.status.conditions.filter(c, c.type == 'Ready')[0].status : ''
+
+    # resourcemanager.miloapis.com: Organization
+    - name: resourcemanager-organizations-info
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizations
+      families:
+        - name: milo_organizations_info
+          help: "Information about resource manager organizations"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: organization_type
+                  value: "has(object.spec.type) ? object.spec.type : ''"
+
+    - name: resourcemanager-organizations-created-timestamp
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizations
+      families:
+        - name: milo_organizations_created_timestamp
+          help: "Creation timestamp of resource manager organizations"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: resourcemanager-organizations-status-condition
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizations
+      families:
+        - name: milo_organizations_status_condition
+          help: "Status conditions for resource manager organizations"
+          type: gauge
+          metrics:
+            - value: |
+                object.status.conditions.exists(c, c.type == 'Ready') ?
+                  (object.status.conditions.filter(c, c.type == 'Ready')[0].status == 'True' ? 1.0 : 0.0) :
+                  0.0
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "'Ready'"
+                - name: reason
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'Ready') ?
+                      object.status.conditions.filter(c, c.type == 'Ready')[0].reason : ''
+                - name: status
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'Ready') ?
+                      object.status.conditions.filter(c, c.type == 'Ready')[0].status : ''
+
+    # resourcemanager.miloapis.com: Project
+    - name: resourcemanager-projects-info
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: projects
+      families:
+        - name: milo_projects_info
+          help: "Information about resource manager projects"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: owner_kind
+                  value: "has(object.spec.ownerRef) ? object.spec.ownerRef.kind : ''"
+                - name: owner_name
+                  value: "has(object.spec.ownerRef) ? object.spec.ownerRef.name : ''"
+
+    - name: resourcemanager-projects-created-timestamp
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: projects
+      families:
+        - name: milo_projects_created_timestamp
+          help: "Creation timestamp of resource manager projects"
+          type: gauge
+          metrics:
+            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: resourcemanager-projects-status-condition
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: projects
+      families:
+        - name: milo_projects_status_condition
+          help: "Status conditions for resource manager projects"
+          type: gauge
+          metrics:
+            - value: |
+                object.status.conditions.exists(c, c.type == 'Ready') ?
+                  (object.status.conditions.filter(c, c.type == 'Ready')[0].status == 'True' ? 1.0 : 0.0) :
+                  0.0
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "'Ready'"
+                - name: reason
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'Ready') ?
+                      object.status.conditions.filter(c, c.type == 'Ready')[0].reason : ''
+                - name: status
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'Ready') ?
+                      object.status.conditions.filter(c, c.type == 'Ready')[0].status : ''

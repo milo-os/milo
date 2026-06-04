@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+configMapGenerator:
+  - name: milo-identity-resource-metrics
+    files:
+    - service_account_keys.yaml
+    options:
+      labels:
+        telemetry.datumapis.com/core-resource-metrics-config: "true"

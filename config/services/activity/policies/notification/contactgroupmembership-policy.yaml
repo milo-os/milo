@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# IMPORTANT: For DELETE operations, audit.requestObject is a DeleteOptions (not the resource),
+# so we use audit.responseObject to access the resource spec if available.
+apiVersion: activity.miloapis.com/v1alpha1
+kind: ActivityPolicy
+metadata:
+  name: notification.miloapis.com-contactgroupmembership
+spec:
+  resource:
+    apiGroup: notification.miloapis.com
+    kind: ContactGroupMembership
+
+  auditRules:
+    - name: create-with-refs
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.contactRef) && has(audit.requestObject.spec.contactGroupRef)"
+      summary: "{{ actor }} added {{ audit.requestObject.spec.contactRef.name }} to contact group {{ audit.requestObject.spec.contactGroupRef.name }}"
+
+    - name: create-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      summary: "{{ actor }} added a contact to a group"
+
+    - name: delete-with-refs
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.contactRef) && has(audit.responseObject.spec.contactGroupRef)"
+      summary: "{{ actor }} removed {{ audit.responseObject.spec.contactRef.name }} from contact group {{ audit.responseObject.spec.contactGroupRef.name }}"
+
+    - name: delete-fallback
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      summary: "{{ actor }} removed a contact from a group"

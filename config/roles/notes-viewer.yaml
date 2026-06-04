@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notes-viewer
+  annotations:
+    kubernetes.io/display-name: Notes Viewer
+    kubernetes.io/description: "Allows viewing notes and cluster notes."
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - notes.miloapis.com/notes.get
+    - notes.miloapis.com/notes.list
+    - notes.miloapis.com/notes.watch
+    - notes.miloapis.com/clusternotes.get
+    - notes.miloapis.com/clusternotes.list
+    - notes.miloapis.com/clusternotes.watch

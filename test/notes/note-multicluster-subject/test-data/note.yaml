@@ -1,0 +1,14 @@
+apiVersion: notes.miloapis.com/v1alpha1
+kind: Note
+metadata:
+  name: test-configmap-note
+  namespace: default
+  labels:
+    test.miloapis.com/notes: "multicluster"
+spec:
+  content: "This note references a ConfigMap in the project control plane"
+  subjectRef:
+    apiGroup: ""
+    kind: ConfigMap
+    name: test-subject-configmap
+    namespace: default

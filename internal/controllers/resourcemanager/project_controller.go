@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -81,7 +82,7 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("get project: %w", err)
 	}
 
-	// Deletion path: run purge, then remove finalizer
+	// Deletion path: clean up project resources, then remove finalizer
 	if !project.DeletionTimestamp.IsZero() {
 		// Best-effort delete the ProjectControlPlane in infra
 		if r.InfraClient != nil {
@@ -95,18 +96,102 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		if controllerutil.ContainsFinalizer(&project, projectFinalizer) {
 			projCfg := r.forProject(r.BaseConfig, project.Name)
-			if err := r.Purger.Purge(ctx, projCfg, project.Name, projectpurge.Options{
-				Timeout:  10 * time.Minute,
+
+			cleanupCond := apimeta.FindStatusCondition(project.Status.Conditions, resourcemanagerv1alpha.ProjectResourceCleanup)
+
+			// If awaiting completion, check whether resources have drained.
+			if cleanupCond != nil && cleanupCond.Status == metav1.ConditionTrue &&
+				cleanupCond.Reason == resourcemanagerv1alpha.ProjectCleanupAwaitingCompletionReason {
+
+				done, err := r.Purger.IsPurgeComplete(ctx, projCfg, project.Name)
+				if err != nil {
+					logger.Error(err, "check cleanup completion", "project", project.Name)
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+				if done {
+					// Update ResourceCleanup condition to reflect completion
+					cleanupDone := metav1.Condition{
+						Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
+						Status:             metav1.ConditionFalse,
+						Reason:             resourcemanagerv1alpha.ProjectCleanupCompleteReason,
+						Message:            "Project resources have been deleted",
+						ObservedGeneration: project.Generation,
+					}
+					if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupDone) {
+						if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
+							return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
+						}
+					}
+
+					// Re-fetch to get current resourceVersion after status update
+					if err := r.ControlPlaneClient.Get(ctx, req.NamespacedName, &project); err != nil {
+						return ctrl.Result{}, fmt.Errorf("re-fetch project: %w", err)
+					}
+
+					// Remove finalizer with fresh object
+					before := project.DeepCopy()
+					controllerutil.RemoveFinalizer(&project, projectFinalizer)
+					if err := r.ControlPlaneClient.Patch(ctx, &project, client.MergeFrom(before)); err != nil {
+						return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+					}
+					return ctrl.Result{}, nil
+				}
+
+				// Resources still exist — transition back to CleanupStarted
+				// so the next reconcile re-issues delete commands.
+				reissue := metav1.Condition{
+					Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
+					Status:             metav1.ConditionTrue,
+					Reason:             resourcemanagerv1alpha.ProjectCleanupStartedReason,
+					Message:            "Re-issuing delete commands for remaining project resources",
+					ObservedGeneration: project.Generation,
+				}
+				if apimeta.SetStatusCondition(&project.Status.Conditions, reissue) {
+					if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
+						return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
+					}
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+
+			// CleanupStarted or no condition yet — issue delete commands.
+			cleanupStarted := metav1.Condition{
+				Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
+				Status:             metav1.ConditionTrue,
+				Reason:             resourcemanagerv1alpha.ProjectCleanupStartedReason,
+				Message:            "Issuing delete commands for project resources",
+				ObservedGeneration: project.Generation,
+			}
+			if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupStarted) {
+				if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
+					return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
+				}
+			}
+
+			if err := r.Purger.StartPurge(ctx, projCfg, project.Name, projectpurge.Options{
+				Timeout:  2 * time.Minute,
 				Parallel: 16,
 			}); err != nil {
-				// requeue to retry purge
-				return ctrl.Result{RequeueAfter: 2 * time.Second}, fmt.Errorf("purge %q: %w", project.Name, err)
+				logger.Error(err, "start cleanup", "project", project.Name)
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
-			before := project.DeepCopy()
-			controllerutil.RemoveFinalizer(&project, projectFinalizer)
-			if err := r.ControlPlaneClient.Patch(ctx, &project, client.MergeFrom(before)); err != nil {
-				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+
+			// Transition to awaiting completion — subsequent reconciles
+			// will check IsPurgeComplete instead of re-issuing deletes.
+			cleanupAwaiting := metav1.Condition{
+				Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
+				Status:             metav1.ConditionTrue,
+				Reason:             resourcemanagerv1alpha.ProjectCleanupAwaitingCompletionReason,
+				Message:            "Waiting for project resources to be removed",
+				ObservedGeneration: project.Generation,
 			}
+			if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupAwaiting) {
+				if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
+					return ctrl.Result{}, fmt.Errorf("update awaiting status: %w", err)
+				}
+			}
+
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 		return ctrl.Result{}, nil
 	}
@@ -221,8 +306,8 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	if ok {
 		if err := ensureConnectorClass(ctx, pc.Dynamic,
-			"datum-connect",
-			"networking.datumapis.com/datum-connect",
+			"iroh-quic-tunnel",
+			"networking.datumapis.com/iroh-quic-tunnel",
 		); err != nil {
 			logger.Error(err, "ensure connectorclass failed", "project", project.Name)
 			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
@@ -403,6 +488,7 @@ func (r *ProjectController) SetupWithManager(mgr ctrl.Manager, infraCluster clus
 	r.Purger = projectpurge.New()
 
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		For(&resourcemanagerv1alpha.Project{}).
 		WatchesRawSource(source.TypedKind(
 			infraCluster.GetCache(),

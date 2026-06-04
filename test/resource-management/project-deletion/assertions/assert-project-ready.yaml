@@ -1,0 +1,21 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: project-deletion-test
+  labels:
+    test.miloapis.com/scenario: "project-deletion"
+    resourcemanager.miloapis.com/organization-name: test-project-deletion-org
+  ownerReferences:
+  - apiVersion: resourcemanager.miloapis.com/v1alpha1
+    kind: Organization
+    name: test-project-deletion-org
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-project-deletion-org
+status:
+  conditions:
+  - type: Ready
+    status: "True"
+    reason: Ready
+    message: Project is ready

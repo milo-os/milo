@@ -1,0 +1,16 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: st-test-endpointslice-1
+  namespace: default
+  labels:
+    test.miloapis.com/quota: "structured-type"
+addressType: FQDN
+endpoints:
+  - addresses:
+      - "google.com"
+    conditions:
+      ready: true
+ports:
+  - port: 443
+    protocol: TCP

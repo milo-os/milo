@@ -24,6 +24,10 @@ const (
 	// ProjectReady indicates that the project has been provisioned and is ready
 	// for use.
 	ProjectReady = "Ready"
+
+	// ProjectResourceCleanup indicates that project resources are being deleted
+	// as part of project teardown.
+	ProjectResourceCleanup = "ResourceCleanup"
 )
 
 const (
@@ -35,6 +39,18 @@ const (
 
 	// ProjectNameConflict indicates that the project name already exists
 	ProjectNameConflictReason = "ProjectNameConflict"
+
+	// ProjectCleanupStartedReason indicates that resource cleanup has been
+	// initiated and delete commands are being issued.
+	ProjectCleanupStartedReason = "CleanupStarted"
+
+	// ProjectCleanupAwaitingCompletionReason indicates that delete commands
+	// have been issued and the controller is waiting for resources to be removed.
+	ProjectCleanupAwaitingCompletionReason = "CleanupAwaitingCompletion"
+
+	// ProjectCleanupCompleteReason indicates that all project resources have
+	// been deleted.
+	ProjectCleanupCompleteReason = "CleanupComplete"
 )
 
 // +kubebuilder:object:root=true
@@ -44,6 +60,7 @@ const (
 // Project is the Schema for the projects API.
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization"
 type Project struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

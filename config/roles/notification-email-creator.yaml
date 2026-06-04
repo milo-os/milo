@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-email-creator
+  annotations:
+    kubernetes.io/display-name: Notification Email Creator
+    kubernetes.io/description: Create notification emails
 spec:
   launchStage: Beta
   inheritedRoles:

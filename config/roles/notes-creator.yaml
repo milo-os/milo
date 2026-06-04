@@ -1,0 +1,12 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notes-creator
+  annotations:
+    kubernetes.io/display-name: Notes Creator
+    kubernetes.io/description: "Allows creating notes and cluster notes."
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - notes.miloapis.com/notes.create
+    - notes.miloapis.com/clusternotes.create

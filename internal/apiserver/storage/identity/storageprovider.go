@@ -9,14 +9,16 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver"
 
+	serviceaccountkeysregistry "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsregistry "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesregistry "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
 	identityv1alpha1 "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
 )
 
 type StorageProvider struct {
-	Sessions       sessionsregistry.Backend
-	UserIdentities useridentitiesregistry.Backend
+	Sessions           sessionsregistry.Backend
+	UserIdentities     useridentitiesregistry.Backend
+	ServiceAccountKeys serviceaccountkeysregistry.Backend
 }
 
 func (p StorageProvider) GroupName() string { return identityv1alpha1.SchemeGroupVersion.Group }
@@ -33,8 +35,9 @@ func (p StorageProvider) NewRESTStorage(
 	)
 
 	storage := map[string]rest.Storage{
-		"sessions":       sessionsregistry.NewREST(p.Sessions),
-		"useridentities": useridentitiesregistry.NewREST(p.UserIdentities),
+		"sessions":            sessionsregistry.NewREST(p.Sessions),
+		"useridentities":      useridentitiesregistry.NewREST(p.UserIdentities),
+		"serviceaccountkeys":  serviceaccountkeysregistry.NewREST(p.ServiceAccountKeys),
 	}
 
 	apiGroupInfo.VersionedResourcesStorageMap = map[string]map[string]rest.Storage{

@@ -32,7 +32,7 @@ Get Milo running locally in under 5 minutes:
 
 ```bash
 # Prerequisites: Docker, Kind, kubectl, and Task installed
-git clone https://github.com/datum-cloud/milo.git
+git clone https://github.com/milo-os/milo.git
 cd milo
 
 # Enable remote task files to be used

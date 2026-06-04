@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: core-editor
+  annotations:
+    kubernetes.io/display-name: Core Editor
+    kubernetes.io/description: Edit access to core platform resources including secrets, configmaps, and namespaces
 spec:
   launchStage: Beta
   inheritedRoles:

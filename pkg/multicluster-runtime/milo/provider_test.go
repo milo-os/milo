@@ -18,13 +18,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
 
 type testMultiClusterManager struct {
 	mcmanager.Manager
 }
 
-func (m *testMultiClusterManager) Engage(context.Context, string, cluster.Cluster) error {
+func (m *testMultiClusterManager) Engage(context.Context, multicluster.ClusterName, cluster.Cluster) error {
 	return nil
 }
 
@@ -61,7 +62,7 @@ func TestReadyProject(t *testing.T) {
 	assert.Zero(t, result.RequeueAfter)
 	assert.Len(t, provider.projects, 1)
 
-	cl, err := provider.Get(context.Background(), "/test-project")
+	cl, err := provider.Get(context.Background(), "test-project")
 	assert.NoError(t, err)
 	apiHost, err := url.Parse(cl.GetConfig().Host)
 	assert.NoError(t, err)

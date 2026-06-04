@@ -26,7 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
 
@@ -122,29 +121,29 @@ type Provider struct {
 	client            client.Client
 
 	lock      sync.Mutex
-	mcMgr     mcmanager.Manager
+	mcMgr     multicluster.Aware
 	projects  map[string]cluster.Cluster
 	cancelFns map[string]context.CancelFunc
 	indexers  []index
 }
 
 // Get returns the cluster with the given name, if it is known.
-func (p *Provider) Get(_ context.Context, clusterName string) (cluster.Cluster, error) {
+func (p *Provider) Get(_ context.Context, clusterName multicluster.ClusterName) (cluster.Cluster, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if cl, ok := p.projects[clusterName]; ok {
+	if cl, ok := p.projects[clusterName.String()]; ok {
 		return cl, nil
 	}
 
 	return nil, fmt.Errorf("cluster %s not found", clusterName)
 }
 
-// Run starts the provider and blocks.
-func (p *Provider) Run(ctx context.Context, mgr mcmanager.Manager) error {
+// Start implements multicluster.ProviderRunnable and blocks until ctx is cancelled.
+func (p *Provider) Start(ctx context.Context, aware multicluster.Aware) error {
 	p.log.Info("Starting Datum cluster provider")
 
 	p.lock.Lock()
-	p.mcMgr = mgr
+	p.mcMgr = aware
 	p.lock.Unlock()
 
 	<-ctx.Done()
@@ -156,7 +155,9 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log := p.log.WithValues("project", req.Name)
 	log.Info("Reconciling Project")
 
-	key := req.String()
+	// Use just the project name as the key for cluster lookup.
+	// This matches the project name used in URL paths and ParentNameExtraKey.
+	key := req.Name
 	var project unstructured.Unstructured
 
 	if p.opts.InternalServiceDiscovery {
@@ -174,10 +175,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 			if _, wasRegistered := p.projects[key]; wasRegistered {
 				log.Info("Removing previously registered cluster for project", "key", key)
 			}
-			delete(p.projects, key)
-			if cancel, ok := p.cancelFns[key]; ok {
-				cancel()
-			}
+			p.disengageProject(key)
 
 			return ctrl.Result{}, nil
 		}
@@ -198,14 +196,6 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 		return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 	}
 
-	// already engaged?
-	if _, ok := p.projects[key]; ok {
-		log.V(1).Info("Project already engaged, skipping", "key", key)
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("Project not yet engaged, checking readiness", "key", key)
-
 	// ready and provisioned?
 	conditions, err := extractUnstructuredConditions(project.Object)
 	if err != nil {
@@ -215,16 +205,30 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.V(1).Info("Checking project readiness conditions", "key", key, "conditionCount", len(conditions))
 
+	readyConditionType := "Ready"
 	if p.opts.InternalServiceDiscovery {
-		if !apimeta.IsStatusConditionTrue(conditions, "ControlPlaneReady") {
-			log.Info("ProjectControlPlane is not ready, skipping registration", "key", key, "conditions", conditions)
-			return ctrl.Result{}, nil
+		readyConditionType = "ControlPlaneReady"
+	}
+	ready := apimeta.IsStatusConditionTrue(conditions, readyConditionType)
+
+	_, engaged := p.projects[key]
+
+	if engaged {
+		// A project that was engaged while Ready may later transition to
+		// NotReady. Tear it down so its cluster cache, informers, goroutines
+		// and context do not stay alive indefinitely.
+		if !ready {
+			log.Info("Engaged project no longer ready, disengaging", "key", key, "conditions", conditions)
+			p.disengageProject(key)
+		} else {
+			log.V(1).Info("Project already engaged, skipping", "key", key)
 		}
-	} else {
-		if !apimeta.IsStatusConditionTrue(conditions, "Ready") {
-			log.Info("Project is not ready, skipping registration", "key", key, "conditions", conditions)
-			return ctrl.Result{}, nil
-		}
+		return ctrl.Result{}, nil
+	}
+
+	if !ready {
+		log.Info("Project is not ready, skipping registration", "key", key, "conditionType", readyConditionType, "conditions", conditions)
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("Project is ready, proceeding with cluster registration", "key", key)
@@ -286,7 +290,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Engaging cluster with multicluster manager", "key", key)
 
 	// engage manager.
-	if err := p.mcMgr.Engage(clusterCtx, key, cl); err != nil {
+	if err := p.mcMgr.Engage(clusterCtx, multicluster.ClusterName(key), cl); err != nil {
 		log.Error(err, "Failed to engage cluster with multicluster manager", "key", key)
 		delete(p.projects, key)
 		delete(p.cancelFns, key)
@@ -296,6 +300,18 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Successfully registered and engaged new cluster", "key", key, "endpoint", cfg.Host)
 
 	return ctrl.Result{}, nil
+}
+
+// disengageProject tears down any cluster engaged for key: it cancels the
+// cluster's context (stopping its cache/informers/goroutines) and removes it
+// from the provider's maps. Callers must hold p.lock. Safe to call when key
+// is not engaged.
+func (p *Provider) disengageProject(key string) {
+	if cancel, ok := p.cancelFns[key]; ok {
+		cancel()
+		delete(p.cancelFns, key)
+	}
+	delete(p.projects, key)
 }
 
 func (p *Provider) IndexField(ctx context.Context, obj client.Object, field string, extractValue client.IndexerFunc) error {

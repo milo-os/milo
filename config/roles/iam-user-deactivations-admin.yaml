@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-user-deactivations-admin
+  annotations:
+    kubernetes.io/display-name: User Deactivation Admin
+    kubernetes.io/description: Full access to user deactivations
 spec:
   launchStage: Beta
   inheritedRoles:

@@ -1,0 +1,613 @@
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: milo-quota-metrics
+spec:
+  generators:
+    # quota.miloapis.com: AllowanceBucket
+    - name: quota-allowance-bucket-info
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_info
+          help: "Information about quota allowance buckets"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: consumer_api_group
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.apiGroup : ''"
+                - name: consumer_kind
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.kind : ''"
+                - name: consumer_name
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.name : ''"
+                - name: resource_type
+                  value: "has(object.spec.resourceType) ? object.spec.resourceType : ''"
+
+    - name: quota-allowance-bucket-limit
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_limit
+          help: "Total quota limit from all contributing grants"
+          type: gauge
+          metrics:
+            - value: "has(object.status.limit) ? double(object.status.limit) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-allocated
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_allocated
+          help: "Total quota currently consumed by granted claims"
+          type: gauge
+          metrics:
+            - value: "has(object.status.allocated) ? double(object.status.allocated) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-available
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_available
+          help: "Available quota capacity (limit - allocated)"
+          type: gauge
+          metrics:
+            - value: "has(object.status.available) ? double(object.status.available) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-claim-count
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_claim_count
+          help: "Number of claims consuming quota from this bucket"
+          type: gauge
+          metrics:
+            - value: "has(object.status.claimCount) ? double(object.status.claimCount) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-grant-count
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_grant_count
+          help: "Number of grants contributing to this bucket"
+          type: gauge
+          metrics:
+            - value: "has(object.status.grantCount) ? double(object.status.grantCount) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-last-reconciliation-timestamp
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_last_reconciliation_timestamp
+          help: "Timestamp of last bucket reconciliation"
+          type: gauge
+          metrics:
+            - value: |
+                has(object.status.lastReconciliation) ?
+                  double(timestamp(object.status.lastReconciliation).getSeconds()) : 0.0
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-observed-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_observed_generation
+          help: "The observed generation for the bucket"
+          type: gauge
+          metrics:
+            - value: "has(object.status.observedGeneration) ? double(object.status.observedGeneration) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-allowance-bucket-current-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: allowancebuckets
+      families:
+        - name: milo_quota_bucket_current_generation
+          help: "The current generation for the bucket"
+          type: gauge
+          metrics:
+            - value: "double(object.metadata.generation)"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # quota.miloapis.com: ClaimCreationPolicy
+    - name: quota-claim-creation-policy-info
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: claimcreationpolicies
+      families:
+        - name: milo_quota_claim_policy_info
+          help: "Information about quota claim creation policies"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: target_api_version
+                  value: "has(object.spec.trigger) && has(object.spec.trigger.resource) ? object.spec.trigger.resource.apiVersion : ''"
+                - name: target_kind
+                  value: "has(object.spec.trigger) && has(object.spec.trigger.resource) ? object.spec.trigger.resource.kind : ''"
+                - name: enabled
+                  value: "has(object.spec.enabled) ? (object.spec.enabled ? 'true' : 'false') : ''"
+
+    - name: quota-claim-creation-policy-status-condition
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: claimcreationpolicies
+      families:
+        - name: milo_quota_claim_policy_status_condition
+          help: "Status conditions for quota claim creation policies"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    - name: quota-claim-creation-policy-enabled
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: claimcreationpolicies
+      families:
+        - name: milo_quota_claim_policy_enabled
+          help: "Whether the policy is enabled (1 = enabled, 0 = disabled)"
+          type: gauge
+          metrics:
+            - value: "has(object.spec.enabled) ? (object.spec.enabled ? 1.0 : 0.0) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    - name: quota-claim-creation-policy-observed-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: claimcreationpolicies
+      families:
+        - name: milo_quota_claim_policy_observed_generation
+          help: "The observed generation for the policy"
+          type: gauge
+          metrics:
+            - value: "has(object.status.observedGeneration) ? double(object.status.observedGeneration) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    - name: quota-claim-creation-policy-current-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: claimcreationpolicies
+      families:
+        - name: milo_quota_claim_policy_current_generation
+          help: "The current generation for the policy"
+          type: gauge
+          metrics:
+            - value: "double(object.metadata.generation)"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    # quota.miloapis.com: GrantCreationPolicy
+    - name: quota-grant-creation-policy-info
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: grantcreationpolicies
+      families:
+        - name: milo_quota_grant_policy_info
+          help: "Information about quota grant creation policies"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: trigger_api_version
+                  value: "has(object.spec.trigger) && has(object.spec.trigger.resource) ? object.spec.trigger.resource.apiVersion : ''"
+                - name: trigger_kind
+                  value: "has(object.spec.trigger) && has(object.spec.trigger.resource) ? object.spec.trigger.resource.kind : ''"
+                - name: enabled
+                  value: "has(object.spec.enabled) ? (object.spec.enabled ? 'true' : 'false') : ''"
+                - name: parent_context_api_group
+                  value: "has(object.spec.target) && has(object.spec.target.parentContext) ? object.spec.target.parentContext.apiGroup : ''"
+                - name: parent_context_kind
+                  value: "has(object.spec.target) && has(object.spec.target.parentContext) ? object.spec.target.parentContext.kind : ''"
+
+    - name: quota-grant-creation-policy-status-condition
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: grantcreationpolicies
+      families:
+        - name: milo_quota_grant_policy_status_condition
+          help: "Status conditions for quota grant creation policies"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    - name: quota-grant-creation-policy-enabled
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: grantcreationpolicies
+      families:
+        - name: milo_quota_grant_policy_enabled
+          help: "Whether the policy is enabled (1 = enabled, 0 = disabled)"
+          type: gauge
+          metrics:
+            - value: "has(object.spec.enabled) ? (object.spec.enabled ? 1.0 : 0.0) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    - name: quota-grant-creation-policy-observed-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: grantcreationpolicies
+      families:
+        - name: milo_quota_grant_policy_observed_generation
+          help: "The observed generation for the policy"
+          type: gauge
+          metrics:
+            - value: "has(object.status.observedGeneration) ? double(object.status.observedGeneration) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    - name: quota-grant-creation-policy-current-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: grantcreationpolicies
+      families:
+        - name: milo_quota_grant_policy_current_generation
+          help: "The current generation for the policy"
+          type: gauge
+          metrics:
+            - value: "double(object.metadata.generation)"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    # quota.miloapis.com: ResourceClaim
+    - name: quota-resource-claim-info
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceclaims
+      families:
+        - name: milo_quota_claim_info
+          help: "Information about quota resource claims"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: consumer_api_group
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.apiGroup : ''"
+                - name: consumer_kind
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.kind : ''"
+                - name: consumer_name
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.name : ''"
+                - name: triggering_resource_api_group
+                  value: "has(object.spec.resourceRef) ? object.spec.resourceRef.apiGroup : ''"
+                - name: triggering_resource_kind
+                  value: "has(object.spec.resourceRef) ? object.spec.resourceRef.kind : ''"
+                - name: triggering_resource_name
+                  value: "has(object.spec.resourceRef) ? object.spec.resourceRef.name : ''"
+                - name: triggering_resource_namespace
+                  value: "has(object.spec.resourceRef) && has(object.spec.resourceRef.namespace) ? object.spec.resourceRef.namespace : ''"
+
+    - name: quota-resource-claim-status-condition
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceclaims
+      families:
+        - name: milo_quota_claim_status_condition
+          help: "Status conditions for quota resource claims"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    - name: quota-resource-claim-observed-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceclaims
+      families:
+        - name: milo_quota_claim_observed_generation
+          help: "The observed generation for the claim"
+          type: gauge
+          metrics:
+            - value: "has(object.status.observedGeneration) ? double(object.status.observedGeneration) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-resource-claim-current-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceclaims
+      families:
+        - name: milo_quota_claim_current_generation
+          help: "The current generation for the claim"
+          type: gauge
+          metrics:
+            - value: "double(object.metadata.generation)"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # quota.miloapis.com: ResourceGrant
+    - name: quota-resource-grant-info
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourcegrants
+      families:
+        - name: milo_quota_grant_info
+          help: "Information about quota resource grants"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: consumer_api_group
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.apiGroup : ''"
+                - name: consumer_kind
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.kind : ''"
+                - name: consumer_name
+                  value: "has(object.spec.consumerRef) ? object.spec.consumerRef.name : ''"
+
+    - name: quota-resource-grant-status-condition
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourcegrants
+      families:
+        - name: milo_quota_grant_status_condition
+          help: "Status conditions for quota resource grants"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    - name: quota-resource-grant-observed-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourcegrants
+      families:
+        - name: milo_quota_grant_observed_generation
+          help: "The observed generation for the grant"
+          type: gauge
+          metrics:
+            - value: "has(object.status.observedGeneration) ? double(object.status.observedGeneration) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    - name: quota-resource-grant-current-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourcegrants
+      families:
+        - name: milo_quota_grant_current_generation
+          help: "The current generation for the grant"
+          type: gauge
+          metrics:
+            - value: "double(object.metadata.generation)"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+
+    # quota.miloapis.com: ResourceRegistration
+    - name: quota-resource-registration-info
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceregistrations
+      families:
+        - name: milo_quota_registration_info
+          help: "Information about quota resource registrations"
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: uid
+                  value: "object.metadata.uid"
+                - name: consumer_api_group
+                  value: "has(object.spec.consumerTypeRef) ? object.spec.consumerTypeRef.apiGroup : ''"
+                - name: consumer_kind
+                  value: "has(object.spec.consumerTypeRef) ? object.spec.consumerTypeRef.kind : ''"
+                - name: resource_type
+                  value: "has(object.spec.resourceType) ? object.spec.resourceType : ''"
+                - name: registration_type
+                  value: "has(object.spec.type) ? object.spec.type : ''"
+                - name: base_unit
+                  value: "has(object.spec.baseUnit) ? object.spec.baseUnit : ''"
+                - name: display_unit
+                  value: "has(object.spec.displayUnit) ? object.spec.displayUnit : ''"
+                - name: description
+                  value: "has(object.spec.description) ? object.spec.description : ''"
+                - name: unit_conversion_factor
+                  value: "has(object.spec.unitConversionFactor) ? string(object.spec.unitConversionFactor) : ''"
+
+    - name: quota-resource-registration-status-condition
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceregistrations
+      families:
+        - name: milo_quota_registration_status_condition
+          help: "Status conditions for quota resource registrations"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
+    - name: quota-resource-registration-observed-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceregistrations
+      families:
+        - name: milo_quota_registration_observed_generation
+          help: "The observed generation for the registration"
+          type: gauge
+          metrics:
+            - value: "has(object.status.observedGeneration) ? double(object.status.observedGeneration) : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    - name: quota-resource-registration-current-generation
+      resource:
+        group: quota.miloapis.com
+        version: v1alpha1
+        resource: resourceregistrations
+      families:
+        - name: milo_quota_registration_current_generation
+          help: "The current generation for the registration"
+          type: gauge
+          metrics:
+            - value: "double(object.metadata.generation)"
+              labels:
+                - name: name
+                  value: "object.metadata.name"

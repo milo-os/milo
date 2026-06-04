@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-organization-admin
+  annotations:
+    kubernetes.io/display-name: IAM Organization Admin
+    kubernetes.io/description: "Full access to organization-scoped IAM resources"
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: iam-organization-editor

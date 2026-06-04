@@ -1,0 +1,23 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: notes.miloapis.com-clusternote
+spec:
+  serviceRef:
+    name: "notes.miloapis.com"
+  kind: ClusterNote
+  plural: clusternotes
+  singular: clusternote
+  permissions:
+    - list
+    - get
+    - create
+    - update
+    - delete
+    - patch
+    - watch
+  parentResources:
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Organization
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Project

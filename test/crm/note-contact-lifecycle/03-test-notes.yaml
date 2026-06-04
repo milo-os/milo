@@ -1,4 +1,4 @@
-apiVersion: crm.miloapis.com/v1alpha1
+apiVersion: notes.miloapis.com/v1alpha1
 kind: Note
 metadata:
   name: test-crm-note-1
@@ -8,10 +8,12 @@ spec:
     kind: Contact
     name: test-crm-note-contact-1
     namespace: ($namespace)
+  creatorRef:
+    name: admin
   content: "Initial note for contact 1"
 ---
-apiVersion: crm.miloapis.com/v1alpha1
-kind: Note
+apiVersion: notes.miloapis.com/v1alpha1
+kind: ClusterNote
 metadata:
   name: test-crm-note-2
 spec:
@@ -19,10 +21,12 @@ spec:
     apiGroup: iam.miloapis.com
     kind: User
     name: test-crm-note-user
+  creatorRef:
+    name: admin
   content: "Initial note for user"
 
 ---
-apiVersion: crm.miloapis.com/v1alpha1
+apiVersion: notes.miloapis.com/v1alpha1
 kind: Note
 metadata:
   name: test-crm-note-3
@@ -32,10 +36,12 @@ spec:
     kind: Contact
     name: test-crm-note-contact-2
     namespace: ($namespace)
+  creatorRef:
+    name: admin
   content: "Additional note for contact 2 - should persist"
 
 ---
-apiVersion: crm.miloapis.com/v1alpha1
+apiVersion: notes.miloapis.com/v1alpha1
 kind: Note
 metadata:
   name: test-crm-note-4
@@ -45,4 +51,6 @@ spec:
     kind: Contact
     name: test-crm-note-contact-2
     namespace: ($namespace)
+  creatorRef:
+    name: admin
   content: "Another note for contact 2 - should persist"

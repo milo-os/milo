@@ -1,0 +1,25 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceRegistration
+metadata:
+  name: configmaps-per-project
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+spec:
+  consumerType:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Project
+
+  type: Entity
+
+  resourceType: core.miloapis.com/configmaps
+
+  description: "Maximum number of config maps that can be created within a project"
+
+  baseUnit: configmap
+  displayUnit: configmaps
+  unitConversionFactor: 1
+
+  claimingResources:
+    - apiGroup: ""
+      kind: ConfigMap

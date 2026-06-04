@@ -55,6 +55,7 @@ type GroupMembershipStatus struct {
 // +kubebuilder:selectablefield:JSONPath=".spec.groupRef.name"
 // +kubebuilder:selectablefield:JSONPath=".spec.userRef.name"
 // GroupMembership is the Schema for the groupmemberships API
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization"
 type GroupMembership struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

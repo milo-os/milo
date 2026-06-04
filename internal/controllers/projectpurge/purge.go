@@ -2,8 +2,11 @@ package projectpurge
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -12,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -50,9 +52,13 @@ var protected = map[string]struct{}{
 	// add "milo-system" if you make it per-project and protect it
 }
 
-func (p *Purger) Purge(ctx context.Context, cfg *rest.Config, project string, o Options) error {
+// StartPurge runs Phases A through D (discovery, DeleteCollection on namespaced
+// resources, delete namespaces, force-finalize namespaces). These are fast
+// fire-and-forget operations that issue delete commands without waiting for
+// completion. All phases are idempotent and safe to re-run.
+func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project string, o Options) error {
 	if o.Timeout == 0 {
-		o.Timeout = 5 * time.Minute
+		o.Timeout = 2 * time.Minute
 	}
 	if o.Parallel <= 0 {
 		o.Parallel = 8
@@ -101,8 +107,10 @@ func (p *Purger) Purge(ctx context.Context, cfg *rest.Config, project string, o 
 		}
 	}
 
-	// Partition & exclude namespaces & CRDs for explicit phases
-	var namespaced, cluster []res
+	// Partition & exclude namespaces & CRDs for explicit phases.
+	// Cluster-scoped resource deletion is intentionally omitted —
+	// only namespaced resources and namespaces themselves are purged.
+	var namespaced []res
 	for _, r := range all {
 		if r.gvr.Group == "" && r.gvr.Resource == "namespaces" {
 			continue
@@ -112,8 +120,6 @@ func (p *Purger) Purge(ctx context.Context, cfg *rest.Config, project string, o 
 		}
 		if r.namespaced {
 			namespaced = append(namespaced, r)
-		} else {
-			cluster = append(cluster, r)
 		}
 	}
 
@@ -149,23 +155,9 @@ func (p *Purger) Purge(ctx context.Context, cfg *rest.Config, project string, o 
 		return err
 	}
 
-	// Phase B: cluster-scoped kinds
-	// if err := runParallel(deadline, o.Parallel, cluster, func(ctx context.Context, r res) error {
-	// 	if err := dyn.Resource(r.gvr).DeleteCollection(ctx, delOpts, listOpts); !ignorable(err) {
-	// 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-	// 			return fmt.Errorf("rbac forbids DeleteCollection for %s: %w", r.gvr, err)
-	// 		}
-	// 		return fmt.Errorf("DeleteCollection %s: %w", r.gvr, err)
-	// 	}
-	// 	return nil
-	// }); err != nil {
-	// 	return err
-	// }
-
-	// Phase C: delete namespaces themselves (sets DeletionTimestamp)
+	// Phase B: delete namespaces themselves (sets DeletionTimestamp)
 	if err := runParallel(deadline, o.Parallel, namespaces, func(ctx context.Context, ns string) error {
 		if _, ok := protected[ns]; ok {
-			// Keep the namespace object; we've already deleted its contents in Phase A.
 			return nil
 		}
 		if err := core.CoreV1().Namespaces().Delete(ctx, ns, delOpts); !ignorable(err) {
@@ -179,22 +171,20 @@ func (p *Purger) Purge(ctx context.Context, cfg *rest.Config, project string, o 
 		return err
 	}
 
-	// Phase D: force-finalize namespaces so we don't rely on a namespace controller
+	// Phase C: force-finalize namespaces so we don’t rely on a namespace controller
 	if err := runParallel(deadline, o.Parallel, namespaces, func(ctx context.Context, ns string) error {
 		nso, err := core.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
-		if ignorable(err) { // not found or not served
+		if ignorable(err) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("get namespace %q: %w", ns, err)
 		}
 
-		// If delete hasn’t landed yet, try again (idempotent)
 		if nso.DeletionTimestamp.IsZero() {
 			_ = core.CoreV1().Namespaces().Delete(ctx, ns, delOpts)
 		}
 
-		// Clear finalizers to allow immediate removal without a namespace controller
 		nso.Spec.Finalizers = nil
 		if _, err := core.CoreV1().Namespaces().Finalize(ctx, nso, metav1.UpdateOptions{}); !ignorable(err) {
 			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
@@ -207,25 +197,56 @@ func (p *Purger) Purge(ctx context.Context, cfg *rest.Config, project string, o 
 		return err
 	}
 
-	// Phase E: verify all namespaces are gone (so tearing down per-project controllers is safe)
-	if err := wait.PollUntilContextCancel(deadline, 500*time.Millisecond, true, func(ctx context.Context) (bool, error) {
-		nsList, err := core.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return false, fmt.Errorf("list namespaces: %w", err)
-		}
-		if len(nsList.Items) == 1 && nsList.Items[0].Name == "default" {
-			return true, nil // all gone
-		}
-		// If we have namespaces left, we can’t proceed
-		return false, nil
+	return nil
+}
 
-	}); err != nil {
-		return fmt.Errorf("timeout waiting for namespaces to disappear: %w", err)
+// IsPurgeComplete performs a single namespace list and returns true when only
+// the "default" namespace (or no namespaces) remain. Only errors that
+// definitively indicate the per-project API server is gone (e.g. connection
+// refused) are treated as complete. All other errors (timeouts, 500s, 429s,
+// RBAC issues, context cancellation) are returned so the controller can retry.
+func (p *Purger) IsPurgeComplete(ctx context.Context, cfg *rest.Config, project string) (bool, error) {
+	core, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return false, fmt.Errorf("building client for project %s: %w", project, err)
 	}
 
-	// Phase F: we might need to clean up crds in the future
+	nsList, err := core.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if isServerGone(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("listing namespaces for project %s: %w", project, err)
+	}
 
-	return nil
+	switch len(nsList.Items) {
+	case 0:
+		return true, nil
+	case 1:
+		return nsList.Items[0].Name == "default", nil
+	default:
+		return false, nil
+	}
+}
+
+// isServerGone returns true when the error indicates the remote API server is
+// permanently unreachable — connection refused, or the API endpoint itself no
+// longer exists. Transient failures (timeouts, 500s, throttling, RBAC) return
+// false so the caller retries.
+func isServerGone(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if errors.Is(opErr.Err, syscall.ECONNREFUSED) {
+			return true
+		}
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	if apierrors.IsNotFound(err) {
+		return true
+	}
+	return false
 }
 
 // helper (generic, named)

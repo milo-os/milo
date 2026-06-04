@@ -1,0 +1,46 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# This component enables the Events proxy feature that forwards Kubernetes Events
+# to the Activity API server for storage and retrieval.
+#
+# Requirements:
+# - Activity API server must be deployed and accessible
+# - mTLS certificates for Milo -> Activity communication must be configured
+# - Activity API server must be accessible via the configured URL
+#
+# Usage:
+# Add this component to your kustomization.yaml:
+#   components:
+#     - ../../components/events-proxy
+
+patches:
+  # Enable EventsProxy feature gate and configure Activity provider connection
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: milo-apiserver
+      spec:
+        template:
+          spec:
+            containers:
+            - name: milo-apiserver
+              env:
+                # Enable EventsProxy feature gate (Sessions and UserIdentities are GA/default)
+                - name: FEATURE_GATES
+                  value: "EventsProxy=true"
+              volumeMounts:
+                - name: activity-client-cert
+                  mountPath: /etc/kubernetes/pki/activity
+                  readOnly: true
+            volumes:
+              - name: activity-client-cert
+                secret:
+                  secretName: milo-activity-client-cert
+                  optional: false
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: milo-apiserver

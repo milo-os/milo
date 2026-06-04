@@ -7,7 +7,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,10 +25,10 @@ var organizationmembershiplog = logf.Log.WithName("organizationmembership-resour
 func SetupOrganizationMembershipWebhooksWithManager(mgr ctrl.Manager, organizationOwnerRoleName string, organizationOwnerRoleNamespace string) error {
 	organizationmembershiplog.Info("Setting up resourcemanager.miloapis.com organizationmembership webhooks")
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&resourcemanagerv1alpha1.OrganizationMembership{}).
+	return ctrl.NewWebhookManagedBy(mgr, &resourcemanagerv1alpha1.OrganizationMembership{}).
 		WithValidator(&OrganizationMembershipValidator{
 			client:             mgr.GetClient(),
+			apiReader:          mgr.GetAPIReader(),
 			ownerRoleName:      organizationOwnerRoleName,
 			ownerRoleNamespace: organizationOwnerRoleNamespace,
 		}).
@@ -39,13 +38,13 @@ func SetupOrganizationMembershipWebhooksWithManager(mgr ctrl.Manager, organizati
 // OrganizationMembershipValidator validates OrganizationMemberships
 type OrganizationMembershipValidator struct {
 	client             client.Client
+	apiReader          client.Reader
 	decoder            admission.Decoder
 	ownerRoleName      string
 	ownerRoleNamespace string
 }
 
-func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	membership := obj.(*resourcemanagerv1alpha1.OrganizationMembership)
+func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership create", "name", membership.Name, "namespace", membership.Namespace)
 
 	// Validate roles if specified
@@ -58,9 +57,7 @@ func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, ob
 	return nil, nil
 }
 
-func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	oldMembership := oldObj.(*resourcemanagerv1alpha1.OrganizationMembership)
-	newMembership := newObj.(*resourcemanagerv1alpha1.OrganizationMembership)
+func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, oldMembership, newMembership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership update", "name", newMembership.Name, "namespace", newMembership.Namespace)
 
 	// Validate roles if specified
@@ -77,11 +74,17 @@ func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, ol
 	return nil, nil
 }
 
-func (v *OrganizationMembershipValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	membership := obj.(*resourcemanagerv1alpha1.OrganizationMembership)
+func (v *OrganizationMembershipValidator) ValidateDelete(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership delete", "name", membership.Name, "namespace", membership.Namespace)
 
 	if !v.isOwnerMembership(membership) {
+		return nil, nil
+	}
+
+	// Allow deletion when the referenced user is itself being deleted — the
+	// UserController is responsible for cleaning up orphaned memberships and
+	// must not be blocked by the last-owner guard.
+	if v.allowDeletionBecauseUserIsBeingDeleted(ctx, membership) {
 		return nil, nil
 	}
 
@@ -139,6 +142,33 @@ func (v *OrganizationMembershipValidator) allowOwnerDeletionDuringTeardown(ctx c
 	}
 
 	return organization.DeletionTimestamp != nil
+}
+
+// allowDeletionBecauseUserIsBeingDeleted returns true when the membership should be
+// allowed to be deleted because the referenced user has a non-zero DeletionTimestamp.
+// The UserController adds a finalizer and drives membership cleanup; we must not
+// block it with the last-owner guard.
+//
+// Uses the direct API reader (not the informer cache) to avoid stale reads that
+// could incorrectly bypass the last-owner business invariant.
+func (v *OrganizationMembershipValidator) allowDeletionBecauseUserIsBeingDeleted(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) bool {
+	userName := membership.Spec.UserRef.Name
+	if userName == "" {
+		return false
+	}
+
+	var user iamv1alpha1.User
+	if err := v.apiReader.Get(ctx, client.ObjectKey{Name: userName}, &user); err != nil {
+		if apierrors.IsNotFound(err) {
+			// User is already gone — allow the membership deletion.
+			return true
+		}
+		organizationmembershiplog.Error(err, "failed to fetch user while validating delete",
+			"user", userName)
+		return false
+	}
+
+	return user.DeletionTimestamp != nil
 }
 
 // isNamespaceTerminating returns true if the namespace is terminating or already deleted.

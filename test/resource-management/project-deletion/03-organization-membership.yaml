@@ -1,0 +1,12 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: OrganizationMembership
+metadata:
+  name: user-admin-membership
+  namespace: organization-test-project-deletion-org
+  labels:
+    test.miloapis.com/scenario: "project-deletion"
+spec:
+  organizationRef:
+    name: test-project-deletion-org
+  userRef:
+    name: "user-admin"

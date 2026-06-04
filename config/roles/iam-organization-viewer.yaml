@@ -1,0 +1,22 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-organization-viewer
+  annotations:
+    kubernetes.io/display-name: IAM Organization Viewer
+    kubernetes.io/description: "View organization-scoped IAM resources"
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - iam.miloapis.com/groups.get
+    - iam.miloapis.com/groups.list
+    - iam.miloapis.com/groups.watch
+    - iam.miloapis.com/groupmemberships.get
+    - iam.miloapis.com/groupmemberships.list
+    - iam.miloapis.com/groupmemberships.watch
+    - iam.miloapis.com/userinvitations.get
+    - iam.miloapis.com/userinvitations.list
+    - iam.miloapis.com/userinvitations.watch
+    - iam.miloapis.com/policybindings.get
+    - iam.miloapis.com/policybindings.list
+    - iam.miloapis.com/policybindings.watch

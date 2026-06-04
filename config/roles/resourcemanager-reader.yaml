@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: resourcemanager-reader
+  annotations:
+    kubernetes.io/display-name: Resource Manager Viewer
+    kubernetes.io/description: View access to organizations and projects
 spec:
   launchStage: Beta
   includedPermissions:

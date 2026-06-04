@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: org-membership-gc-test
+  annotations:
+    kubernetes.io/display-name: Org Membership GC Test
+spec:
+  type: Standard

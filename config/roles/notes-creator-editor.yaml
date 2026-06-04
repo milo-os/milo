@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notes-creator-editor
+  annotations:
+    kubernetes.io/display-name: Notes Creator Editor
+    kubernetes.io/description: "Allows the creator of a note to edit and delete their own note."
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - notes.miloapis.com/notes.update
+    - notes.miloapis.com/notes.patch
+    - notes.miloapis.com/notes.delete
+    - notes.miloapis.com/clusternotes.update
+    - notes.miloapis.com/clusternotes.patch
+    - notes.miloapis.com/clusternotes.delete

@@ -330,6 +330,7 @@ func (t *GrantTriggerResource) GetGVK() schema.GroupVersionKind {
 // +kubebuilder:selectablefield:JSONPath=".spec.trigger.resource.apiVersion"
 // +kubebuilder:selectablefield:JSONPath=".spec.target.parentContext.kind"
 // +kubebuilder:selectablefield:JSONPath=".spec.target.parentContext.apiGroup"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type GrantCreationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

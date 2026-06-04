@@ -1,0 +1,5 @@
+namespace:
+- kind: PolicyBinding
+  group: iam.miloapis.com
+  path: spec/roleRef/namespace
+  create: true

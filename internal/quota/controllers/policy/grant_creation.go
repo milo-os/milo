@@ -76,10 +76,11 @@ func (r *GrantCreationPolicyReconciler) Reconcile(ctx context.Context, req mcrec
 	// Update policy status based on validation results
 	r.updatePolicyStatus(&policy, validationErrs)
 
-	// Update status if it has changed
-	if !equality.Semantic.DeepEqual(&policy.Status, originalStatus) {
-		policy.Status.ObservedGeneration = policy.Generation
+	// Always track the latest generation so the diff captures generation-only changes
+	policy.Status.ObservedGeneration = policy.Generation
 
+	// Only write to the API if something actually changed
+	if !equality.Semantic.DeepEqual(&policy.Status, originalStatus) {
 		if err := clusterClient.Status().Update(ctx, &policy); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update GrantCreationPolicy status: %w", err)
 		}
@@ -193,7 +194,7 @@ func (r *GrantCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.GrantCreationPolicy{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true)).
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		// Watch ResourceRegistrations to revalidate policies when registrations change
 		Watches(
 			&quotav1alpha1.ResourceRegistration{},
@@ -203,7 +204,7 @@ func (r *GrantCreationPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) 
 				},
 			),
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Named("grant-creation-policy").
 		Complete(r)

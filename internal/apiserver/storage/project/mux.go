@@ -35,10 +35,10 @@ var (
 	childCreations = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "projectstorage_child_creations_total",
-			Help:           "Per-project child storage creations",
+			Help:           "Child storage creations by resource type",
 			StabilityLevel: k8smetrics.ALPHA,
 		},
-		[]string{"project", "resource_group", "resource_kind"},
+		[]string{"resource_group", "resource_kind"},
 	)
 
 	firstReady = k8smetrics.NewHistogramVec(
@@ -48,7 +48,7 @@ var (
 			Buckets:        []float64{0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
 			StabilityLevel: k8smetrics.ALPHA,
 		},
-		[]string{"project", "resource_group", "resource_kind"},
+		[]string{"resource_group", "resource_kind"},
 	)
 
 	reinitErrors = k8smetrics.NewCounterVec(
@@ -57,7 +57,7 @@ var (
 			Help:           "Ops that hit 'storage is (re)initializing'",
 			StabilityLevel: k8smetrics.ALPHA,
 		},
-		[]string{"project", "resource_group", "resource_kind", "verb"},
+		[]string{"resource_group", "resource_kind", "verb"},
 	)
 )
 
@@ -69,13 +69,13 @@ func isReinitErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "storage is (re)initializing")
 }
 
-func incrReinit(project, group, kind, verb string) {
-	reinitErrors.WithLabelValues(project, group, kind, verb).Inc()
+func incrReinit(group, kind, verb string) {
+	reinitErrors.WithLabelValues(group, kind, verb).Inc()
 }
 
-func recordFirstReady(c *child, project, group, kind string) {
+func recordFirstReady(c *child, group, kind string) {
 	c.readyOnce.Do(func() {
-		firstReady.WithLabelValues(project, group, kind).
+		firstReady.WithLabelValues(group, kind).
 			Observe(time.Since(c.created).Seconds())
 	})
 }
@@ -107,9 +107,8 @@ type decoratorArgs struct {
 
 // instrumentedStorage wraps a storage.Interface to emit metrics once per child
 type instrumentedStorage struct {
-	inner   storage.Interface
-	child   *child
-	project string
+	inner storage.Interface
+	child *child
 
 	// normalized labels
 	group string // API group ("" => "core" when you query; we keep "" here)
@@ -117,11 +116,11 @@ type instrumentedStorage struct {
 }
 
 func (i *instrumentedStorage) markSuccess() {
-	recordFirstReady(i.child, i.project, i.group, i.kind)
+	recordFirstReady(i.child, i.group, i.kind)
 }
 func (i *instrumentedStorage) markReinit(verb string, err error) error {
 	if isReinitErr(err) {
-		incrReinit(i.project, i.group, i.kind, verb)
+		incrReinit(i.group, i.kind, verb)
 	}
 	return err
 }
@@ -174,14 +173,23 @@ func (i *instrumentedStorage) GuaranteedUpdate(ctx context.Context, key string, 
 	i.markSuccess()
 	return nil
 }
-func (i *instrumentedStorage) Count(key string) (int64, error) { return i.inner.Count(key) }
-func (i *instrumentedStorage) ReadinessCheck() error           { return i.inner.ReadinessCheck() }
+func (i *instrumentedStorage) ReadinessCheck() error { return i.inner.ReadinessCheck() }
 func (i *instrumentedStorage) RequestWatchProgress(ctx context.Context) error {
 	if err := i.inner.RequestWatchProgress(ctx); err != nil {
 		return i.markReinit("watch_progress", err)
 	}
 	return nil
 }
+func (i *instrumentedStorage) Stats(ctx context.Context) (storage.Stats, error) {
+	return i.inner.Stats(ctx)
+}
+func (i *instrumentedStorage) GetCurrentResourceVersion(ctx context.Context) (uint64, error) {
+	return i.inner.GetCurrentResourceVersion(ctx)
+}
+func (i *instrumentedStorage) EnableResourceSizeEstimation(fn storage.KeysFunc) error {
+	return i.inner.EnableResourceSizeEstimation(fn)
+}
+func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRevision() }
 
 // -------------------- mux --------------------
 
@@ -239,16 +247,15 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	// Wrap the child once with instrumentation.
 	c := &child{s: s, destroy: destroy, created: time.Now()}
 	wrapped := &instrumentedStorage{
-		inner:   s,
-		child:   c,
-		project: project,
-		group:   m.args.resourceGroup,
-		kind:    m.args.resourceKind,
+		inner: s,
+		child: c,
+		group: m.args.resourceGroup,
+		kind:  m.args.resourceKind,
 	}
 	c.s = wrapped
 
 	m.children[project] = c
-	childCreations.WithLabelValues(project, m.args.resourceGroup, m.args.resourceKind).Inc()
+	childCreations.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Inc()
 
 	// Bootstrap system namespace synchronously to prevent resource creation failures
 	if project != "" && m.loopbackConfig != nil {
@@ -367,22 +374,6 @@ func (m *projectMux) GuaranteedUpdate(ctx context.Context, key string, out runti
 	return s.GuaranteedUpdate(ctx, key, out, ignoreNotFound, precond, tryUpdate, suggestion)
 }
 
-// If your k8s minor *doesn't* include Count in storage.Interface, delete this.
-func (m *projectMux) Count(key string) (int64, error) {
-	m.mu.RLock()
-	c := m.children[""]
-	m.mu.RUnlock()
-	if c == nil {
-		if _, err := m.childForProject(""); err != nil {
-			return 0, err
-		}
-		m.mu.RLock()
-		c = m.children[""]
-		m.mu.RUnlock()
-	}
-	return c.s.Count(key)
-}
-
 // ReadinessCheck proxies to the appropriate child (defaults to the "" project).
 func (m *projectMux) ReadinessCheck() error {
 	m.mu.RLock()
@@ -405,4 +396,41 @@ func (m *projectMux) RequestWatchProgress(ctx context.Context) error {
 		return err
 	}
 	return s.RequestWatchProgress(ctx)
+}
+
+func (m *projectMux) Stats(ctx context.Context) (storage.Stats, error) {
+	s, err := m.pick(ctx)
+	if err != nil {
+		return storage.Stats{}, err
+	}
+	return s.Stats(ctx)
+}
+
+func (m *projectMux) GetCurrentResourceVersion(ctx context.Context) (uint64, error) {
+	s, err := m.pick(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return s.GetCurrentResourceVersion(ctx)
+}
+
+func (m *projectMux) EnableResourceSizeEstimation(fn storage.KeysFunc) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.children {
+		if err := c.s.EnableResourceSizeEstimation(fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *projectMux) CompactRevision() int64 {
+	m.mu.RLock()
+	c := m.children[""]
+	m.mu.RUnlock()
+	if c == nil {
+		return 0
+	}
+	return c.s.CompactRevision()
 }

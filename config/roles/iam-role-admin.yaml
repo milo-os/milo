@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: role-admin
+  annotations:
+    kubernetes.io/display-name: Role Admin
+    kubernetes.io/description: Full access to IAM roles
 spec:
   launchStage: Beta
   inheritedRoles:

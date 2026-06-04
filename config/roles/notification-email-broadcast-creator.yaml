@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-email-broadcast-creator
+  annotations:
+    kubernetes.io/display-name: Email Broadcast Creator
+    kubernetes.io/description: Create and delete email broadcasts
 spec:
   launchStage: Beta
   inheritedRoles:

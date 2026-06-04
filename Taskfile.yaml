@@ -10,7 +10,7 @@ vars:
   # renovate: datasource=go depName=github.com/kyverno/chainsaw
   CHAINSAW_VERSION: v0.2.13
   # Container image configuration
-  MILO_IMAGE_NAME: "ghcr.io/datum-cloud/milo"
+  MILO_IMAGE_NAME: "ghcr.io/milo-os/milo"
   MILO_IMAGE_TAG: "dev"
   TEST_INFRA_CLUSTER_NAME: "test-infra"
   # Test infra repository configuration - can be overridden with environment variable
@@ -118,6 +118,16 @@ tasks:
         task test-infra:kubectl -- apply -k config/crd/overlays/infra-control-plane/
         task test-infra:kubectl -- wait --for=condition=Established customresourcedefinitions projectcontrolplanes.infrastructure.miloapis.com
 
+        echo "⏳ Waiting for Milo API server to be ready to serve requests..."
+        for i in $(seq 1 12); do
+          if task kubectl -- get --raw /healthz > /dev/null 2>&1; then
+            echo "✓ Milo API server is ready"
+            break
+          fi
+          echo "  Attempt $i/12 — not ready yet, waiting 5s..."
+          sleep 5
+        done
+
         echo "👤 Creating test users in Milo API server..."
         task kubectl -- apply -f config/overlays/test-infra/resources/test-users.yaml
 
@@ -130,6 +140,11 @@ tasks:
 
         WEBHOOK_COUNT=$(task kubectl -- get mutatingwebhookconfigurations,validatingwebhookconfigurations --no-headers | grep resourcemanager.miloapis.com | wc -l || echo "0")
         echo "Installed $WEBHOOK_COUNT webhook configurations in Milo API server"
+
+        echo "📦 Installing ResourceMetricsPolicy CRD to Milo API server..."
+        task kubectl -- apply -f https://raw.githubusercontent.com/milo-os/resource-metrics/main/config/crd/bases/resourcemetrics.miloapis.com_resourcemetricspolicies.yaml
+        task kubectl -- wait --for=condition=Established customresourcedefinitions resourcemetricspolicies.resourcemetrics.miloapis.com --timeout=60s
+        echo "✅ ResourceMetricsPolicy CRD installed successfully"
 
         echo "⚙️  Installing service configurations to Milo API server..."
         task kubectl -- apply -k config/services/

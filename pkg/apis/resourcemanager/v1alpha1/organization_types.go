@@ -43,6 +43,7 @@ type OrganizationStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 // Organization is the Schema for the Organizations API
 // +kubebuilder:object:root=true
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type Organization struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

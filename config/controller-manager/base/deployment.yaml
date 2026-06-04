@@ -22,7 +22,7 @@ spec:
       automountServiceAccountToken: false
       containers:
       - name: milo-controller-manager
-        image: ghcr.io/datum-cloud/milo:latest
+        image: ghcr.io/milo-os/milo:latest
         imagePullPolicy: IfNotPresent
         args:
           - controller-manager
@@ -66,6 +66,14 @@ spec:
             value: /etc/kubernetes/pki/webhook/ca.crt
           - name: CONTROL_PLANE_SCOPE
             value: "core"
+          # Soft memory limit tracking the cgroup cap so GC reclaims before
+          # OOMKill (#631).
+          - name: GOMEMLIMIT
+            valueFrom:
+              resourceFieldRef:
+                containerName: milo-controller-manager
+                resource: limits.memory
+                divisor: "1"
         resources:
           requests:
             cpu: 100m

@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: ui-gc-invitee
+  labels:
+    test.miloapis.com/scenario: "userinvitation-policybinding-gc"
+spec:
+  email: invitee@ui-gc-test.local
+  givenName: Invitee
+  familyName: User

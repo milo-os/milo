@@ -46,25 +46,6 @@ rules:
   verbs:
   - create
 - apiGroups:
-  - crm.miloapis.com
-  resources:
-  - notes
-  verbs:
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - crm.miloapis.com
-  resources:
-  - notes/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
   - dns.networking.miloapis.com
   resources:
   - dnszoneclasses
@@ -113,6 +94,7 @@ rules:
   resources:
   - groups/finalizers
   - platforminvitations/status
+  - userinvitations/finalizers
   - userinvitations/status
   verbs:
   - update
@@ -168,6 +150,7 @@ rules:
   - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -213,6 +196,47 @@ rules:
   - update
   - watch
 - apiGroups:
+  - notes.miloapis.com
+  resources:
+  - clusternotes
+  - notes
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - notes.miloapis.com
+  resources:
+  - clusternotes/status
+  - notes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - notification.miloapis.com
+  resources:
+  - contactgroupenrollmentpolicies
+  - contactgroupmembershipremovals
+  - emailtemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - notification.miloapis.com
+  resources:
+  - contactgroupmemberships
+  - emails
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
   - notification.miloapis.com
   resources:
   - contacts
@@ -230,23 +254,6 @@ rules:
   - contacts/status
   verbs:
   - update
-- apiGroups:
-  - notification.miloapis.com
-  resources:
-  - emails
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - notification.miloapis.com
-  resources:
-  - emailtemplates
-  verbs:
-  - get
-  - list
-  - watch
 - apiGroups:
   - quota.miloapis.com
   resources:
@@ -293,6 +300,7 @@ rules:
   - organizationmemberships
   verbs:
   - create
+  - delete
   - get
   - list
   - watch

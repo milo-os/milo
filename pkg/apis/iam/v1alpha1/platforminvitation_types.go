@@ -23,6 +23,7 @@ const (
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 // It represents a platform invitation for a user.
 // +kubebuilder:resource:scope=Cluster
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 type PlatformInvitation struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

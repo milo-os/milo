@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-subject-configmap
+  namespace: default
+  labels:
+    test.miloapis.com/notes: "multicluster"
+data:
+  key: value

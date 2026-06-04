@@ -13,6 +13,7 @@ import (
 // +kubebuilder:printcolumn:name="Launch Stage",type="string",JSONPath=".spec.launchStage"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization,Platform"
 type Role struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

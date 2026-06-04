@@ -131,6 +131,22 @@ func (r *OrganizationMembershipController) Reconcile(ctx context.Context, req ct
 	if err := r.Client.Get(ctx, userKey, &user); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("referenced user not found", "user", organizationMembership.Spec.UserRef.Name)
+
+			// Two-pass self-delete: if we already set UserNotFound on a previous
+			// reconcile, delete the membership now so it does not linger after
+			// the owning User is gone. The second reconcile is triggered by the
+			// status condition update below, which re-enqueues the membership.
+			existingCondition := apimeta.FindStatusCondition(organizationMembership.Status.Conditions, OrganizationMembershipReady)
+			if existingCondition != nil && existingCondition.Reason == UserNotFoundReason {
+				logger.Info("deleting OrganizationMembership because referenced user no longer exists",
+					"membership", organizationMembership.Name,
+					"user", organizationMembership.Spec.UserRef.Name)
+				if err := r.Client.Delete(ctx, &organizationMembership); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, fmt.Errorf("failed to self-delete organization membership: %w", err)
+				}
+				return ctrl.Result{}, nil
+			}
+
 			readyCondition.Status = metav1.ConditionFalse
 			readyCondition.Reason = UserNotFoundReason
 			readyCondition.Message = fmt.Sprintf("User '%s' does not exist. Please ensure the user name is correct and the user account has been created.", organizationMembership.Spec.UserRef.Name)

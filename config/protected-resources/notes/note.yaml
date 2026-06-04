@@ -1,0 +1,23 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: notes.miloapis.com-note
+spec:
+  serviceRef:
+    name: "notes.miloapis.com"
+  kind: Note
+  plural: notes
+  singular: note
+  permissions:
+    - list
+    - get
+    - create
+    - update
+    - delete
+    - patch
+    - watch
+  parentResources:
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Organization
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Project

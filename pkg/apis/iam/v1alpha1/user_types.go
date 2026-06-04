@@ -47,6 +47,7 @@ const (
 // +kubebuilder:resource:path=users,scope=Cluster
 // +kubebuilder:selectablefield:JSONPath=".status.registrationApproval"
 // +kubebuilder:selectablefield:JSONPath=".spec.email"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform,User"
 type User struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -129,4 +130,24 @@ type AuthProvider string
 const (
 	AuthProviderGitHub AuthProvider = "github"
 	AuthProviderGoogle AuthProvider = "google"
+)
+
+const (
+	// UserNameReviewRequiredAnnotation is set on a User when givenName and familyName are
+	// identical, which typically happens when the identity provider (e.g. GitHub) supplies
+	// only a single display name and the system splits it across both fields.
+	//
+	// Presence of this annotation signals that the user has not yet provided distinct given
+	// and family names. Front-end clients should prompt the user to review and update their
+	// profile when this annotation is present.
+	//
+	// The annotation value is always "true". The annotation is removed automatically by the
+	// user controller once givenName and familyName differ.
+	//
+	// Example:
+	//
+	//   metadata:
+	//     annotations:
+	//       iam.miloapis.com/name-review-required: "true"
+	UserNameReviewRequiredAnnotation = "iam.miloapis.com/name-review-required"
 )

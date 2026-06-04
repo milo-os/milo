@@ -72,6 +72,7 @@ func TestOrganizationMembershipValidator_ValidateCreate_Success(t *testing.T) {
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -122,6 +123,7 @@ func TestOrganizationMembershipValidator_ValidateCreate_DuplicateRoles(t *testin
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -168,6 +170,7 @@ func TestOrganizationMembershipValidator_ValidateCreate_NonexistentRole(t *testi
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -214,6 +217,7 @@ func TestOrganizationMembershipValidator_ValidateCreate_EmptyRoleName(t *testing
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -260,6 +264,7 @@ func TestOrganizationMembershipValidator_ValidateDelete_AllowsNonOwner(t *testin
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -322,6 +327,7 @@ func TestOrganizationMembershipValidator_ValidateDelete_AllowsWhenAnotherOwnerEx
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -390,13 +396,22 @@ func TestOrganizationMembershipValidator_ValidateDelete_BlocksLastOwner(t *testi
 		},
 	}
 
+	// The user must exist without a DeletionTimestamp so the webhook does not
+	// bypass the last-owner guard.
+	alice := &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "alice",
+		},
+	}
+
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(target, nonOwner, namespace, organization).
+		WithObjects(target, nonOwner, namespace, organization, alice).
 		Build()
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -460,6 +475,7 @@ func TestOrganizationMembershipValidator_ValidateDelete_AllowsWhenNamespaceTermi
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -516,6 +532,7 @@ func TestOrganizationMembershipValidator_ValidateDelete_AllowsWhenOrganizationDe
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -562,12 +579,113 @@ func TestOrganizationMembershipValidator_ValidateDelete_AllowsWhenOrganizationMi
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
 
 	if _, err := validator.ValidateDelete(ctx, target); err != nil {
 		t.Fatalf("expected deletion to succeed when organization is missing, got error: %v", err)
+	}
+}
+
+func TestOrganizationMembershipValidator_ValidateDelete_AllowsWhenUserIsBeingDeleted(t *testing.T) {
+	ctx := context.TODO()
+	scheme := getWebhookTestScheme()
+
+	now := metav1.Now()
+	user := &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "alice",
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"some-finalizer"},
+		},
+	}
+
+	target := &resourcemanagerv1alpha1.OrganizationMembership{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "member-alice",
+			Namespace: "organization-test",
+		},
+		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{
+				Name: "test-org",
+			},
+			UserRef: resourcemanagerv1alpha1.MemberReference{
+				Name: "alice",
+			},
+			Roles: []resourcemanagerv1alpha1.RoleReference{
+				{
+					Name:      "resourcemanager.miloapis.com-organizationowner",
+					Namespace: "milo-system",
+				},
+			},
+		},
+	}
+
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "organization-test"}}
+	org := &resourcemanagerv1alpha1.Organization{ObjectMeta: metav1.ObjectMeta{Name: "test-org"}}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(target, user, namespace, org).
+		Build()
+
+	validator := &OrganizationMembershipValidator{
+		client:             c,
+		apiReader:          c,
+		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
+		ownerRoleNamespace: "milo-system",
+	}
+
+	if _, err := validator.ValidateDelete(ctx, target); err != nil {
+		t.Fatalf("expected deletion to succeed when user has a DeletionTimestamp, got error: %v", err)
+	}
+}
+
+func TestOrganizationMembershipValidator_ValidateDelete_AllowsWhenUserAlreadyGone(t *testing.T) {
+	ctx := context.TODO()
+	scheme := getWebhookTestScheme()
+
+	target := &resourcemanagerv1alpha1.OrganizationMembership{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "member-alice",
+			Namespace: "organization-test",
+		},
+		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{
+				Name: "test-org",
+			},
+			UserRef: resourcemanagerv1alpha1.MemberReference{
+				Name: "alice",
+			},
+			Roles: []resourcemanagerv1alpha1.RoleReference{
+				{
+					Name:      "resourcemanager.miloapis.com-organizationowner",
+					Namespace: "milo-system",
+				},
+			},
+		},
+	}
+
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "organization-test"}}
+	org := &resourcemanagerv1alpha1.Organization{ObjectMeta: metav1.ObjectMeta{Name: "test-org"}}
+
+	// User is not added to the client — simulating a user that was already deleted.
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(target, namespace, org).
+		Build()
+
+	validator := &OrganizationMembershipValidator{
+		client:             c,
+		apiReader:          c,
+		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
+		ownerRoleNamespace: "milo-system",
+	}
+
+	if _, err := validator.ValidateDelete(ctx, target); err != nil {
+		t.Fatalf("expected deletion to succeed when user no longer exists, got error: %v", err)
 	}
 }
 
@@ -609,6 +727,7 @@ func TestOrganizationMembershipValidator_ValidateUpdate_BlocksRemovingOwnerRoleF
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -681,6 +800,7 @@ func TestOrganizationMembershipValidator_ValidateUpdate_AllowsRemovingOwnerRoleW
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}
@@ -734,6 +854,7 @@ func TestOrganizationMembershipValidator_ValidateUpdate_AllowsRemovingOwnerRoleD
 
 	validator := &OrganizationMembershipValidator{
 		client:             c,
+		apiReader:          c,
 		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
 		ownerRoleNamespace: "milo-system",
 	}

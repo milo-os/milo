@@ -3,6 +3,9 @@ kind: Role
 metadata:
   name: organization-creator
   namespace: milo-system
+  annotations:
+    kubernetes.io/display-name: Organization Creator
+    kubernetes.io/description: Allows creating new organizations
 spec:
   launchStage: Beta
   includedPermissions:

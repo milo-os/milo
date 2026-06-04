@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
+	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -13,13 +14,16 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
-	userFinalizerKey                = "iam.miloapis.com/user"
+	// userMembershipCleanupFinalizer ensures OrganizationMembership resources are
+	// deleted before the User object is removed from the API server.
+	userMembershipCleanupFinalizer  = "iam.miloapis.com/user-membership-cleanup"
 	userReadyConditionType          = "Ready"
 	platformAccessApprovalIndexKey  = "iam.miloapis.com/platformaccessapprovalkey"
 	platformAccessRejectionIndexKey = "iam.miloapis.com/platformaccessrejectionkey"
@@ -44,6 +48,7 @@ type UserController struct {
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=userpreferences,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=platformaccessapprovals,verbs=get;list;watch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=platformaccessrejections,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=list;delete
 
 // Reconcile is the main reconciliation loop for the UserController.
 func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -59,15 +64,40 @@ func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	log.Info("reconciling User", "user", user.Name)
 
-	// Stop reconciling if deletion in progress.
+	// When the user is being deleted, clean up OrganizationMembership resources
+	// before the object is removed.
 	if !user.DeletionTimestamp.IsZero() {
-		log.Info("User is being deleted, skipping reconciliation", "user", user.Name)
+		if controllerutil.ContainsFinalizer(user, userMembershipCleanupFinalizer) {
+			if err := r.cleanupOrganizationMemberships(ctx, user); err != nil {
+				log.Error(err, "failed to clean up OrganizationMemberships during user deletion")
+				return ctrl.Result{}, err
+			}
+			controllerutil.RemoveFinalizer(user, userMembershipCleanupFinalizer)
+			if err := r.Client.Update(ctx, user); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to remove membership cleanup finalizer: %w", err)
+			}
+		}
 		return ctrl.Result{}, nil
+	}
+
+	// Ensure the membership-cleanup finalizer is present on every active User so
+	// that OrganizationMemberships are deleted before the User is removed.
+	if !controllerutil.ContainsFinalizer(user, userMembershipCleanupFinalizer) {
+		controllerutil.AddFinalizer(user, userMembershipCleanupFinalizer)
+		if err := r.Client.Update(ctx, user); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to add membership cleanup finalizer: %w", err)
+		}
 	}
 
 	// Ensure owner references are set on PolicyBinding and UserPreference resources
 	if err := r.ensureOwnerReferences(ctx, user); err != nil {
 		log.Error(err, "Failed to ensure owner references")
+		return ctrl.Result{}, err
+	}
+
+	// Reconcile the name-review annotation based on whether givenName and familyName match
+	if err := r.reconcileNameReviewAnnotation(ctx, user); err != nil {
+		log.Error(err, "Failed to reconcile name review annotation")
 		return ctrl.Result{}, err
 	}
 
@@ -131,6 +161,40 @@ func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
+// reconcileNameReviewAnnotation adds or removes the name-review-required annotation depending on
+// whether givenName and familyName are identical. This situation arises when an identity provider
+// (e.g. GitHub) supplies a single display name and the system copies it into both fields.
+func (r *UserController) reconcileNameReviewAnnotation(ctx context.Context, user *iamv1alpha1.User) error {
+	log := log.FromContext(ctx).WithName("reconcile-name-review-annotation")
+
+	annotations := user.GetAnnotations()
+	_, annotationPresent := annotations[iamv1alpha1.UserNameReviewRequiredAnnotation]
+	namesAreEqual := user.Spec.GivenName != "" && user.Spec.GivenName == user.Spec.FamilyName
+
+	switch {
+	case namesAreEqual && !annotationPresent:
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[iamv1alpha1.UserNameReviewRequiredAnnotation] = "true"
+		user.SetAnnotations(annotations)
+		if err := r.Client.Update(ctx, user); err != nil {
+			return fmt.Errorf("failed to add name-review annotation: %w", err)
+		}
+		log.Info("Added name-review-required annotation", "user", user.Name)
+
+	case !namesAreEqual && annotationPresent:
+		delete(annotations, iamv1alpha1.UserNameReviewRequiredAnnotation)
+		user.SetAnnotations(annotations)
+		if err := r.Client.Update(ctx, user); err != nil {
+			return fmt.Errorf("failed to remove name-review annotation: %w", err)
+		}
+		log.Info("Removed name-review-required annotation", "user", user.Name)
+	}
+
+	return nil
+}
+
 // ensureOwnerReferences ensures that PolicyBinding and UserPreference resources have proper owner references
 func (r *UserController) ensureOwnerReferences(ctx context.Context, user *iamv1alpha1.User) error {
 	log := log.FromContext(ctx).WithName("ensure-owner-references")
@@ -192,6 +256,33 @@ func (r *UserController) ensureOwnerReferences(ctx context.Context, user *iamv1a
 			return fmt.Errorf("failed to update user preference policy binding with owner reference: %w", err)
 		}
 		log.Info("Updated UserPreference PolicyBinding with owner reference", "user", user.Name)
+	}
+
+	return nil
+}
+
+// cleanupOrganizationMemberships deletes all OrganizationMembership resources that
+// reference the given user. This is called when a user is being deleted so that
+// memberships (including last-owner memberships) are removed before the User
+// object is garbage-collected.
+//
+// Depends on the "spec.userRef.name" field index registered by
+// OrganizationMembershipController.SetupWithManager. Both controllers share the
+// same manager, so the index is available when this function runs.
+func (r *UserController) cleanupOrganizationMemberships(ctx context.Context, user *iamv1alpha1.User) error {
+	log := log.FromContext(ctx).WithName("cleanup-organization-memberships")
+
+	var membershipList resourcemanagerv1alpha1.OrganizationMembershipList
+	if err := r.Client.List(ctx, &membershipList, client.MatchingFields{"spec.userRef.name": user.Name}); err != nil {
+		return fmt.Errorf("failed to list OrganizationMemberships for user %s: %w", user.Name, err)
+	}
+
+	for i := range membershipList.Items {
+		membership := &membershipList.Items[i]
+		log.Info("deleting OrganizationMembership for deleted user", "membership", membership.Name, "namespace", membership.Namespace)
+		if err := r.Client.Delete(ctx, membership); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete OrganizationMembership %s/%s: %w", membership.Namespace, membership.Name, err)
+		}
 	}
 
 	return nil

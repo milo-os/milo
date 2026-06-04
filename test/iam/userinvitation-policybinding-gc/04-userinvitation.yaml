@@ -1,0 +1,19 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: UserInvitation
+metadata:
+  name: ui-gc-test-invitation
+  namespace: organization-ui-gc-test-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-policybinding-gc"
+spec:
+  organizationRef:
+    name: ui-gc-test-org
+  email: invitee@ui-gc-test.local
+  givenName: Invitee
+  familyName: User
+  roles:
+    - name: resourcemanager.miloapis.com-organization-viewer
+      namespace: milo-system
+  invitedBy:
+    name: admin
+  state: Pending

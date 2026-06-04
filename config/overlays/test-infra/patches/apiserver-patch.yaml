@@ -50,6 +50,8 @@ spec:
             value: "batch"
           - name: AUDIT_WEBHOOK_INITIAL_BACKOFF
             value: "10s"
+          - name: FEATURE_GATES
+            value: "DiscoveryContextFilter=true"
         # Add volume mount for token auth
         volumeMounts:
           - name: auth-tokens

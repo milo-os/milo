@@ -12,7 +12,7 @@ This test verifies:
 
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
-| 1 | [create-user-contact-and-notes](#step-create-user-contact-and-notes) | 0 | 7 | 0 | 0 | 0 |
+| 1 | [create-user-contact-and-notes](#step-create-user-contact-and-notes) | 0 | 5 | 0 | 0 | 0 |
 | 2 | [delete-contact-and-verify-contact-note-deletion](#step-delete-contact-and-verify-contact-note-deletion) | 0 | 5 | 0 | 0 | 0 |
 | 3 | [delete-user-and-verify-user-note-deletion](#step-delete-user-and-verify-user-note-deletion) | 0 | 3 | 0 | 0 | 0 |
 | 4 | [verify-additional-notes-still-exist](#step-verify-additional-notes-still-exist) | 0 | 2 | 0 | 0 | 0 |
@@ -29,9 +29,7 @@ Create IAM User, Notification Contact, and CRM Notes, then verify Note status
 | 2 | `wait` | 0 | 0 | *No description* |
 | 3 | `apply` | 0 | 0 | *No description* |
 | 4 | `apply` | 0 | 0 | *No description* |
-| 5 | `script` | 0 | 0 | *No description* |
-| 6 | `wait` | 0 | 0 | *No description* |
-| 7 | `wait` | 0 | 0 | *No description* |
+| 5 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `delete-contact-and-verify-contact-note-deletion`
 

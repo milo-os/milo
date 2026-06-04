@@ -3,6 +3,7 @@ kind: Role
 metadata:
   name: iam-user-self-manage
   annotations:
+    kubernetes.io/display-name: User Self Manage
     kubernetes.io/description: "Allows users to manage their own user account."
 spec:
   launchStage: Beta
@@ -21,6 +22,7 @@ spec:
   - identity.miloapis.com/useridentities.get
   - iam.miloapis.com/userinvitations.get
   - iam.miloapis.com/userinvitations.list
+  - iam.miloapis.com/userinvitations.watch
   - notification.miloapis.com/contacts.list
   - notification.miloapis.com/contactgroups.list
   - notification.miloapis.com/contactgroupmemberships.list

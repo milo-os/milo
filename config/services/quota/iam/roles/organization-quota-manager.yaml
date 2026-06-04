@@ -3,6 +3,9 @@ kind: Role
 metadata:
   name: quota.miloapis.com-organization-quota-manager
   namespace: milo-system
+  annotations:
+    kubernetes.io/display-name: Organization Quota Manager
+    kubernetes.io/description: View quota usage, grants, and claims across the organization
   labels:
     quota.miloapis.com/role-type: organization-manager
     quota.miloapis.com/service: quota

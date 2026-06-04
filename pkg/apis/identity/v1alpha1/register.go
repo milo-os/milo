@@ -28,12 +28,24 @@ func Resource(resource string) schema.GroupResource {
 
 // Adds the list of known types to Scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(SchemeGroupVersion,
+	types := []runtime.Object{
 		&Session{},
 		&SessionList{},
 		&UserIdentity{},
 		&UserIdentityList{},
+		&ServiceAccountKey{},
+		&ServiceAccountKeyList{},
+	}
+
+	scheme.AddKnownTypes(SchemeGroupVersion, types...)
+	scheme.AddKnownTypes(schema.GroupVersion{
+		Group:   SchemeGroupVersion.Group,
+		Version: runtime.APIVersionInternal,
+	},
+		&ServiceAccountKey{},
+		&ServiceAccountKeyList{},
 	)
+
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }

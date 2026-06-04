@@ -1,0 +1,27 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceRegistration
+metadata:
+  name: notes-per-project
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+spec:
+  consumerType:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Project
+
+  type: Entity
+
+  resourceType: notes.miloapis.com/notes
+
+  description: "Maximum number of notes (namespaced and cluster-scoped) that can be created within a project"
+
+  baseUnit: note
+  displayUnit: notes
+  unitConversionFactor: 1
+
+  claimingResources:
+    - apiGroup: notes.miloapis.com
+      kind: Note
+    - apiGroup: notes.miloapis.com
+      kind: ClusterNote

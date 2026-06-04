@@ -1,0 +1,65 @@
+---
+# Example: Note attached to a namespaced Domain resource
+apiVersion: notes.miloapis.com/v1alpha1
+kind: Note
+metadata:
+  name: datum-net-legacy-note
+  namespace: default
+spec:
+  subjectRef:
+    apiGroup: networking.datumapis.com
+    kind: Domain
+    name: datum.net
+    namespace: default
+  content: "Legacy domain - do not delete. Purchased on 2022-04-15 for Project Atlas."
+  creatorRef:
+    name: admin
+---
+# Example: Another note on the same domain with different context
+apiVersion: notes.miloapis.com/v1alpha1
+kind: Note
+metadata:
+  name: datum-net-pricing-note
+  namespace: default
+spec:
+  subjectRef:
+    apiGroup: networking.datumapis.com
+    kind: Domain
+    name: datum.net
+    namespace: default
+  content: "Do not sell for less than 10k CAD"
+  creatorRef:
+    name: admin
+---
+# Example: Note with follow-up action
+apiVersion: notes.miloapis.com/v1alpha1
+kind: Note
+metadata:
+  name: datum-net-review-note
+  namespace: default
+spec:
+  subjectRef:
+    apiGroup: networking.datumapis.com
+    kind: Domain
+    name: datum.net
+    namespace: default
+  content: "Zac was not a fan of this domain but Zack thinks it has potential"
+  followUp: true
+  nextAction: "Schedule team discussion about domain strategy"
+  nextActionTime: "2026-02-01T10:00:00Z"
+  creatorRef:
+    name: admin
+---
+# Example: ClusterNote for a cluster-scoped resource
+apiVersion: notes.miloapis.com/v1alpha1
+kind: ClusterNote
+metadata:
+  name: example-org-note
+spec:
+  subjectRef:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+    name: example-org
+  content: "Primary organization for enterprise customers. Handle with priority support."
+  creatorRef:
+    name: admin

@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-user-deactivations-reader
+  annotations:
+    kubernetes.io/display-name: User Deactivation Viewer
+    kubernetes.io/description: View user deactivations
 spec:
   launchStage: Beta
   includedPermissions:

@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-platform-invitations-reader
+  annotations:
+    kubernetes.io/display-name: Platform Invitation Viewer
+    kubernetes.io/description: View platform invitations
 spec:
   launchStage: Beta
   includedPermissions:

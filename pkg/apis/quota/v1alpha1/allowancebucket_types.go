@@ -281,6 +281,7 @@ type AllowanceBucketStatus struct {
 // +kubebuilder:selectablefield:JSONPath=".spec.consumerRef.kind"
 // +kubebuilder:selectablefield:JSONPath=".spec.consumerRef.name"
 // +kubebuilder:selectablefield:JSONPath=".spec.resourceType"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization,Project"
 type AllowanceBucket struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

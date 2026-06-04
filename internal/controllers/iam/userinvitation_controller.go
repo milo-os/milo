@@ -89,8 +89,9 @@ const (
 	userEmailIndexKey = "spec.email"
 )
 
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations,verbs=get;list;watch;update;delete
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations/status,verbs=update
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations/finalizers,verbs=update
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=policybindings,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=get;list;watch;create
@@ -113,6 +114,29 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		log.Error(err, "Failed to get UserInvitation")
 		return ctrl.Result{}, fmt.Errorf("failed to get UserInvitation: %w", err)
+	}
+
+	// Run finalizers. This adds the finalizer string on first reconcile and
+	// executes userInvitationFinalizer.Finalize on deletion to clean up
+	// invitation-related PolicyBindings before the object is removed.
+	finalizeResult, err := r.finalizer.Finalize(ctx, ui)
+	if err != nil {
+		log.Error(err, "Failed to run finalizers for UserInvitation")
+		return ctrl.Result{}, fmt.Errorf("failed to run finalizers for UserInvitation: %w", err)
+	}
+
+	if finalizeResult.Updated {
+		log.Info("Finalizer updated UserInvitation, persisting to API server")
+		if updateErr := r.Client.Update(ctx, ui); updateErr != nil {
+			log.Error(updateErr, "Failed to update UserInvitation after finalizer update")
+			return ctrl.Result{}, fmt.Errorf("failed to update UserInvitation after finalizer update: %w", updateErr)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if ui.GetDeletionTimestamp() != nil {
+		log.Info("UserInvitation is marked for deletion, stopping reconciliation")
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("reconciling UserInvitation", "name", ui.Name, "email", ui.Spec.Email)
@@ -201,15 +225,6 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Grant roles to the invitee user for the organization if the invitation is accepted
 	if isUserInvitationAccepted(ui) {
-		log.Info("Deleting PolicyBindings for accepting the invitation, as the invitation has been accepted", "userInvitation", ui.GetName())
-		if err := deletePolicyBinding(ctx, r.Client, &iamv1alpha1.RoleReference{
-			Name:      r.AcceptInvitationRoleName,
-			Namespace: r.SystemNamespace,
-		}, *ui); err != nil {
-			log.Error(err, "Failed to delete PolicyBinding for accepting the invitation")
-			return ctrl.Result{}, fmt.Errorf("failed to delete PolicyBinding for accepting the invitation: %w", err)
-		}
-
 		log.Info("Creating OrganizationMembership with roles for the invitee user, as the invitation is accepted", "user", user.Name, "roles", ui.Spec.Roles)
 
 		// Create the OrganizationMembership with roles
@@ -541,7 +556,7 @@ func (r *UserInvitationController) createOrganizationMembership(ctx context.Cont
 			Namespace: fmt.Sprintf("organization-%s", ui.Spec.OrganizationRef.Name),
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: iamv1alpha1.SchemeGroupVersion.Group,
+					APIVersion: iamv1alpha1.SchemeGroupVersion.String(),
 					Kind:       "User",
 					Name:       user.GetName(),
 					UID:        user.GetUID(),

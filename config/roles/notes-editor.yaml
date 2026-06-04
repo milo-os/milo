@@ -1,0 +1,20 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notes-editor
+  annotations:
+    kubernetes.io/display-name: Notes Editor
+    kubernetes.io/description: "Allows creating, editing, and deleting notes and cluster notes."
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: notes-viewer
+  includedPermissions:
+    - notes.miloapis.com/notes.create
+    - notes.miloapis.com/notes.update
+    - notes.miloapis.com/notes.patch
+    - notes.miloapis.com/notes.delete
+    - notes.miloapis.com/clusternotes.create
+    - notes.miloapis.com/clusternotes.update
+    - notes.miloapis.com/clusternotes.patch
+    - notes.miloapis.com/clusternotes.delete

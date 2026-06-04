@@ -1,5 +1,13 @@
 # Build stage
-FROM golang:1.24 AS builder
+# Use $BUILDPLATFORM so the builder runs natively on the runner's architecture
+# and cross-compiles to $TARGETOS/$TARGETARCH. This makes multi-arch builds
+# (linux/amd64, linux/arm64) fast under buildx without requiring QEMU emulation
+# for the build itself.
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+
+# Provided automatically by BuildKit when using buildx with --platform.
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /app
 
@@ -20,7 +28,7 @@ ARG VERSION=v0.0.0-master+dev
 ARG GIT_COMMIT=unknown
 ARG GIT_TREE_STATE=dirty
 ARG BUILD_DATE=unknown
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -o milo ./cmd/milo
 
 # Final stage: minimal runtime image

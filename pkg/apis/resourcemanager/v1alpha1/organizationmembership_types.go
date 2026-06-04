@@ -60,6 +60,7 @@ import (
 // +kubebuilder:resource:path=organizationmemberships,scope=Namespaced,singular=organizationmembership
 // +kubebuilder:selectablefield:JSONPath=".spec.userRef.name"
 // +kubebuilder:selectablefield:JSONPath=".spec.organizationRef.name"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization,User"
 type OrganizationMembership struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

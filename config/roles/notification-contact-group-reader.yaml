@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notification-contact-group-reader
+  annotations:
+    kubernetes.io/display-name: Notification Contact Group Viewer
+    kubernetes.io/description: View notification contact groups
 spec:
   launchStage: Beta
   includedPermissions:

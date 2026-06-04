@@ -1,0 +1,28 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-organization-editor
+  annotations:
+    kubernetes.io/display-name: IAM Organization Editor
+    kubernetes.io/description: "Edit organization-scoped IAM resources"
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: iam-organization-viewer
+  includedPermissions:
+    - iam.miloapis.com/groups.create
+    - iam.miloapis.com/groups.update
+    - iam.miloapis.com/groups.patch
+    - iam.miloapis.com/groups.delete
+    - iam.miloapis.com/groupmemberships.create
+    - iam.miloapis.com/groupmemberships.update
+    - iam.miloapis.com/groupmemberships.patch
+    - iam.miloapis.com/groupmemberships.delete
+    - iam.miloapis.com/userinvitations.create
+    - iam.miloapis.com/userinvitations.update
+    - iam.miloapis.com/userinvitations.patch
+    - iam.miloapis.com/userinvitations.delete
+    - iam.miloapis.com/policybindings.create
+    - iam.miloapis.com/policybindings.update
+    - iam.miloapis.com/policybindings.patch
+    - iam.miloapis.com/policybindings.delete

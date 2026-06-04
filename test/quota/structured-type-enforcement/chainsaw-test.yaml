@@ -1,0 +1,265 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: structured-type-enforcement
+spec:
+  description: |
+    Tests quota enforcement for EndpointSlice (a structured/native k8s type)
+    in a project control plane.
+
+    EndpointSlice is a native Kubernetes type that arrives at the admission
+    plugin as a Go struct (*discoveryv1.EndpointSlice), not as
+    *unstructured.Unstructured. The admission plugin must convert it to
+    unstructured with correct JSON field names (metadata, not objectMeta)
+    for CEL template expressions like trigger.metadata.name to work.
+
+    This test uses a deterministic claim name template
+    "endpointslice-{{ trigger.metadata.name }}" to verify the CEL
+    evaluation works correctly for structured types.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org
+    project1:
+      kubeconfig: kubeconfig-project-1
+
+  steps:
+    - name: setup-resource-registration
+      description: Register EndpointSlice resource type for quota tracking
+      try:
+        - apply:
+            file: 01-resource-registration.yaml
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceRegistration
+            name: st-test-endpointslices-per-project
+            timeout: 30s
+            for:
+              condition:
+                name: Active
+                value: 'True'
+
+    - name: setup-grant-creation-policy
+      description: Create GrantCreationPolicy to grant EndpointSlice quota to projects
+      try:
+        - apply:
+            file: 02-grant-creation-policy.yaml
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: GrantCreationPolicy
+            name: st-test-project-endpointslice-grant-policy
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'true'
+
+    - name: setup-test-organization
+      description: Create test organization
+      try:
+        - apply:
+            file: 03-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-st-test-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project-in-org
+      description: Create project in org control plane
+      cluster: org
+      try:
+        - apply:
+            file: test-data/project-1.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: st-test-project-1
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'true'
+
+    - name: verify-grant-for-project
+      description: Confirm grant is created in project control plane
+      cluster: project1
+      try:
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceGrant
+            name: auto-grant-st-test-project-1
+            namespace: milo-system
+            timeout: 30s
+            for:
+              condition:
+                name: Active
+                value: 'True'
+
+    - name: verify-bucket-pre-created
+      description: Verify AllowanceBucket shows 5 available EndpointSlices
+      cluster: project1
+      try:
+        - assert:
+            resource:
+              apiVersion: quota.miloapis.com/v1alpha1
+              kind: AllowanceBucket
+              metadata:
+                namespace: milo-system
+                labels:
+                  quota.miloapis.com/consumer-kind: Project
+                  quota.miloapis.com/consumer-name: st-test-project-1
+              status:
+                limit: 5
+                allocated: 0
+                available: 5
+
+    - name: setup-claim-creation-policy
+      description: Register ClaimCreationPolicy for EndpointSlices with deterministic name
+      cluster: main
+      try:
+        - apply:
+            file: 04-claim-creation-policy.yaml
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ClaimCreationPolicy
+            name: st-test-endpointslice-claim-policy
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: create-endpointslice-1
+      description: |
+        Create EndpointSlice in project control plane.
+        This is the critical test: EndpointSlice is a native k8s type that
+        arrives as a structured Go type in admission. The CEL template
+        trigger.metadata.name must resolve correctly.
+      cluster: project1
+      try:
+        - sleep:
+            duration: 5s
+        - apply:
+            file: test-data/endpointslice-1.yaml
+      catch:
+        - script:
+            timeout: 10s
+            content: |
+              echo "=== PROJECT CONTROL PLANE ==="
+              echo "--- ResourceClaims ---"
+              kubectl get resourceclaims.quota.miloapis.com -A -o wide 2>&1 || true
+              echo "--- AllowanceBuckets ---"
+              kubectl get allowancebuckets.quota.miloapis.com -A -o wide 2>&1 || true
+              echo "--- ResourceGrants ---"
+              kubectl get resourcegrants.quota.miloapis.com -A -o wide 2>&1 || true
+              echo "--- EndpointSlices ---"
+              kubectl get endpointslices.discovery.k8s.io -A 2>&1 || true
+        - script:
+            timeout: 10s
+            cluster: main
+            content: |
+              echo "=== ROOT CONTROL PLANE ==="
+              echo "--- ResourceClaims (all namespaces) ---"
+              kubectl get resourceclaims.quota.miloapis.com -A -o wide 2>&1 || true
+              echo "--- ClaimCreationPolicies ---"
+              kubectl get claimcreationpolicies.quota.miloapis.com -o wide 2>&1 || true
+
+    - name: verify-claim-for-endpointslice-1
+      description: Confirm ResourceClaim with deterministic name is created and granted
+      cluster: project1
+      try:
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceClaim
+            name: endpointslice-st-test-endpointslice-1
+            namespace: default
+            timeout: 30s
+            for:
+              condition:
+                name: Granted
+                value: 'True'
+
+    - name: verify-bucket-usage-1-of-5
+      description: Verify bucket shows 1 EndpointSlice allocated
+      cluster: project1
+      try:
+        - assert:
+            resource:
+              apiVersion: quota.miloapis.com/v1alpha1
+              kind: AllowanceBucket
+              metadata:
+                namespace: milo-system
+              status:
+                limit: 5
+                allocated: 1
+                available: 4
+
+    - name: create-endpointslice-2
+      description: Create second EndpointSlice
+      cluster: project1
+      try:
+        - apply:
+            file: test-data/endpointslice-2.yaml
+
+    - name: verify-claim-for-endpointslice-2
+      description: Confirm second claim with deterministic name is created and granted
+      cluster: project1
+      try:
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceClaim
+            name: endpointslice-st-test-endpointslice-2
+            namespace: default
+            timeout: 30s
+            for:
+              condition:
+                name: Granted
+                value: 'True'
+
+    - name: verify-bucket-usage-2-of-5
+      description: Verify bucket shows 2 EndpointSlices allocated
+      cluster: project1
+      try:
+        - assert:
+            resource:
+              apiVersion: quota.miloapis.com/v1alpha1
+              kind: AllowanceBucket
+              metadata:
+                namespace: milo-system
+              status:
+                limit: 5
+                allocated: 2
+                available: 3
+
+    - name: delete-endpointslice-1
+      description: Delete first EndpointSlice to free quota
+      cluster: project1
+      try:
+        - delete:
+            ref:
+              apiVersion: discovery.k8s.io/v1
+              kind: EndpointSlice
+              name: st-test-endpointslice-1
+              namespace: default
+
+    - name: verify-bucket-after-deletion
+      description: Verify bucket shows quota freed after deletion
+      cluster: project1
+      try:
+        - assert:
+            resource:
+              apiVersion: quota.miloapis.com/v1alpha1
+              kind: AllowanceBucket
+              metadata:
+                namespace: milo-system
+              status:
+                limit: 5
+                allocated: 1
+                available: 4

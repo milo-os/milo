@@ -32,6 +32,14 @@ const (
 	UserIDContextKey = "userID"
 )
 
+// UserID returns the user ID stashed on the request context by
+// UserContextHandler, if any. Used by middleware that needs to detect whether
+// the current request is being made in the context of a user.
+func UserID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(UserIDContextKey).(string)
+	return id, ok
+}
+
 // UserContextHandler will react to requests sent to a pseudo API path of
 // `/apis/iam.miloapis.com/v1alpha1/users/` and injects the provided user ID
 // into a request context value. This value will then be used by

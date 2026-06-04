@@ -2,6 +2,9 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: core-admin
+  annotations:
+    kubernetes.io/display-name: Core Admin
+    kubernetes.io/description: Full access to core platform resources including secrets, configmaps, and namespaces
 spec:
   launchStage: Beta
   inheritedRoles:
