@@ -69,6 +69,15 @@ jobs:
           kind version
           echo "Go version: $(go version)"
 
+      - name: Generate code
+        run: task generate:code
+
+      - name: Start cluster creation in background
+        run: |
+          task test-infra:cluster-up > /tmp/cluster-up.log 2>&1 &
+          echo $! > /tmp/cluster-up.pid
+          echo "Cluster creation started in background (PID: $(cat /tmp/cluster-up.pid))"
+
       - name: Build Milo container image with caching
         uses: docker/build-push-action@v5
         with:
@@ -82,20 +91,24 @@ jobs:
           build-args: |
             GOPROXY=https://proxy.golang.org,direct
 
-      - name: Set up test infrastructure cluster
+      - name: Wait for cluster creation
         run: |
-          echo "Setting up test infrastructure cluster (using pre-built image)..."
+          PID=$(cat /tmp/cluster-up.pid)
+          echo "Waiting for background cluster creation (PID: $PID)..."
+          if wait "$PID"; then
+            echo "✓ Cluster creation completed successfully"
+          else
+            echo "✗ Cluster creation failed — logs:"
+            cat /tmp/cluster-up.log
+            exit 1
+          fi
 
-          # Create the KinD cluster
-          task test-infra:cluster-up
-
-          # Generate required code
-          task generate:code
-
-          # Load the pre-built image (will skip build since image exists)
+      - name: Deploy Milo to test cluster
+        run: |
+          # Load the pre-built image into the now-ready cluster
           task dev:load
 
-          # Deploy Milo control plane (dependencies already satisfied)
+          # Deploy Milo control plane
           task dev:deploy
 
       - name: Wait for networking path to be ready
