@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-platform-access-approvals-editor
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: Platform Access Approval Editor
     kubernetes.io/description: Create, update, and delete platform access approvals
+    taxonomy.miloapis.com/product: Identity & Access Management
+    taxonomy.miloapis.com/sort-order: "20"
 spec:
   launchStage: Beta
   inheritedRoles:

@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-user-self-manage
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: User Self Manage
     kubernetes.io/description: "Allows users to manage their own user account."
+    taxonomy.miloapis.com/product: Identity & Access Management
+    taxonomy.miloapis.com/sort-order: "40"
 spec:
   launchStage: Beta
   includedPermissions:
