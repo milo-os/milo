@@ -9,3 +9,4 @@ resources:
   - contactgroup.yaml
   - contactgroupmembership.yaml
   - contactgroupmembershipremoval.yaml
+  - contactgroupenrollmentpolicy.yaml

@@ -173,14 +173,23 @@ func (i *instrumentedStorage) GuaranteedUpdate(ctx context.Context, key string, 
 	i.markSuccess()
 	return nil
 }
-func (i *instrumentedStorage) Count(key string) (int64, error) { return i.inner.Count(key) }
-func (i *instrumentedStorage) ReadinessCheck() error           { return i.inner.ReadinessCheck() }
+func (i *instrumentedStorage) ReadinessCheck() error { return i.inner.ReadinessCheck() }
 func (i *instrumentedStorage) RequestWatchProgress(ctx context.Context) error {
 	if err := i.inner.RequestWatchProgress(ctx); err != nil {
 		return i.markReinit("watch_progress", err)
 	}
 	return nil
 }
+func (i *instrumentedStorage) Stats(ctx context.Context) (storage.Stats, error) {
+	return i.inner.Stats(ctx)
+}
+func (i *instrumentedStorage) GetCurrentResourceVersion(ctx context.Context) (uint64, error) {
+	return i.inner.GetCurrentResourceVersion(ctx)
+}
+func (i *instrumentedStorage) EnableResourceSizeEstimation(fn storage.KeysFunc) error {
+	return i.inner.EnableResourceSizeEstimation(fn)
+}
+func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRevision() }
 
 // -------------------- mux --------------------
 
@@ -365,22 +374,6 @@ func (m *projectMux) GuaranteedUpdate(ctx context.Context, key string, out runti
 	return s.GuaranteedUpdate(ctx, key, out, ignoreNotFound, precond, tryUpdate, suggestion)
 }
 
-// If your k8s minor *doesn't* include Count in storage.Interface, delete this.
-func (m *projectMux) Count(key string) (int64, error) {
-	m.mu.RLock()
-	c := m.children[""]
-	m.mu.RUnlock()
-	if c == nil {
-		if _, err := m.childForProject(""); err != nil {
-			return 0, err
-		}
-		m.mu.RLock()
-		c = m.children[""]
-		m.mu.RUnlock()
-	}
-	return c.s.Count(key)
-}
-
 // ReadinessCheck proxies to the appropriate child (defaults to the "" project).
 func (m *projectMux) ReadinessCheck() error {
 	m.mu.RLock()
@@ -403,4 +396,41 @@ func (m *projectMux) RequestWatchProgress(ctx context.Context) error {
 		return err
 	}
 	return s.RequestWatchProgress(ctx)
+}
+
+func (m *projectMux) Stats(ctx context.Context) (storage.Stats, error) {
+	s, err := m.pick(ctx)
+	if err != nil {
+		return storage.Stats{}, err
+	}
+	return s.Stats(ctx)
+}
+
+func (m *projectMux) GetCurrentResourceVersion(ctx context.Context) (uint64, error) {
+	s, err := m.pick(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return s.GetCurrentResourceVersion(ctx)
+}
+
+func (m *projectMux) EnableResourceSizeEstimation(fn storage.KeysFunc) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.children {
+		if err := c.s.EnableResourceSizeEstimation(fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *projectMux) CompactRevision() int64 {
+	m.mu.RLock()
+	c := m.children[""]
+	m.mu.RUnlock()
+	if c == nil {
+		return 0
+	}
+	return c.s.CompactRevision()
 }

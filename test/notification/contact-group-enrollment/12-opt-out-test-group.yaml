@@ -1,0 +1,8 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: ContactGroup
+metadata:
+  name: enrollment-opt-out-test-group
+  namespace: milo-system
+spec:
+  displayName: Enrollment Opt-Out Test Group
+  visibility: public

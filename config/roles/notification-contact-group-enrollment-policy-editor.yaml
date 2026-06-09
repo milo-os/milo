@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notification-contact-group-enrollment-policy-editor
+  annotations:
+    kubernetes.io/display-name: Notification Contact Group Enrollment Policy Editor
+    kubernetes.io/description: Create, update, and delete notification contact group enrollment policies
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: notification-contact-group-enrollment-policy-reader
+  includedPermissions:
+    - notification.miloapis.com/contactgroupenrollmentpolicies.create
+    - notification.miloapis.com/contactgroupenrollmentpolicies.update
+    - notification.miloapis.com/contactgroupenrollmentpolicies.patch
+    - notification.miloapis.com/contactgroupenrollmentpolicies.delete

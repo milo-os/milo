@@ -7,7 +7,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,8 +25,7 @@ var organizationmembershiplog = logf.Log.WithName("organizationmembership-resour
 func SetupOrganizationMembershipWebhooksWithManager(mgr ctrl.Manager, organizationOwnerRoleName string, organizationOwnerRoleNamespace string) error {
 	organizationmembershiplog.Info("Setting up resourcemanager.miloapis.com organizationmembership webhooks")
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&resourcemanagerv1alpha1.OrganizationMembership{}).
+	return ctrl.NewWebhookManagedBy(mgr, &resourcemanagerv1alpha1.OrganizationMembership{}).
 		WithValidator(&OrganizationMembershipValidator{
 			client:             mgr.GetClient(),
 			apiReader:          mgr.GetAPIReader(),
@@ -46,8 +44,7 @@ type OrganizationMembershipValidator struct {
 	ownerRoleNamespace string
 }
 
-func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	membership := obj.(*resourcemanagerv1alpha1.OrganizationMembership)
+func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership create", "name", membership.Name, "namespace", membership.Namespace)
 
 	// Validate roles if specified
@@ -60,9 +57,7 @@ func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, ob
 	return nil, nil
 }
 
-func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	oldMembership := oldObj.(*resourcemanagerv1alpha1.OrganizationMembership)
-	newMembership := newObj.(*resourcemanagerv1alpha1.OrganizationMembership)
+func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, oldMembership, newMembership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership update", "name", newMembership.Name, "namespace", newMembership.Namespace)
 
 	// Validate roles if specified
@@ -79,8 +74,7 @@ func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, ol
 	return nil, nil
 }
 
-func (v *OrganizationMembershipValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	membership := obj.(*resourcemanagerv1alpha1.OrganizationMembership)
+func (v *OrganizationMembershipValidator) ValidateDelete(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership delete", "name", membership.Name, "namespace", membership.Namespace)
 
 	if !v.isOwnerMembership(membership) {

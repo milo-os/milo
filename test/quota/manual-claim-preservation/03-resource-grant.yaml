@@ -1,0 +1,16 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceGrant
+metadata:
+  name: manual-claim-test-org-grant
+  namespace: organization-manual-claim-test-org
+  labels:
+    test.miloapis.com/scenario: "manual-claim-preservation"
+spec:
+  consumerRef:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+    name: manual-claim-test-org
+  allowances:
+    - resourceType: "test.manual-claim.miloapis.com/projects"
+      buckets:
+        - amount: 10

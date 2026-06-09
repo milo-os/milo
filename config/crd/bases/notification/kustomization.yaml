@@ -5,4 +5,5 @@ resources:
 - notification.miloapis.com_contactgroups.yaml
 - notification.miloapis.com_contactgroupmemberships.yaml
 - notification.miloapis.com_contactgroupmembershipremovals.yaml
+- notification.miloapis.com_contactgroupenrollmentpolicies.yaml
 

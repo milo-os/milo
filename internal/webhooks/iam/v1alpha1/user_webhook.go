@@ -29,8 +29,7 @@ var userlog = logf.Log.WithName("user-resource")
 func SetupUserWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, userSelfManageRoleName string) error {
 	userlog.Info("Setting up iam.miloapis.com user webhooks")
 
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&iamv1alpha1.User{}).
+	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.User{}).
 		WithValidator(&UserValidator{
 			client:                 mgr.GetClient(),
 			restConfig:             mgr.GetConfig(),
@@ -51,8 +50,7 @@ type UserValidator struct {
 	userSelfManageRoleName string
 }
 
-func (v *UserValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	user := obj.(*iamv1alpha1.User)
+func (v *UserValidator) ValidateCreate(ctx context.Context, user *iamv1alpha1.User) (admission.Warnings, error) {
 	userlog.Info("Validating User", "name", user.Name)
 
 	req, err := admission.RequestFromContext(ctx)
@@ -83,10 +81,7 @@ func (v *UserValidator) ValidateCreate(ctx context.Context, obj runtime.Object) 
 	return nil, nil
 }
 
-func (v *UserValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	oldUser := oldObj.(*iamv1alpha1.User)
-	newUser := newObj.(*iamv1alpha1.User)
-
+func (v *UserValidator) ValidateUpdate(ctx context.Context, oldUser, newUser *iamv1alpha1.User) (admission.Warnings, error) {
 	// If email hasn't changed, allow the update
 	if oldUser.Spec.Email == newUser.Spec.Email {
 		return nil, nil
@@ -179,7 +174,7 @@ func (v *UserValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runti
 			availableEmails))
 }
 
-func (v *UserValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *UserValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.User) (admission.Warnings, error) {
 	return nil, nil
 }
 

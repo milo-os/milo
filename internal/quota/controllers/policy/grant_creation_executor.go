@@ -445,7 +445,7 @@ func (r *GrantCreationController) SetupWithManager(mgr mcmanager.Manager) error 
 	controller := mcbuilder.ControllerManagedBy(mgr).
 		For(&quotav1alpha1.GrantCreationPolicy{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(true)).
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		Named("grant-creation-controller")
 
 	r.logger.Info("GrantCreationController setup completed successfully")

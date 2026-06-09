@@ -1,0 +1,13 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: Contact
+metadata:
+  name: enrollment-user-contact
+  namespace: milo-system
+spec:
+  subject:
+    apiGroup: iam.miloapis.com
+    kind: User
+    name: enrollment-test-user
+  givenName: Enrollment
+  familyName: Test
+  email: enrollment-test@example.com

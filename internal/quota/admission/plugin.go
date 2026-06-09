@@ -33,6 +33,7 @@ import (
 	"go.miloapis.com/milo/internal/quota/validation"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	milorequest "go.miloapis.com/milo/pkg/request"
+	milofilters "go.miloapis.com/milo/pkg/server/filters"
 )
 
 const (
@@ -735,7 +736,6 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	}
 }
 
-
 // getClaimNamespace determines the namespace for a ResourceClaim.
 // If the policy template specifies a namespace containing CEL expressions,
 // the template is rendered to evaluate those expressions. Otherwise, the
@@ -796,21 +796,30 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	claim.Namespace = namespace
 	claim.GenerateName = ""
 
-	claim.Spec.ResourceRef = quotav1alpha1.UnversionedObjectReference{
+	claim.Spec.ResourceRef = &quotav1alpha1.UnversionedObjectReference{
 		APIGroup:  evalContext.GVK.Group,
 		Kind:      evalContext.GVK.Kind,
 		Name:      attrs.GetName(),
 		Namespace: attrs.GetNamespace(),
 	}
 
-	// Derive consumer from project context when template doesn't specify one
+	// Derive consumer from the request's parent context when the
+	// ClaimCreationPolicy template doesn't specify one. Project context
+	// wins over Organization context when both are present (project
+	// control plane requests carry the org for telemetry but the
+	// consumer is the project).
 	if claim.Spec.ConsumerRef.Kind == "" || claim.Spec.ConsumerRef.Name == "" {
-		projectID, ok := milorequest.ProjectID(ctx)
-		if ok && projectID != "" {
+		if projectID, ok := milorequest.ProjectID(ctx); ok && projectID != "" {
 			claim.Spec.ConsumerRef = quotav1alpha1.ConsumerRef{
 				APIGroup: "resourcemanager.miloapis.com",
 				Kind:     "Project",
 				Name:     projectID,
+			}
+		} else if orgID, ok := milofilters.OrganizationID(ctx); ok && orgID != "" {
+			claim.Spec.ConsumerRef = quotav1alpha1.ConsumerRef{
+				APIGroup: "resourcemanager.miloapis.com",
+				Kind:     "Organization",
+				Name:     orgID,
 			}
 		}
 	}
