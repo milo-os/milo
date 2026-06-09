@@ -130,15 +130,12 @@ func filterAPIIndex(w http.ResponseWriter, req *http.Request, next http.Handler,
 		}
 		filterAggregatedGroups(&list, registry, parentCtx)
 		cw.flushJSON(&list)
-	case kindProbe.Kind == "APIGroupList":
-		// Legacy APIGroupList — we can't tell from the index alone which
-		// resources live in each group, so we leave the group list intact.
-		// The per-(group,version) request will be filtered by
-		// filterAPIResourceList.
-		cw.flushUnchanged()
 	default:
-		// Unknown/unrecognised body — pass through verbatim rather than
-		// risk emitting a malformed response.
+		// Either a legacy APIGroupList — which we leave intact, since the
+		// index alone doesn't say which resources live in each group (the
+		// per-(group,version) request gets filtered by filterAPIResourceList)
+		// — or an unrecognised body we'd rather pass through verbatim than
+		// risk mangling. Both cases: flush unchanged.
 		cw.flushUnchanged()
 	}
 }
