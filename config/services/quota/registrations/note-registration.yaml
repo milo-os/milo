@@ -5,6 +5,10 @@ metadata:
   labels:
     app.kubernetes.io/name: milo
     app.kubernetes.io/component: quota-system
+    services.miloapis.com/owner: notes.miloapis.com
+  annotations:
+    kubernetes.io/display-name: "Notes"
+    kubernetes.io/description: "Maximum number of notes (namespaced and cluster-scoped) that can be created within a project"
 spec:
   consumerType:
     apiGroup: resourcemanager.miloapis.com

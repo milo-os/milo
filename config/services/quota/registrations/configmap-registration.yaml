@@ -5,6 +5,10 @@ metadata:
   labels:
     app.kubernetes.io/name: milo
     app.kubernetes.io/component: quota-system
+    services.miloapis.com/owner: core.miloapis.com
+  annotations:
+    kubernetes.io/display-name: "Config Maps"
+    kubernetes.io/description: "Maximum number of config maps that can be created within a project"
 spec:
   consumerType:
     apiGroup: resourcemanager.miloapis.com
