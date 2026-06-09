@@ -16,6 +16,23 @@ spec:
     - group: "apiregistration.k8s.io"
       resources: ["apiservices"]
       contexts: ["Platform"]
+    - group: "authentication.k8s.io"
+      resources: ["selfsubjectreviews", "tokenreviews"]
+      contexts: ["Platform"]
+    - group: "authorization.k8s.io"
+      resources: ["localsubjectaccessreviews", "selfsubjectaccessreviews", "selfsubjectrulesreviews", "subjectaccessreviews"]
+      contexts: ["Platform"]
+    - group: "flowcontrol.apiserver.k8s.io"
+      resources: ["flowschemas", "prioritylevelconfigurations"]
+      contexts: ["Platform"]
+    - group: "coordination.k8s.io"
+      resources: ["leases"]
+      # Leases are used by per-project workloads (leader election in
+      # operators, custom heartbeat mechanisms like Datum Connect's connector
+      # health Lease) so they must be discoverable in Project context.
+      # Datum's network-services-operator depends on this: see
+      # datum-cloud/network-services-operator#160.
+      contexts: ["Platform", "Project"]
     - group: "admissionregistration.k8s.io"
       resources: ["mutatingwebhookconfigurations", "validatingadmissionpolicies", "validatingadmissionpolicybindings", "validatingwebhookconfigurations"]
       contexts: ["Platform"]
