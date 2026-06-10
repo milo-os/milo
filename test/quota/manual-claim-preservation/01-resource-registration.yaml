@@ -1,0 +1,19 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceRegistration
+metadata:
+  name: manual-claim-test-resource-reg
+  labels:
+    test.miloapis.com/scenario: "manual-claim-preservation"
+spec:
+  consumerType:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+  type: "Entity"
+  resourceType: "test.manual-claim.miloapis.com/projects"
+  description: "Test quota type for verifying manual claim preservation"
+  baseUnit: "project"
+  displayUnit: "projects"
+  unitConversionFactor: 1
+  claimingResources:
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Project

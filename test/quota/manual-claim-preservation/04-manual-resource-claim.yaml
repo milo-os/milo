@@ -1,0 +1,30 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceClaim
+metadata:
+  name: manual-claim-test-claim
+  namespace: organization-manual-claim-test-org
+  labels:
+    test.miloapis.com/scenario: "manual-claim-preservation"
+    # Intentionally no auto-created markers:
+    #   quota.miloapis.com/auto-created: "true"
+    #   quota.miloapis.com/created-by: "claim-creation-plugin"
+    # This simulates a claim created directly by an external service or operator,
+    # not by the Milo admission plugin.
+spec:
+  consumerRef:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+    name: manual-claim-test-org
+  requests:
+    - resourceType: "test.manual-claim.miloapis.com/projects"
+      amount: 1
+  # resourceRef points to a Project that does not exist. Before the fix for issue
+  # #642, the ownership controller would resolve this via the REST mapper, receive
+  # a NotFound response, wait past the orphan grace period, then delete the claim.
+  # After the fix, the controller skips this claim entirely because it lacks the
+  # auto-created markers.
+  resourceRef:
+    apiGroup: resourcemanager.miloapis.com
+    kind: Project
+    name: non-existent-project-for-ownership-test
+    namespace: organization-manual-claim-test-org

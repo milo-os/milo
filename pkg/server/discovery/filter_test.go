@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	apidiscoveryv2 "k8s.io/api/apidiscovery/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -124,6 +125,146 @@ func TestFilterAPIResourceListByContext(t *testing.T) {
 			}
 			if strings.Join(got, ",") != strings.Join(tc.wantNames, ",") {
 				t.Errorf("filtered names = %v, want %v", got, tc.wantNames)
+			}
+		})
+	}
+}
+
+// TestFilterAPIIndex_FormatDetection covers the body-kind probe added to
+// filterAPIIndex so that responses with a kind mismatch between the request
+// Accept header and the actual body are not silently coerced to an empty
+// list.
+//
+// Regression test for the bug where an upstream apiserver emitting legacy
+// APIGroupList JSON in response to an aggregated-discovery request caused
+// filterAPIIndex to unmarshal into APIGroupDiscoveryList (succeeds, but
+// produces items: nil) and re-emit an empty list — dropping every group from
+// discovery, including built-ins like coordination.k8s.io that no client had
+// any way to register.
+func TestFilterAPIIndex_FormatDetection(t *testing.T) {
+	aggregatedBody := func() []byte {
+		body := apidiscoveryv2.APIGroupDiscoveryList{
+			TypeMeta: metav1.TypeMeta{Kind: "APIGroupDiscoveryList", APIVersion: "apidiscovery.k8s.io/v2"},
+			Items: []apidiscoveryv2.APIGroupDiscovery{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "coordination.k8s.io"},
+					Versions: []apidiscoveryv2.APIVersionDiscovery{
+						{Version: "v1", Resources: []apidiscoveryv2.APIResourceDiscovery{{Resource: "leases"}}},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "resourcemanager.miloapis.com"},
+					Versions: []apidiscoveryv2.APIVersionDiscovery{
+						{Version: "v1alpha1", Resources: []apidiscoveryv2.APIResourceDiscovery{
+							{Resource: "projects"}, {Resource: "untagged"},
+						}},
+					},
+				},
+			},
+		}
+		raw, _ := json.Marshal(body)
+		return raw
+	}()
+	legacyBody := []byte(`{
+		"kind":"APIGroupList","apiVersion":"v1",
+		"groups":[
+			{"name":"coordination.k8s.io","versions":[{"groupVersion":"coordination.k8s.io/v1","version":"v1"}]},
+			{"name":"resourcemanager.miloapis.com","versions":[{"groupVersion":"resourcemanager.miloapis.com/v1alpha1","version":"v1alpha1"}]}
+		]
+	}`)
+
+	cases := []struct {
+		name         string
+		body         []byte
+		accept       string
+		wantPassThru bool                    // expect the body verbatim
+		wantGroups   []string                // for aggregated, the kept group names
+		wantContains []string                // for pass-through, substrings expected in body
+	}{
+		{
+			name:       "aggregated body, aggregated Accept -> filtered, all visible kept",
+			body:       aggregatedBody,
+			accept:     "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList",
+			wantGroups: []string{"coordination.k8s.io", "resourcemanager.miloapis.com"},
+		},
+		{
+			name:         "legacy body, aggregated Accept -> pass through verbatim (no silent emptying)",
+			body:         legacyBody,
+			accept:       "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList",
+			wantPassThru: true,
+			wantContains: []string{`"kind":"APIGroupList"`, `"coordination.k8s.io"`},
+		},
+		{
+			name:         "legacy body, legacy Accept -> pass through",
+			body:         legacyBody,
+			accept:       "application/json",
+			wantPassThru: true,
+			wantContains: []string{`"kind":"APIGroupList"`, `"coordination.k8s.io"`},
+		},
+		{
+			name:       "aggregated body, legacy Accept -> still filtered (body kind wins)",
+			body:       aggregatedBody,
+			accept:     "application/json",
+			wantGroups: []string{"coordination.k8s.io", "resourcemanager.miloapis.com"},
+		},
+	}
+
+	registry := NewRegistry()
+	// "projects" is Organization-tagged; in Project context it must be hidden.
+	registry.crd[schema.GroupResource{Group: "resourcemanager.miloapis.com", Resource: "projects"}] = []ParentContext{ContextOrganization}
+	registry.hasInit = true
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(tc.body)
+			})
+			handler := DiscoveryContextFilter(inner, registry)
+
+			req := httptest.NewRequest(http.MethodGet, "/apis", nil)
+			req.Header.Set("Accept", tc.accept)
+			req = req.WithContext(request.WithProject(context.Background(), "p1"))
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+			}
+
+			if tc.wantPassThru {
+				body := rr.Body.String()
+				for _, want := range tc.wantContains {
+					if !strings.Contains(body, want) {
+						t.Errorf("body missing %q\nbody=%s", want, body)
+					}
+				}
+				return
+			}
+
+			var got apidiscoveryv2.APIGroupDiscoveryList
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode response: %v; body=%s", err, rr.Body.String())
+			}
+			names := make([]string, 0, len(got.Items))
+			for _, g := range got.Items {
+				// Inside resourcemanager, "projects" should be filtered out
+				// in Project context. We only check the group survives at
+				// all by including it here if any version has any resource.
+				keepGroup := false
+				for _, v := range g.Versions {
+					if len(v.Resources) > 0 {
+						keepGroup = true
+					}
+				}
+				if keepGroup {
+					names = append(names, g.Name)
+				}
+			}
+			if strings.Join(names, ",") != strings.Join(tc.wantGroups, ",") {
+				t.Errorf("groups = %v, want %v", names, tc.wantGroups)
 			}
 		})
 	}
