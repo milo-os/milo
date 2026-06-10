@@ -1,0 +1,50 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: milo-controller-manager
+spec:
+  groups:
+    - name: milo.controller-manager
+      interval: 30s
+      rules:
+        - alert: MiloControllerManagerRestarting
+          expr: |
+            increase(kube_pod_container_status_restarts_total{
+              pod=~"milo-controller-manager-.*",
+              container="milo-controller-manager"
+            }[15m]) >= 3
+          labels:
+            severity: warning
+            service: milo-controller-manager
+          annotations:
+            summary: "milo-controller-manager is restarting repeatedly"
+            description: |
+              milo-controller-manager has restarted {{ $value | humanize }} times
+              in the last 15 minutes. Repeated restarts indicate a panic or
+              unrecoverable error in the controller loop. The GC will be wedged
+              while the process is unstable — owner-reference cascades and quota
+              claim releases will not run until it stabilises.
+              Check pod logs: kubectl logs -n <namespace> deploy/milo-controller-manager --previous
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/controller-manager-crash-looping.md"
+
+        - alert: MiloControllerManagerCrashLooping
+          expr: |
+            max_over_time(kube_pod_container_status_waiting_reason{
+              reason="CrashLoopBackOff",
+              pod=~"milo-controller-manager-.*"
+            }[5m]) >= 1
+          for: 5m
+          labels:
+            severity: critical
+            service: milo-controller-manager
+          annotations:
+            summary: "milo-controller-manager is in CrashLoopBackOff"
+            description: |
+              milo-controller-manager has been in CrashLoopBackOff for at least
+              5 minutes. The GC is wedged — orphaned children (Gateways,
+              HTTPRoutes, EndpointSlices) and leaked ResourceClaims will
+              accumulate until the process is healthy. Quota buckets may show
+              usage higher than live object counts.
+              Immediate mitigation: kubectl rollout restart deploy/milo-controller-manager -n <namespace>
+              Root-cause the panic via: kubectl logs -n <namespace> deploy/milo-controller-manager --previous
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/controller-manager-crash-looping.md"
