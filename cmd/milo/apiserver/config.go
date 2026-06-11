@@ -51,6 +51,7 @@ import (
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
+	kplanestorage "go.miloapis.com/milo/internal/apiserver/storage/kplane"
 	admissionquota "go.miloapis.com/milo/internal/quota/admission"
 	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
@@ -371,9 +372,12 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		if registry != nil {
 			h = discoveryctx.DiscoveryContextFilter(h, registry)
 		}
+		// Bridge Milo's request.WithProject(ctx, ...) to kplane's mc.WithCluster(ctx, ...)
+		// after the project router has parsed the URL but before the rest of the chain runs.
+		inner := kplanestorage.WithProjectAsCluster(DefaultBuildHandlerChain(h, c, loopbackClientConfig))
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig), // build stock chain first
-			c.RequestInfoResolver,                                // then wrap with router
+			inner,
+			c.RequestInfoResolver,
 		)
 	}
 
@@ -405,8 +409,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		if registry != nil {
 			h = discoveryctx.DiscoveryContextFilter(h, registry)
 		}
+		inner := kplanestorage.WithProjectAsCluster(DefaultBuildHandlerChain(h, c, loopbackClientConfig))
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig),
+			inner,
 			c.RequestInfoResolver,
 		)
 	}
@@ -431,8 +436,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		if registry != nil {
 			h = discoveryctx.DiscoveryContextFilter(h, registry)
 		}
+		inner := kplanestorage.WithProjectAsCluster(DefaultBuildHandlerChain(h, c, loopbackClientConfig))
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig),
+			inner,
 			c.RequestInfoResolver,
 		)
 	}
