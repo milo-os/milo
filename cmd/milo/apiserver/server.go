@@ -299,13 +299,11 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 
-	loopbackConfig := config.ControlPlane.Generic.LoopbackClientConfig
-
 	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.GenericConfig.RESTOptionsGetter, loopbackConfig)
+		projectstorage.WithProjectAwareDecorator(config.APIExtensions.GenericConfig.RESTOptionsGetter)
 
 	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, loopbackConfig)
+		projectstorage.WithProjectAwareDecorator(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
