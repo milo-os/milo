@@ -24,10 +24,12 @@ lever:
 > and if so, is the cascade-deletion behavior the core control plane depends on
 > covered by other mechanisms?
 
-The conclusion is framed deliberately as an assessment with open questions and a
-measurement plan. It does **not** assert that disabling is safe today, because
-the core control plane has at least one owner-reference cascade path that
-relies on the embedded GC, and potentially two more (Section 4).
+The conclusion is unchanged after code verification: disabling is **not safe
+today**. Three owner-reference cascade paths in the core control plane rely on
+the embedded GC — Organization → namespace (cascading to all namespace
+contents), User → owned IAM objects, and OrganizationMembership → owned
+PolicyBindings (Section 4b). A fourth (downstream anchors) is likely out of
+scope but unconfirmed. The required conversions are listed in Section 7.
 
 ## 2. How the embedded GC works here
 
@@ -127,23 +129,18 @@ plane has several such paths. Each must be evaluated before disabling.
 
 ### 4a. Covered without the embedded GC
 
-- **Namespace content deletion.** The namespace controller is registered in the
-  same command (`controllermanager.go:1087`) and uses its own
-  `NamespacedResourcesDeleter`
+- **Namespace *content* deletion (covered) — but namespace *removal* itself is
+  not (see 4b).** The namespace controller is registered in the same command
+  (`controllermanager.go:1087`) and uses its own `NamespacedResourcesDeleter`
   (`internal/controllers/namespace/namespace_controller.go:90`,
   `:177`), which issues `DeleteCollection` across discovered namespaced
-  resources. This does **not** depend on the GC graph builder. So the
-  Organization → `organization-<name>` namespace → namespace-scoped contents
-  path is covered: the organization controller sets the Organization as the
-  namespace owner
-  (`internal/controllers/resourcemanager/organization_controller.go:57-73`), and
-  when the namespace is deleted the namespace controller purges its contents.
-
-  Open question: deleting the namespace still relies on the **namespace's**
-  owner reference to the Organization triggering namespace deletion. That parent
-  → namespace edge is itself owner-reference GC. Confirm whether namespace
-  deletion is driven by GC (owner ref on the namespace) or by an explicit
-  controller delete; if it is GC-driven, this path is **not** fully covered.
+  resources once a namespace enters Terminating. That deleter does **not**
+  depend on the GC graph builder. However, it only runs after the
+  `organization-<name>` namespace is actually deleted — and that deletion is
+  GC-driven, not controller-driven (resolved open question, see 4b). With GC
+  off the namespace never enters Terminating, so the content deleter never
+  fires and the entire org-namespace subtree leaks. The Organization cascade is
+  therefore **not** covered without GC.
 
 - **Project teardown.** The project controller uses an explicit finalizer
   (`projectFinalizer`,
@@ -162,13 +159,26 @@ plane has several such paths. Each must be evaluated before disabling.
 
 ### 4b. Relies on the embedded GC (the risk)
 
+- **Organization → namespace removal (HIGHEST severity; resolves the 4a open
+  question).** The Organization controller has **no finalizer and no explicit
+  namespace delete**. On deletion it returns immediately
+  (`internal/controllers/resourcemanager/organization_controller.go:38-39`); its
+  only namespace action is *setting* the owner reference (`:67`). Namespace
+  removal is thus driven solely by owner-reference GC. With GC off, deleting an
+  Organization leaves the `organization-<name>` namespace orphaned, the
+  namespace never enters Terminating, and the namespace controller's content
+  deleter never runs — so **all namespace-scoped org contents leak**, not just
+  the namespace object. This is the most damaging path because it cascades.
+
 - **User-owned PolicyBinding / UserPreference.** The User controller *sets*
-  owner references on PolicyBinding and UserPreference resources
-  (`internal/controllers/iam/user_controller.go:198-254`) but does **not**
-  explicitly delete them on user deletion — the deletion finalizer only cleans
-  up OrganizationMemberships (`:69-80`). Cleanup of those owned PolicyBindings
-  and UserPreferences therefore depends on the embedded GC observing the owner
-  reference. Disabling GC would orphan them.
+  owner references on three objects (`internal/controllers/iam/user_controller.go:198-258`)
+  but the deletion finalizer cleans up **only OrganizationMemberships**
+  (`:70-77`, `cleanupOrganizationMemberships`). The three owned objects rely on
+  GC and would orphan on user deletion:
+  1. the self-manage `PolicyBinding` (`:210-224`),
+  2. the `UserPreference` (`:229-241`),
+  3. the `userpreference-self-manage-<user>` PolicyBinding in `milo-system`
+     (`:245-258`).
 
 - **Cross-cluster downstream resources (anchor ConfigMaps).** The downstream
   client strategy explicitly relies on in-cluster owner-reference GC to cascade
@@ -179,28 +189,38 @@ plane has several such paths. Each must be evaluated before disabling.
   (`:180-199`, and the comment at `:108-113`). If this strategy is in use within
   the core-scope cluster, disabling GC breaks that cascade.
 
-  Open question: confirm whether the downstream anchors live in the **core**
-  cluster (affected by core-scope GC) or only in per-project / infrastructure
-  clusters whose controller-managers run at a different scope. The answer
-  determines whether core-scope GC removal touches this path at all.
+  Partial resolution: a grep of `internal/controllers/` finds **no** core
+  controller using `MappedNamespaceResourceStrategy` — the only
+  `SetControllerReference` calls in core controllers are native owner refs
+  (organization namespace, membership PolicyBindings), not downstream anchors.
+  This path is therefore *likely* project/infra-scope only and out of scope for
+  core. Still confirm before disabling that no core-cluster object uses the
+  anchor strategy.
 
-- **OrganizationMembership-owned PolicyBindings (steady state).** The membership
-  controller sets a controller owner reference on PolicyBindings
-  (`organization_membership_controller.go:444`). It deletes *undesired* bindings
-  explicitly (`:323-326`), but full cleanup on membership deletion may still
-  lean on owner-reference GC. Confirm whether membership deletion explicitly
-  removes all owned PolicyBindings or depends on GC.
+- **OrganizationMembership-owned PolicyBindings.** The membership controller
+  (`internal/controllers/resourcemanager/organization_membership_controller.go`)
+  sets controller owner references on PolicyBindings — both the role bindings
+  (`:444`) and the self-delete PolicyBinding (`:544`). It has **no deletion
+  finalizer**; it only deletes *no-longer-desired* bindings during steady-state
+  reconcile (`:323-326`). Full cleanup on membership deletion therefore relies
+  on owner-reference GC. Disabling GC would orphan the owned PolicyBindings.
 
 ### Net risk statement
 
-The namespace-scoped cascade for Organizations and Projects appears covered by
-the namespace controller's content deleter and by explicit finalizer/purge
-logic. However, **at least one path (User → PolicyBinding/UserPreference) and
-potentially two others (downstream anchors, membership PolicyBindings) rely on
-the embedded GC.** Disabling the GC controller at core scope without first
-closing these gaps would leak those objects. Do not treat disabling as safe
-until each 4b path is either confirmed out of scope for the core cluster or
-converted to explicit cleanup.
+Verification against the current code surface is worse than the initial draft
+assumed. **Project teardown is covered** (explicit finalizer + purger). But
+**three owner-reference cascade paths rely on the embedded GC today:**
+
+1. **Organization → namespace** (highest severity — cascades to all namespace
+   contents; the org controller has no finalizer/explicit delete),
+2. **User → PolicyBinding / UserPreference / userpreference PolicyBinding**
+   (three orphaned objects),
+3. **OrganizationMembership → owned PolicyBindings** (no deletion finalizer).
+
+A fourth path (downstream anchor ConfigMaps) is *likely* out of scope for the
+core cluster but unconfirmed. Disabling the GC controller at core scope today
+would leak objects on all three confirmed paths. **Disabling is not safe until
+each path is converted to explicit cleanup (Section 7).**
 
 ## 5. Options
 
@@ -235,9 +255,10 @@ validated in staging.
 
 ## 6. Recommendation and validation plan
 
-Recommendation: **do not disable yet.** First measure the cost and prove cascade
-coverage, using Option (b) as the low-risk experimental lever. Treat Option (c)
-as a later step contingent on results.
+Recommendation: **do not disable yet.** First land the Section 7 cleanup changes
+(Changes 1–3 are required; 4–5 are verifications), then measure the cost and
+prove cascade coverage using Option (b) as the low-risk experimental lever.
+Treat Option (c) as a later step contingent on results.
 
 ### Step 1 — Measure the cost (no code change)
 
@@ -260,8 +281,8 @@ verify no orphans remain:
 
 1. Delete an Organization; confirm its `organization-<name>` namespace is
    deleted and namespace-scoped contents are purged by the namespace controller.
-   (Specifically confirm the namespace itself is removed — see the open question
-   in 4a about whether the namespace's owner-ref deletion is GC-driven.)
+   (Expected to FAIL with GC off until Change 1 in Section 7 lands — namespace
+   removal is GC-driven, confirmed in 4b.)
 2. Delete a Project; confirm finalizer + purger remove project resources and the
    ProjectControlPlane in the infra cluster.
 3. Delete a User; confirm owned PolicyBinding and UserPreference objects are
@@ -282,11 +303,61 @@ paths pass with GC disabled:
 
 ### Open questions to resolve during validation
 
-- Is namespace deletion (parent Organization → namespace) GC-driven or
-  controller-driven?
+- ~~Is namespace deletion (parent Organization → namespace) GC-driven or
+  controller-driven?~~ **Resolved: GC-driven** (4b, Change 1).
+- ~~Does OrganizationMembership deletion explicitly remove all owned
+  PolicyBindings, or rely on GC?~~ **Resolved: relies on GC** (4b, Change 3).
 - Do `downstreamclient` anchors exist in the core cluster, or only in
-  project/infra clusters at a different scope?
-- Does OrganizationMembership deletion explicitly remove all owned
-  PolicyBindings, or rely on GC?
+  project/infra clusters at a different scope? (Likely out of scope — no core
+  controller uses the anchor strategy — but confirm.)
 - Are there other resources in the core API surface that set owner references
-  without a corresponding explicit-delete controller?
+  without a corresponding explicit-delete controller? (Change 5.)
+
+## 7. Changes required before disabling
+
+Each confirmed GC-reliant path must convert from owner-reference GC to explicit
+finalizer-driven cleanup. Ordered by severity:
+
+### Change 1 — Organization finalizer + explicit namespace delete (required)
+
+- Add a finalizer (e.g. `resourcemanager.miloapis.com/organization-namespace-cleanup`)
+  to Organization in
+  `internal/controllers/resourcemanager/organization_controller.go`.
+- On `DeletionTimestamp != 0`, explicitly `Delete` the `organization-<name>`
+  namespace (idempotent; ignore `NotFound`), then remove the finalizer. The
+  existing namespace controller content-deleter chain then runs unchanged.
+- Extend RBAC: the controller currently has only `get;list;watch;update;patch`
+  on `namespaces` (`:24`); add `delete`.
+
+### Change 2 — User finalizer deletes owned IAM objects (required)
+
+- In the User deletion branch (`user_controller.go:70-77`), explicitly `Delete`
+  the three owned objects before removing the finalizer (ignore `NotFound`):
+  1. self-manage PolicyBinding,
+  2. UserPreference,
+  3. `userpreference-self-manage-<user>` PolicyBinding in `milo-system`.
+- Reuse the name builders already present in `ensureOwnerReferences`
+  (`:210-247`).
+
+### Change 3 — OrganizationMembership deletion finalizer (required)
+
+- Add a deletion finalizer to the membership controller that lists and deletes
+  **all** PolicyBindings owned by the membership (owner-ref/label selector), not
+  just the no-longer-desired ones (`:323-326`). Covers both the role bindings
+  (`:444`) and the self-delete binding (`:544`).
+
+### Change 4 — Confirm downstream anchors out of core scope (verify)
+
+- Confirm no core-cluster object uses `MappedNamespaceResourceStrategy`. If
+  confirmed, no code change. If any core object uses anchors, add explicit
+  anchor+dependent deletion or keep GC enabled.
+
+### Change 5 — Owner-reference sweep (verify)
+
+- Audit the remaining core API surface for `SetControllerReference` /
+  `SetOwnerReference` calls lacking a matching explicit-delete controller. Each
+  is a latent leak under GC-off; convert or document as covered.
+
+After Changes 1–3 land and 4–5 are confirmed, re-run the Section 6 Step 2
+validation with GC disabled; all paths must pass before adopting Option (b) or
+(c).
