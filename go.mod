@@ -15,15 +15,15 @@ require (
 	golang.org/x/sync v0.18.0
 	golang.org/x/time v0.12.0
 	gopkg.in/go-jose/go-jose.v2 v2.6.3
-	k8s.io/api v0.35.0
-	k8s.io/apiextensions-apiserver v0.35.0
-	k8s.io/apimachinery v0.35.0
-	k8s.io/apiserver v0.35.0
-	k8s.io/client-go v0.35.0
-	k8s.io/component-base v0.35.0
-	k8s.io/controller-manager v0.35.0
+	k8s.io/api v0.36.2
+	k8s.io/apiextensions-apiserver v0.36.2
+	k8s.io/apimachinery v0.36.2
+	k8s.io/apiserver v0.36.2
+	k8s.io/client-go v0.36.2
+	k8s.io/component-base v0.36.2
+	k8s.io/controller-manager v0.36.2
 	k8s.io/klog/v2 v2.130.1
-	k8s.io/kube-aggregator v0.35.0
+	k8s.io/kube-aggregator v0.36.2
 	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912
 	k8s.io/kubernetes v1.35.0
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
