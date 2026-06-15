@@ -137,6 +137,7 @@ rules:
   - iam.miloapis.com
   resources:
   - roles
+  - serviceaccounts
   - userdeactivations
   verbs:
   - get
