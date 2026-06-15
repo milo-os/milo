@@ -1,0 +1,18 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: system-group-binding
+  namespace: ($namespace)
+spec:
+  roleRef:
+    name: resolve-me-role
+    namespace: ($namespace)
+  # System groups have no backing object. The webhook leaves them without a
+  # uid and the validating CEL rule permits this.
+  subjects:
+    - kind: Group
+      name: system:authenticated-users
+  resourceSelector:
+    resourceKind:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization

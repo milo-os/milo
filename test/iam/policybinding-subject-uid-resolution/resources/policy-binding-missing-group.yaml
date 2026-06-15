@@ -1,0 +1,19 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: missing-group-binding
+  namespace: ($namespace)
+spec:
+  roleRef:
+    name: resolve-me-role
+    namespace: ($namespace)
+  # No Group named "does-not-exist" exists, so the webhook cannot resolve a
+  # uid and must reject the request.
+  subjects:
+    - kind: Group
+      name: does-not-exist
+      namespace: ($namespace)
+  resourceSelector:
+    resourceKind:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization
