@@ -10,5 +10,6 @@ resources:
 - iam.miloapis.com_userpreferences.yaml
 - iam.miloapis.com_userdeactivations.yaml
 - iam.miloapis.com_platforminvitations.yaml
+- iam.miloapis.com_platformaccesses.yaml
 - iam.miloapis.com_platformaccessapprovals.yaml
 - iam.miloapis.com_platformaccessrejections.yaml
