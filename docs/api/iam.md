@@ -14,6 +14,8 @@ Resource Types:
 
 - [PlatformAccessApproval](#platformaccessapproval)
 
+- [PlatformAccess](#platformaccess)
+
 - [PlatformAccessRejection](#platformaccessrejection)
 
 - [PlatformInvitation](#platforminvitation)
@@ -619,6 +621,248 @@ If not specified, the approval was made by the system.
           Name is the name of the User being referenced.<br/>
         </td>
         <td>true</td>
+      </tr></tbody>
+</table>
+
+## PlatformAccess
+<sup><sup>[↩ Parent](#iammiloapiscomv1alpha1 )</sup></sup>
+
+
+
+
+
+
+PlatformAccess is the Schema for the platformaccesses API.
+It is the single mutable resource governing whether a user can access the platform,
+replacing UserDeactivation, PlatformAccessApproval, and PlatformAccessRejection.
+There is at most one PlatformAccess per user; by convention it is named after the user.
+The UserController derives User.status.accessState from this resource.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+      <td><b>apiVersion</b></td>
+      <td>string</td>
+      <td>iam.miloapis.com/v1alpha1</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b>kind</b></td>
+      <td>string</td>
+      <td>PlatformAccess</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">metadata</a></b></td>
+      <td>object</td>
+      <td>Refer to the Kubernetes API documentation for the fields of the `metadata` field.</td>
+      <td>true</td>
+      </tr><tr>
+        <td><b><a href="#platformaccessspec">spec</a></b></td>
+        <td>object</td>
+        <td>
+          PlatformAccessSpec defines the desired access state for a user on the platform.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#platformaccessstatus">status</a></b></td>
+        <td>object</td>
+        <td>
+          PlatformAccessStatus defines the observed state of PlatformAccess.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### PlatformAccess.spec
+<sup><sup>[↩ Parent](#platformaccess)</sup></sup>
+
+
+
+PlatformAccessSpec defines the desired access state for a user on the platform.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>state</b></td>
+        <td>enum</td>
+        <td>
+          State is the desired platform access state for the user.
+Valid transitions:
+  Pending  → Approved  (fraud accepts, or admin approves)
+  Pending  → Rejected  (fraud or admin rejects)
+  Approved → Suspended (fraud deactivates, or admin suspends)
+  Approved → Rejected  (admin disapproves)
+  Suspended → Approved (admin reactivates)<br/>
+          <br/>
+            <i>Enum</i>: Pending, Approved, Rejected, Suspended<br/>
+            <i>Default</i>: Pending<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#platformaccessspecuserref">userRef</a></b></td>
+        <td>object</td>
+        <td>
+          UserRef is a reference to the User this resource governs.
+User is a cluster-scoped resource.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reason</b></td>
+        <td>string</td>
+        <td>
+          Reason is a human-readable explanation for the current state.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### PlatformAccess.spec.userRef
+<sup><sup>[↩ Parent](#platformaccessspec)</sup></sup>
+
+
+
+UserRef is a reference to the User this resource governs.
+User is a cluster-scoped resource.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the name of the User being referenced.<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### PlatformAccess.status
+<sup><sup>[↩ Parent](#platformaccess)</sup></sup>
+
+
+
+PlatformAccessStatus defines the observed state of PlatformAccess.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#platformaccessstatusconditionsindex">conditions</a></b></td>
+        <td>[]object</td>
+        <td>
+          Conditions represent the latest available observations of the resource's current state.<br/>
+          <br/>
+            <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### PlatformAccess.status.conditions[index]
+<sup><sup>[↩ Parent](#platformaccessstatus)</sup></sup>
+
+
+
+Condition contains details for one aspect of the current state of this API Resource.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>lastTransitionTime</b></td>
+        <td>string</td>
+        <td>
+          lastTransitionTime is the last time the condition transitioned from one status to another.
+This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>message</b></td>
+        <td>string</td>
+        <td>
+          message is a human readable message indicating details about the transition.
+This may be an empty string.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reason</b></td>
+        <td>string</td>
+        <td>
+          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+Producers of specific condition types may define expected values and meanings for this field,
+and whether the values are considered a guaranteed API.
+The value should be a CamelCase string.
+This field may not be empty.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>status</b></td>
+        <td>enum</td>
+        <td>
+          status of the condition, one of True, False, Unknown.<br/>
+          <br/>
+            <i>Enum</i>: True, False, Unknown<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          type of condition in CamelCase or in foo.example.com/CamelCase.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>observedGeneration</b></td>
+        <td>integer</td>
+        <td>
+          observedGeneration represents the .metadata.generation that the condition was set based upon.
+For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+with respect to the current state of the instance.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+            <i>Minimum</i>: 0<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 

@@ -59,6 +59,9 @@ resources:
   - project-admin.yaml
   - iam.miloapis.com-getinvitation.yaml
   - iam.miloapis.com-acceptinvitation.yaml
+  - iam-platform-accesses-reader.yaml
+  - iam-platform-accesses-editor.yaml
+  - iam-platform-accesses-admin.yaml
   - iam-platform-access-approvals-reader.yaml
   - iam-platform-access-approvals-editor.yaml
   - iam-platform-access-approvals-admin.yaml
