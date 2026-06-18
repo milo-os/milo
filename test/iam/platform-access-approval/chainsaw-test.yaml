@@ -1,0 +1,43 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-access-approval
+spec:
+  description: |
+    Verify that a User's registrationApproval starts as Pending and becomes Approved
+    after creating a PlatformAccessApproval.
+  steps:
+  - name: approval-flow
+    description: Create a User, confirm Pending, then approve and expect Approved
+    try:
+    - apply:
+        file: resources/user-approval.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: access-approval-test-user
+        timeout: 2m
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: access-approval-test-user
+        timeout: 1m
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Pending
+    - apply:
+        file: resources/approval.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: access-approval-test-user
+        timeout: 2m
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Approved
