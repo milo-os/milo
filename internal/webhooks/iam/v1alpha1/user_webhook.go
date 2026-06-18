@@ -255,7 +255,9 @@ func (v *UserValidator) createUserPreference(ctx context.Context, user *iamv1alp
 			UserRef: iamv1alpha1.UserReference{
 				Name: user.Name,
 			},
-			Theme: "system", // Default theme
+			Theme:       "system", // Default theme
+			DisplayName: "",
+			Title:       "",
 		},
 	}
 

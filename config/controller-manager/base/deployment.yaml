@@ -31,6 +31,7 @@ spec:
           - --leader-elect-renew-deadline=10s
           - --leader-elect-retry-period=2s
           - --leader-elect-resource-namespace=$(LEADER_ELECT_RESOURCE_NAMESPACE)
+          - --leader-election-candidate-namespace=$(LEADER_ELECTION_CANDIDATE_NAMESPACE)
           - --authentication-skip-lookup
           - --client-ca-file=$(CLIENT_CA_FILE)
           - --secure-port=6443
@@ -45,6 +46,8 @@ spec:
         env:
           - name: LEADER_ELECT_RESOURCE_NAMESPACE
             value: milo-system
+          - name: LEADER_ELECTION_CANDIDATE_NAMESPACE
+            value: datum-system
           # Default to INFO level logging
           - name: LOG_LEVEL
             value: "4"
