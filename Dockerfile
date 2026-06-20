@@ -15,7 +15,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 
 # Download dependencies (cached when go.mod/go.sum don't change)
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Copy the rest of the application source code
 COPY . .
@@ -28,7 +29,9 @@ ARG VERSION=v0.0.0-master+dev
 ARG GIT_COMMIT=unknown
 ARG GIT_TREE_STATE=dirty
 ARG BUILD_DATE=unknown
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -o milo ./cmd/milo
 
 # Final stage: minimal runtime image
