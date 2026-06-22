@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: organizationmembership-reader
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: Organization Membership Reader
     kubernetes.io/description: "View organization membership resources"
+    taxonomy.miloapis.com/product: "Organization & Projects"
+    taxonomy.miloapis.com/sort-order: "30"
 spec:
   launchStage: Beta
   includedPermissions:

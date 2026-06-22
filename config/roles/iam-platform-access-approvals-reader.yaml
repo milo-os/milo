@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-platform-access-approvals-reader
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: Platform Access Approval Viewer
     kubernetes.io/description: View platform access approvals
+    taxonomy.miloapis.com/product: Identity & Access Management
+    taxonomy.miloapis.com/sort-order: "30"
 spec:
   launchStage: Beta
   includedPermissions:

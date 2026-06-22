@@ -2,8 +2,12 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-organization-editor
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: IAM Organization Editor
+    taxonomy.miloapis.com/product: "Identity & Access Management"
+    taxonomy.miloapis.com/sort-order: "20"
     kubernetes.io/description: "Edit organization-scoped IAM resources"
 spec:
   launchStage: Beta

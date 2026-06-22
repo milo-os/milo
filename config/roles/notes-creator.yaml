@@ -2,7 +2,11 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notes-creator
+  labels:
+    taxonomy.miloapis.com/role-category: feature
   annotations:
+    taxonomy.miloapis.com/product: "Notes"
+    taxonomy.miloapis.com/sort-order: "20"
     kubernetes.io/display-name: Notes Creator
     kubernetes.io/description: "Allows creating notes and cluster notes."
 spec:
