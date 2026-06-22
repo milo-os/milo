@@ -3319,6 +3319,17 @@ populated by the auth provider or any service that provides a user avatar URL.<b
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>lastLoginPerProvider</b></td>
+        <td>map[string]string</td>
+        <td>
+          LastLoginPerProvider tracks the most recent login timestamp for each identity provider
+that the user has used to authenticate. The map key is the provider name (e.g., "github", "google")
+and the value is the RFC3339 timestamp of the last successful login via that provider.
+This field is updated by the auth provider when processing idpintent.succeeded events.
+Note: This event is only triggered during actual IDP login, not on token refresh.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>lastLoginProvider</b></td>
         <td>string</td>
         <td>
@@ -3328,10 +3339,22 @@ based on authentication events.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>lastTokenIntrospection</b></td>
+        <td>string</td>
+        <td>
+          LastTokenIntrospection records the timestamp of the most recent successful token introspection
+for this user. This is updated during authentication webhook calls when validating access tokens,
+which occurs more frequently than actual IDP logins (including token refreshes).
+The value is an RFC3339 timestamp.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>registrationApproval</b></td>
         <td>enum</td>
         <td>
-          RegistrationApproval represents the administrator’s decision on the user’s registration request.
+          RegistrationApproval represents the administrator's decision on the user's registration request.
 States:
   - Pending:  The user is awaiting review by an administrator.
   - Approved: The user registration has been approved.

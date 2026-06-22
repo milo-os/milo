@@ -107,6 +107,22 @@ type UserStatus struct {
 	// +kubebuilder:validation:Enum=github;google
 	LastLoginProvider AuthProvider `json:"lastLoginProvider,omitempty"`
 
+	// LastLoginPerProvider tracks the most recent login timestamp for each identity provider
+	// that the user has used to authenticate. The map key is the provider name (e.g., "github", "google")
+	// and the value is the RFC3339 timestamp of the last successful login via that provider.
+	// This field is updated by the auth provider when processing idpintent.succeeded events.
+	// Note: This event is only triggered during actual IDP login, not on token refresh.
+	// +kubebuilder:validation:Optional
+	LastLoginPerProvider map[string]string `json:"lastLoginPerProvider,omitempty"`
+
+	// LastTokenIntrospection records the timestamp of the most recent successful token introspection
+	// for this user. This is updated during authentication webhook calls when validating access tokens,
+	// which occurs more frequently than actual IDP logins (including token refreshes).
+	// The value is an RFC3339 timestamp.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=date-time
+	LastTokenIntrospection *metav1.Time `json:"lastTokenIntrospection,omitempty"`
+
 	// AvatarURL points to the avatar image associated with the user. This value is
 	// populated by the auth provider or any service that provides a user avatar URL.
 	// +kubebuilder:validation:Optional
