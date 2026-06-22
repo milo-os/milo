@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	crd "go.miloapis.com/milo/config/crd"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
-	projectstorage "go.miloapis.com/milo/internal/apiserver/storage/project"
+	kplanestorage "go.miloapis.com/milo/internal/apiserver/storage/kplane"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1" // ← add / keep this
@@ -21,20 +21,20 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/notfoundhandler"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
+	basecompatibility "k8s.io/component-base/compatibility"
 	"k8s.io/component-base/logs"
 	logsapi "k8s.io/component-base/logs/api/v1"
 	_ "k8s.io/component-base/metrics/prometheus/workqueue"
 	"k8s.io/component-base/term"
 	"k8s.io/component-base/version"
 	"k8s.io/component-base/version/verflag"
-	basecompatibility "k8s.io/component-base/compatibility"
-	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	"k8s.io/klog/v2"
 	aggregatorapiserver "k8s.io/kube-aggregator/pkg/apiserver"
 
@@ -299,13 +299,15 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 
-	loopbackConfig := config.ControlPlane.Generic.LoopbackClientConfig
-
+	// Native API providers read the control-plane getter when InstallAPIs calls
+	// NewRESTStorage, so wrapping it once here covers them; CRD storage uses the
+	// apiextensions getters wrapped below.
 	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.GenericConfig.RESTOptionsGetter, loopbackConfig)
-
+		kplanestorage.WithKplaneStorage(config.APIExtensions.GenericConfig.RESTOptionsGetter)
 	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, loopbackConfig)
+		kplanestorage.WithKplaneStorage(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter)
+	config.ControlPlane.Generic.RESTOptionsGetter =
+		kplanestorage.WithKplaneStorage(config.ControlPlane.Generic.RESTOptionsGetter)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
@@ -353,12 +355,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 		return nil, fmt.Errorf("failed to create storage providers: %w", err)
 	}
 
-	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
-	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p))
-	}
-
-	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {
+	if err := nativeAPIs.InstallAPIs(storageProviders...); err != nil {
 		return nil, fmt.Errorf("failed to install APIs: %w", err)
 	}
 
