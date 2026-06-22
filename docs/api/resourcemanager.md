@@ -25,6 +25,7 @@ Resource Types:
 
 
 
+
 OrganizationMembership establishes a user's membership in an organization and
 optionally assigns roles to grant permissions. The controller automatically
 manages PolicyBinding resources for each assigned role, simplifying access
@@ -676,7 +677,6 @@ This information is populated by the controller from the referenced user.
 
 
 
-
 Use lowercase for path, which influences plural name. Ensure kind is Organization.
 Organization is the Schema for the Organizations API
 
@@ -876,7 +876,6 @@ with respect to the current state of the instance.<br/>
 
 
 
-
 Project is the Schema for the projects API.
 
 <table>
@@ -1009,9 +1008,9 @@ ProjectStatus defines the observed state of Project.
         <td>[]object</td>
         <td>
           Represents the observations of a project's current state.
-Known condition types are: "Ready"<br/>
-          <br/>
-            <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
+Known condition types are: "Ready" and "ResourceCleanup".
+<br/>
+<i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1024,6 +1023,29 @@ Known condition types are: "Ready"<br/>
 
 
 Condition contains details for one aspect of the current state of this API Resource.
+
+For Project resources, known condition types include:
+- **Ready**: Indicates project and infrastructure are ready for use. See the Reason for additional details.
+- **ResourceCleanup**: Indicates progress and completion of project resource deletion when the project is being deleted. This condition is managed by the controller to track cleanup status.
+
+For the **ResourceCleanup** condition, the following values are used:
+- **status**: 
+  - `True` when cleanup is ongoing,
+  - `False` when cleanup is complete.
+- **reason**:
+  - `CleanupStarted`: Resource cleanup (deletion) has started; delete commands are being issued.
+  - `CleanupAwaitingCompletion`: Cleanup commands have been issued and the controller is waiting for resources to be removed.
+  - `CleanupComplete`: All resources have been deleted and finalizer will be removed, completing project deletion.
+
+Example:
+```
+status:
+  conditions:
+  - type: ResourceCleanup
+    status: "False"
+    reason: CleanupComplete
+    message: Project resources have been deleted
+```
 
 <table>
     <thead>
@@ -1039,7 +1061,7 @@ Condition contains details for one aspect of the current state of this API Resou
         <td>string</td>
         <td>
           lastTransitionTime is the last time the condition transitioned from one status to another.
-This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.<br/>
+This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable.<br/>
           <br/>
             <i>Format</i>: date-time<br/>
         </td>
@@ -1093,3 +1115,4 @@ with respect to the current state of the instance.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+ 
