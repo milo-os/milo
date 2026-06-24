@@ -187,6 +187,12 @@ spec:
             value: "iam.miloapis.com/parent-api-group,iam.miloapis.com/parent-type,iam.miloapis.com/parent-name"
           - name: SHUTDOWN_DELAY_DURATION
             value: "10s"
+          - name: GOMEMLIMIT
+            valueFrom:
+              resourceFieldRef:
+                containerName: milo-apiserver
+                resource: limits.memory
+                divisor: "1"
         livenessProbe:
           failureThreshold: 3
           httpGet:
