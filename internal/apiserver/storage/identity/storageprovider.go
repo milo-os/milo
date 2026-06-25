@@ -35,9 +35,9 @@ func (p StorageProvider) NewRESTStorage(
 	)
 
 	storage := map[string]rest.Storage{
-		"sessions":            sessionsregistry.NewREST(p.Sessions),
-		"useridentities":      useridentitiesregistry.NewREST(p.UserIdentities),
-		"serviceaccountkeys":  serviceaccountkeysregistry.NewREST(p.ServiceAccountKeys),
+		"sessions":           sessionsregistry.NewREST(p.Sessions),
+		"useridentities":     useridentitiesregistry.NewREST(p.UserIdentities),
+		"serviceaccountkeys": serviceaccountkeysregistry.NewREST(p.ServiceAccountKeys),
 	}
 
 	apiGroupInfo.VersionedResourcesStorageMap = map[string]map[string]rest.Storage{

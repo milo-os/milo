@@ -66,9 +66,9 @@ func (m *testManager) ClusterFromContext(context.Context) (cluster.Cluster, erro
 func (m *testManager) GetManager(context.Context, multicluster.ClusterName) (manager.Manager, error) {
 	return nil, nil
 }
-func (m *testManager) GetLocalManager() manager.Manager                      { return nil }
-func (m *testManager) GetProvider() multicluster.Provider                    { return nil }
-func (m *testManager) GetFieldIndexer() client.FieldIndexer                  { return nil }
+func (m *testManager) GetLocalManager() manager.Manager     { return nil }
+func (m *testManager) GetProvider() multicluster.Provider   { return nil }
+func (m *testManager) GetFieldIndexer() client.FieldIndexer { return nil }
 func (m *testManager) Engage(context.Context, multicluster.ClusterName, cluster.Cluster) error {
 	return nil
 }
@@ -131,11 +131,11 @@ func TestDeniedAutoClaimCleanupController(t *testing.T) {
 	scheme := testScheme(t)
 
 	cases := []struct {
-		name           string
-		claim          *quotav1alpha1.ResourceClaim
+		name            string
+		claim           *quotav1alpha1.ResourceClaim
 		stalePendingAge time.Duration
-		wantDeleted    bool
-		wantRequeue    bool
+		wantDeleted     bool
+		wantRequeue     bool
 	}{
 		{
 			name:        "denied auto-created claim is deleted",
