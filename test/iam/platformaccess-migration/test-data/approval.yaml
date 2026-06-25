@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccessApproval
+metadata:
+  name: test-migration-user-approval
+spec:
+  subjectRef:
+    userRef:
+      name: test-migration-user

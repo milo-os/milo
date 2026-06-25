@@ -1,0 +1,9 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: UserDeactivation
+metadata:
+  name: test-migration-user-deactivation
+spec:
+  userRef:
+    name: test-migration-user
+  reason: "Testing deactivation migration"
+  deactivatedBy: "admin"
