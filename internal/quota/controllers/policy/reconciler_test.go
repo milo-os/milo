@@ -43,17 +43,17 @@ type testCluster struct {
 	client client.Client
 }
 
-func (c *testCluster) GetClient() client.Client                       { return c.client }
-func (c *testCluster) GetScheme() *runtime.Scheme                     { return nil }
-func (c *testCluster) GetHTTPClient() *http.Client                    { return nil }
-func (c *testCluster) GetConfig() *rest.Config                        { return nil }
-func (c *testCluster) GetCache() cache.Cache                          { return nil }
-func (c *testCluster) GetFieldIndexer() client.FieldIndexer           { return nil }
+func (c *testCluster) GetClient() client.Client                        { return c.client }
+func (c *testCluster) GetScheme() *runtime.Scheme                      { return nil }
+func (c *testCluster) GetHTTPClient() *http.Client                     { return nil }
+func (c *testCluster) GetConfig() *rest.Config                         { return nil }
+func (c *testCluster) GetCache() cache.Cache                           { return nil }
+func (c *testCluster) GetFieldIndexer() client.FieldIndexer            { return nil }
 func (c *testCluster) GetEventRecorderFor(string) record.EventRecorder { return nil }
-func (c *testCluster) GetEventRecorder(string) events.EventRecorder   { return nil }
-func (c *testCluster) GetRESTMapper() meta.RESTMapper                 { return nil }
-func (c *testCluster) GetAPIReader() client.Reader                    { return nil }
-func (c *testCluster) Start(context.Context) error                    { return nil }
+func (c *testCluster) GetEventRecorder(string) events.EventRecorder    { return nil }
+func (c *testCluster) GetRESTMapper() meta.RESTMapper                  { return nil }
+func (c *testCluster) GetAPIReader() client.Reader                     { return nil }
+func (c *testCluster) Start(context.Context) error                     { return nil }
 
 // testManager implements mcmanager.Manager with only GetCluster functional.
 type testManager struct {
@@ -80,8 +80,8 @@ func (m *testManager) ClusterFromContext(context.Context) (cluster.Cluster, erro
 func (m *testManager) GetManager(context.Context, multicluster.ClusterName) (manager.Manager, error) {
 	return nil, nil
 }
-func (m *testManager) GetLocalManager() manager.Manager { return nil }
-func (m *testManager) GetProvider() multicluster.Provider { return nil }
+func (m *testManager) GetLocalManager() manager.Manager     { return nil }
+func (m *testManager) GetProvider() multicluster.Provider   { return nil }
 func (m *testManager) GetFieldIndexer() client.FieldIndexer { return nil }
 func (m *testManager) Engage(context.Context, multicluster.ClusterName, cluster.Cluster) error {
 	return nil

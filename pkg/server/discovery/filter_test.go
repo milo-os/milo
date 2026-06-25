@@ -177,9 +177,9 @@ func TestFilterAPIIndex_FormatDetection(t *testing.T) {
 		name         string
 		body         []byte
 		accept       string
-		wantPassThru bool                    // expect the body verbatim
-		wantGroups   []string                // for aggregated, the kept group names
-		wantContains []string                // for pass-through, substrings expected in body
+		wantPassThru bool     // expect the body verbatim
+		wantGroups   []string // for aggregated, the kept group names
+		wantContains []string // for pass-through, substrings expected in body
 	}{
 		{
 			name:       "aggregated body, aggregated Accept -> filtered, all visible kept",
