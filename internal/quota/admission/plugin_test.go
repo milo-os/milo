@@ -1745,13 +1745,13 @@ func TestResolveExistingClaim(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
-		seedClaim        *unstructured.Unstructured
-		watchBehavior    string
-		expectError      bool
-		errorSubstr      string
-		expectCreate     bool
-		expectDelete     bool
+		name          string
+		seedClaim     *unstructured.Unstructured
+		watchBehavior string
+		expectError   bool
+		errorSubstr   string
+		expectCreate  bool
+		expectDelete  bool
 	}{
 		{
 			name:          "existing granted claim short-circuits admission",
