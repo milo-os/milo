@@ -6,7 +6,8 @@ import (
 	"k8s.io/client-go/rest"
 
 	generic "k8s.io/apiserver/pkg/registry/generic"
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+
+	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 )
 
 // Wrap the upstream RESTOptionsGetter to install a per-project decorator.
@@ -38,7 +39,7 @@ func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object
 
 	// Ensure we always wrap with our project-aware decorator.
 	if opts.Decorator == nil {
-		opts.Decorator = ProjectAwareDecorator(gr, genericregistry.StorageWithCacher(), g.loopbackConfig)
+		opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.loopbackConfig)
 	} else {
 		opts.Decorator = ProjectAwareDecorator(gr, opts.Decorator, g.loopbackConfig)
 	}
