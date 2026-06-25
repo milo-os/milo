@@ -723,6 +723,14 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			platformAccessMigrationCtrl := iamcontroller.PlatformAccessMigrationReconciler{
+				Client: ctrl.GetClient(),
+			}
+			if err := platformAccessMigrationCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up platform access migration controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			// TODO: remove entire controller init once ArgoCD sensor is deployed.
 			userSlackWebhookURL := os.Getenv("MILO_USER_SLACK_WEBHOOK_URL")
 			if userSlackWebhookURL == "" {
