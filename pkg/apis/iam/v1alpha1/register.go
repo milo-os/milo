@@ -43,6 +43,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&UserInvitationList{},
 		&PlatformInvitation{},
 		&PlatformInvitationList{},
+		&PlatformAccess{},
+		&PlatformAccessList{},
 		&PlatformAccessApproval{},
 		&PlatformAccessApprovalList{},
 		&PlatformAccessRejection{},

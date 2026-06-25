@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-platform-accesses-editor
+  annotations:
+    kubernetes.io/display-name: Platform Access Editor
+    kubernetes.io/description: Create, update, and delete platform accesses
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: iam-platform-accesses-reader
+  includedPermissions:
+    - iam.miloapis.com/platformaccesses.create
+    - iam.miloapis.com/platformaccesses.update
+    - iam.miloapis.com/platformaccesses.patch
+    - iam.miloapis.com/platformaccesses.delete
