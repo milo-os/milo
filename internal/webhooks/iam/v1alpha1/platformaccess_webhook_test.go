@@ -148,12 +148,22 @@ func TestPlatformAccessValidator_ValidateCreate(t *testing.T) {
 }
 
 func TestPlatformAccessValidator_ValidateDelete(t *testing.T) {
-	fakeClient := fake.NewClientBuilder().WithScheme(runtimeScheme).Build()
+	testUser := &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-user",
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(testUser).Build()
 	validator := &PlatformAccessValidator{client: fakeClient}
 
 	pa := &iamv1alpha1.PlatformAccess{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-user-access",
+		},
+		Spec: iamv1alpha1.PlatformAccessSpec{
+			UserRef: iamv1alpha1.UserReference{
+				Name: "test-user",
+			},
 		},
 	}
 
