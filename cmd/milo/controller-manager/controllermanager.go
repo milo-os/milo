@@ -570,6 +570,10 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				logger.Error(err, "Error setting up platform access rejection webhook")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
+			if err := iamv1alpha1webhook.SetupPlatformAccessWebhooksWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up platform access webhook")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
 			// Note webhooks are set up later after the multicluster manager is created,
 			// so they can use it for project control plane lookups.
 
