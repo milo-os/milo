@@ -27,6 +27,7 @@ type PlatformAccessSpec struct {
 	// UserRef is a reference to the User this resource governs.
 	// User is a cluster-scoped resource.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="oldSelf == null || self == oldSelf",message="userRef is immutable"
 	UserRef UserReference `json:"userRef"`
 
 	// State is the desired platform access state for the user.
@@ -38,6 +39,7 @@ type PlatformAccessSpec struct {
 	//   Suspended → Approved (admin reactivates)
 	// +kubebuilder:validation:Required
 	// +kubebuilder:default=Pending
+	// +kubebuilder:validation:Enum=Pending;Approved;Rejected;Suspended
 	State PlatformAccessState `json:"state"`
 
 	// Reason is a human-readable explanation for the current state.

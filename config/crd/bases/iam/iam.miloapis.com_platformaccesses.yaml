@@ -67,6 +67,17 @@ spec:
                   state.
                 type: string
               state:
+                allOf:
+                - enum:
+                  - Pending
+                  - Approved
+                  - Rejected
+                  - Suspended
+                - enum:
+                  - Pending
+                  - Approved
+                  - Rejected
+                  - Suspended
                 default: Pending
                 description: |-
                   State is the desired platform access state for the user.
@@ -76,11 +87,6 @@ spec:
                     Approved → Suspended (fraud deactivates, or admin suspends)
                     Approved → Rejected  (admin disapproves)
                     Suspended → Approved (admin reactivates)
-                enum:
-                - Pending
-                - Approved
-                - Rejected
-                - Suspended
                 type: string
               userRef:
                 description: |-
@@ -93,6 +99,9 @@ spec:
                 required:
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: userRef is immutable
+                  rule: oldSelf == null || self == oldSelf
             required:
             - state
             - userRef
