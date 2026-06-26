@@ -51,7 +51,7 @@ import (
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
-	admissionquota "go.miloapis.com/milo/internal/quota/admission"
+	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
 	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
 	identityopenapi "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
@@ -383,7 +383,13 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		Loopback: rest.CopyConfig(genericConfig.LoopbackClientConfig),
 	}
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit})
+	// Inject the legacy scheme into admission plugins (e.g. quota) that need to
+	// convert internal native types to their external versioned form.
+	convertorInit := initializer.ObjectConvertorInitializer{
+		Convertor: legacyscheme.Scheme,
+	}
+
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit})
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +400,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		kubeAPIs.Generic.LoopbackClientConfig.Wrap(tracing.WrapperFor(kubeAPIs.Generic.TracerProvider))
 	}
 
-	combinedInits := append(upstreamInits, loopbackInit)
+	combinedInits := append(upstreamInits, loopbackInit, convertorInit)
 
 	authInfoResolver := webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIs.ProxyTransport, kubeAPIs.Generic.EgressSelector, kubeAPIs.Generic.LoopbackClientConfig, kubeAPIs.Generic.TracerProvider)
 	apiExtensions, err := controlplaneapiserver.CreateAPIExtensionsConfig(*kubeAPIs.Generic, kubeAPIs.VersionedInformers, combinedInits, opts, 3, serviceResolver, authInfoResolver)

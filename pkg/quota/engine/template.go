@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apiserver/pkg/endpoints/request"
 
-	"go.miloapis.com/milo/internal/quota/templateutil"
+	"go.miloapis.com/milo/pkg/quota/templateutil"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 )
 

@@ -27,13 +27,10 @@ import (
 	legacyregistry "k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
-
-	"go.miloapis.com/milo/internal/quota/engine"
-	"go.miloapis.com/milo/internal/quota/validation"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+	"go.miloapis.com/milo/pkg/quota/engine"
+	"go.miloapis.com/milo/pkg/quota/validation"
 	milorequest "go.miloapis.com/milo/pkg/request"
-	milofilters "go.miloapis.com/milo/pkg/server/filters"
 )
 
 const (
@@ -100,6 +97,14 @@ type ResourceQuotaEnforcementPlugin struct {
 	watchManagers sync.Map // map[string]ClaimWatchManager (projectID -> watch manager, "" = root)
 	config        *AdmissionPluginConfig
 	logger        logr.Logger
+
+	// objectConvertor converts structured native (internal) types to their
+	// external versioned representation before evaluating policy constraints.
+	// It is optional and nil-guarded: when nil, structured objects are used
+	// as-is. CRDs are always decoded as *unstructured.Unstructured and never
+	// require conversion. Milo injects k8s.io/kubernetes legacyscheme.Scheme
+	// here; external hosts (e.g. IPAM) that only serve CRDs may leave it nil.
+	objectConvertor runtime.ObjectConvertor
 }
 
 // Ensure ResourceQuotaEnforcementPlugin implements the required initializer interfaces
@@ -137,6 +142,17 @@ func (p *ResourceQuotaEnforcementPlugin) SetDynamicClient(dynamicClient dynamic.
 func (p *ResourceQuotaEnforcementPlugin) SetLoopbackConfig(cfg *rest.Config) {
 	p.loopbackConfig = cfg
 	p.logger.V(2).Info("Loopback config injected", "plugin", PluginName)
+}
+
+// SetObjectConvertor injects the convertor used to convert structured native
+// (internal) types to their external versioned form before policy evaluation.
+// It is optional: hosts that only serve CRDs (decoded as unstructured) may
+// skip injection, in which case structured objects are used as-is. Milo
+// injects k8s.io/kubernetes legacyscheme.Scheme to preserve behavior for
+// native structured types.
+func (p *ResourceQuotaEnforcementPlugin) SetObjectConvertor(convertor runtime.ObjectConvertor) {
+	p.objectConvertor = convertor
+	p.logger.V(2).Info("Object convertor injected", "plugin", PluginName)
 }
 
 // ValidateInitialization implements admission.InitializationValidator
@@ -482,8 +498,13 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 		// then use ToUnstructured to get proper Kubernetes JSON structure.
 		toConvert := obj
 		targetGV := schema.GroupVersion{Group: gvk.Group, Version: gvk.Version}
-		if versioned, convErr := legacyscheme.Scheme.ConvertToVersion(obj, targetGV); convErr == nil {
-			toConvert = versioned
+		// Convert internal types to their external versioned form when a
+		// convertor has been injected. When nil (e.g. external CRD-only hosts),
+		// use the object as-is.
+		if p.objectConvertor != nil {
+			if versioned, convErr := p.objectConvertor.ConvertToVersion(obj, targetGV); convErr == nil {
+				toConvert = versioned
+			}
 		}
 		unstructuredMap, convErr := runtime.DefaultUnstructuredConverter.ToUnstructured(toConvert)
 		if convErr != nil {
@@ -815,7 +836,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 				Kind:     "Project",
 				Name:     projectID,
 			}
-		} else if orgID, ok := milofilters.OrganizationID(ctx); ok && orgID != "" {
+		} else if orgID, ok := milorequest.OrganizationID(ctx); ok && orgID != "" {
 			claim.Spec.ConsumerRef = quotav1alpha1.ConsumerRef{
 				APIGroup: "resourcemanager.miloapis.com",
 				Kind:     "Organization",
