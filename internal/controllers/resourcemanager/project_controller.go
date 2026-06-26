@@ -404,21 +404,25 @@ func ensureConnectorClass(ctx context.Context, dc dynamic.Interface, name, contr
 }
 
 func ensureDefaultNamespace(ctx context.Context, cs kubernetes.Interface) error {
-	// GET is cheap and idempotent
-	if _, err := cs.CoreV1().Namespaces().Get(ctx, metav1.NamespaceDefault, metav1.GetOptions{}); err == nil {
-		return nil
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get namespace %q: %w", metav1.NamespaceDefault, err)
+	specs := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{name: metav1.NamespaceDefault, labels: map[string]string{"miloapis.com/project-default": "true"}},
+		{name: "milo-system", labels: map[string]string{"miloapis.com/system": "true"}},
 	}
-
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   metav1.NamespaceDefault,
-			Labels: map[string]string{"miloapis.com/project-default": "true"},
-		},
-	}
-	if _, err := cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create namespace %q: %w", ns.Name, err)
+	for _, spec := range specs {
+		if _, err := cs.CoreV1().Namespaces().Get(ctx, spec.name, metav1.GetOptions{}); err == nil {
+			continue
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get namespace %q: %w", spec.name, err)
+		}
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: spec.name, Labels: spec.labels},
+		}
+		if _, err := cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create namespace %q: %w", ns.Name, err)
+		}
 	}
 	return nil
 }

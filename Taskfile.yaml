@@ -8,7 +8,7 @@ vars:
   # renovate: datasource=go depName=fybrik.io/crdoc
   CRDOC_VERSION: v0.6.4
   # renovate: datasource=go depName=github.com/kyverno/chainsaw
-  CHAINSAW_VERSION: v0.2.13
+  CHAINSAW_VERSION: v0.2.15
   # Container image configuration
   MILO_IMAGE_NAME: "ghcr.io/milo-os/milo"
   MILO_IMAGE_TAG: "dev"
