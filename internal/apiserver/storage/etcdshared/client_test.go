@@ -52,23 +52,24 @@ func TestAcquireClient_SharedAcrossProjects(t *testing.T) {
 		t.Fatalf("second acquire: %v", err)
 	}
 
-	if *calls != 1 {
-		t.Fatalf("expected client dialed once, got %d", *calls)
+	// The pool for a transport is dialed once, lazily, on first acquire.
+	if *calls != sharedClientPoolSize {
+		t.Fatalf("expected pool dialed once (%d clients), got %d", sharedClientPoolSize, *calls)
 	}
-	if c1 != c2 {
-		t.Fatalf("expected same shared client pointer across acquisitions")
+	if c1 == nil || c2 == nil {
+		t.Fatalf("expected non-nil clients from the pool")
 	}
 
-	// Releasing one project's storage must NOT close the client while another holds a ref.
+	// Releasing one project's storage must NOT close the pool while another holds a ref.
 	rel1()
 	if closed(c1) {
-		t.Fatalf("client closed while a reference is still held")
+		t.Fatalf("pool closed while a reference is still held")
 	}
 
-	// Last release closes exactly once and drops the cache entry.
+	// Last release closes the pool and drops the cache entry.
 	rel2()
-	if !closed(c1) {
-		t.Fatalf("client not closed after final release")
+	if !closed(c1) || !closed(c2) {
+		t.Fatalf("pool not closed after final release")
 	}
 
 	clientsMu.Lock()
@@ -91,8 +92,8 @@ func TestAcquireClient_DistinctTransportsDoNotShare(t *testing.T) {
 		t.Fatalf("acquire B: %v", err)
 	}
 
-	if *calls != 2 {
-		t.Fatalf("expected two clients dialed, got %d", *calls)
+	if *calls != 2*sharedClientPoolSize {
+		t.Fatalf("expected two pools dialed (%d clients), got %d", 2*sharedClientPoolSize, *calls)
 	}
 	if cA == cB {
 		t.Fatalf("distinct transports unexpectedly shared a client")
@@ -111,14 +112,14 @@ func TestAcquireClient_ReClosedAfterFullReleaseCycle(t *testing.T) {
 
 	_, rel1, _ := acquireClient(tc, 0)
 	rel1()
-	if *calls != 1 {
-		t.Fatalf("expected one dial, got %d", *calls)
+	if *calls != sharedClientPoolSize {
+		t.Fatalf("expected one pool dialed (%d clients), got %d", sharedClientPoolSize, *calls)
 	}
 
-	// After the entry was torn down, a fresh acquire dials a new client.
+	// After the entry was torn down, a fresh acquire dials a new pool.
 	_, rel2, _ := acquireClient(tc, 0)
-	if *calls != 2 {
-		t.Fatalf("expected re-dial after teardown, got %d", *calls)
+	if *calls != 2*sharedClientPoolSize {
+		t.Fatalf("expected re-dial after teardown (%d clients), got %d", 2*sharedClientPoolSize, *calls)
 	}
 	rel2()
 }

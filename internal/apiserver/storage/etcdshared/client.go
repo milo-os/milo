@@ -108,9 +108,24 @@ var newSharedETCDClient = func(c storagebackend.TransportConfig) (*kubernetes.Cl
 	return kubernetes.New(cfg)
 }
 
+// sharedClientPoolSize is the number of etcd connections opened per transport
+// and round-robined across all project control planes and resource types. A
+// single connection multiplexes every watch-cache watch over one gRPC watch
+// stream; at our scale (~hundreds of projects x dozens of resources that is
+// tens of thousands of watches) one stream becomes a head-of-line bottleneck
+// and per-prefix caches fall progressively behind the global revision, which
+// surfaces as "Too large resource version" / cache consistency failures and
+// breaks streaming WatchList. Spreading watches across a small pool keeps the
+// per-connection watch count in the range a normal apiserver handles while
+// still collapsing the tens of thousands of per-(project x resource)
+// connections this package replaced — the memory win is preserved (a few dozen
+// connections, not one per resource).
+const sharedClientPoolSize = 32
+
 type runningClient struct {
-	client            *kubernetes.Client
+	clients           []*kubernetes.Client
 	stopDBSizeMonitor func()
+	next              uint64
 	refs              int
 }
 
@@ -126,15 +141,15 @@ func transportKey(c storagebackend.TransportConfig) string {
 	return fmt.Sprintf("%s|%s|%s|%s", endpoints, c.CertFile, c.KeyFile, c.TrustedCAFile)
 }
 
-// acquireClient returns a single shared etcd client per transport config. All
-// project control planes and resource types that share the same transport reuse
-// the same underlying gRPC connection; per-project isolation is enforced by the
-// etcd key prefix at the store layer, not by the connection. The client's KV is
-// wrapped once with the latency tracker (it is stateless and request-context
-// scoped, so a single wrapper is safe and avoids compounding wrappers across
-// thousands of resources) and a single DB-size monitor is started for it. The
-// returned release func closes the client only when the last reference for the
-// transport is released.
+// acquireClient returns one etcd client from a fixed-size pool shared per
+// transport config. All project control planes and resource types that share
+// the same transport reuse the same pool of underlying gRPC connections,
+// assigned round-robin; per-project isolation is enforced by the etcd key
+// prefix at the store layer, not by the connection. Each client's KV is wrapped
+// once with the latency tracker (it is stateless and request-context scoped, so
+// a single wrapper per client is safe) and a single DB-size monitor is started
+// for the pool. The returned release func closes the pool only when the last
+// reference for the transport is released.
 func acquireClient(c storagebackend.TransportConfig, dbMetricPollInterval time.Duration) (*kubernetes.Client, func(), error) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
@@ -142,28 +157,41 @@ func acquireClient(c storagebackend.TransportConfig, dbMetricPollInterval time.D
 	key := transportKey(c)
 	rc, found := clients[key]
 	if !found {
-		client, err := newSharedETCDClient(c)
-		if err != nil {
-			return nil, nil, err
+		pool := make([]*kubernetes.Client, 0, sharedClientPoolSize)
+		for i := 0; i < sharedClientPoolSize; i++ {
+			client, err := newSharedETCDClient(c)
+			if err != nil {
+				for _, pc := range pool {
+					_ = pc.Close()
+				}
+				return nil, nil, err
+			}
+			client.KV = etcd3.NewETCDLatencyTracker(client.KV)
+			pool = append(pool, client)
 		}
-		client.KV = etcd3.NewETCDLatencyTracker(client.KV)
 
-		stopDBSizeMonitor, err := startDBSizeMonitorPerEndpoint(client.Client, dbMetricPollInterval)
+		// The DB-size monitor dedups per endpoint internally, so one client
+		// from the pool is sufficient to drive it.
+		stopDBSizeMonitor, err := startDBSizeMonitorPerEndpoint(pool[0].Client, dbMetricPollInterval)
 		if err != nil {
-			_ = client.Close()
+			for _, pc := range pool {
+				_ = pc.Close()
+			}
 			return nil, nil, err
 		}
 
 		rc = &runningClient{
-			client:            client,
+			clients:           pool,
 			stopDBSizeMonitor: stopDBSizeMonitor,
 		}
 		clients[key] = rc
 	}
 
 	rc.refs++
+	client := rc.clients[rc.next%uint64(len(rc.clients))]
+	rc.next++
 
-	return rc.client, func() {
+	return client, func() {
 		clientsMu.Lock()
 		defer clientsMu.Unlock()
 
@@ -171,7 +199,9 @@ func acquireClient(c storagebackend.TransportConfig, dbMetricPollInterval time.D
 		rc.refs--
 		if rc.refs == 0 {
 			rc.stopDBSizeMonitor()
-			_ = rc.client.Close()
+			for _, pc := range rc.clients {
+				_ = pc.Close()
+			}
 			delete(clients, key)
 		}
 	}, nil
