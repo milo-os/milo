@@ -38,10 +38,6 @@ func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object
 	}
 
 	// Ensure we always wrap with our project-aware decorator.
-	if opts.Decorator == nil {
-		opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.loopbackConfig)
-	} else {
-		opts.Decorator = ProjectAwareDecorator(gr, opts.Decorator, g.loopbackConfig)
-	}
+	opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.loopbackConfig)
 	return opts, nil
 }
