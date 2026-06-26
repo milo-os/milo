@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -121,7 +122,8 @@ var (
 // transportKey derives the shared-client cache key. Only the transport
 // (endpoints + TLS) determines the connection.
 func transportKey(c storagebackend.TransportConfig) string {
-	return fmt.Sprintf("%v", c)
+	endpoints := strings.Join(slices.Sorted(slices.Values(c.ServerList)), ",")
+	return fmt.Sprintf("%s|%s|%s|%s", endpoints, c.CertFile, c.KeyFile, c.TrustedCAFile)
 }
 
 // acquireClient returns a single shared etcd client per transport config. All
