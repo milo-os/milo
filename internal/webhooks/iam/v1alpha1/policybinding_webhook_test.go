@@ -92,7 +92,7 @@ func TestPolicyBindingMutator_Default(t *testing.T) {
 		"errors when the named user does not exist": {
 			subjects:    []iamv1alpha1.Subject{{Kind: "User", Name: "ghost"}},
 			expectError: true,
-			contains:    `User "ghost" not found`,
+			contains:    `User "ghost" does not exist`,
 		},
 		"errors when a group subject omits the namespace": {
 			subjects:    []iamv1alpha1.Subject{{Kind: "Group", Name: "loaders"}},

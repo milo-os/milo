@@ -122,7 +122,9 @@ func (m *PolicyBindingMutator) resolveSubjectUID(ctx context.Context, subject *i
 // an admission response.
 func lookupFieldError(namePath *field.Path, name, kind string, err error) *field.Error {
 	if errors.IsNotFound(err) {
-		return field.Invalid(namePath, name, fmt.Sprintf("%s %q not found; cannot resolve subject uid", kind, name))
+		notFound := field.NotFound(namePath, name)
+		notFound.Detail = fmt.Sprintf("%s %q does not exist; cannot resolve subject uid", kind, name)
+		return notFound
 	}
 	return field.InternalError(namePath, fmt.Errorf("failed to get %s %q: %w", kind, name, err))
 }
