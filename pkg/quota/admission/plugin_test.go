@@ -22,8 +22,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"go.miloapis.com/milo/internal/quota/engine"
-	"go.miloapis.com/milo/internal/quota/validation"
+	"go.miloapis.com/milo/pkg/quota/engine"
+	"go.miloapis.com/milo/pkg/quota/validation"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	milorequest "go.miloapis.com/milo/pkg/request"
 )
