@@ -119,8 +119,21 @@ var newSharedETCDClient = func(c storagebackend.TransportConfig) (*kubernetes.Cl
 // per-connection watch count in the range a normal apiserver handles while
 // still collapsing the tens of thousands of per-(project x resource)
 // connections this package replaced — the memory win is preserved (a few dozen
-// connections, not one per resource).
-const sharedClientPoolSize = 32
+// connections, not one per resource). It is tunable via
+// --shared-etcd-client-pool-size; SetSharedClientPoolSize must be called once at
+// startup before any storage is built.
+var sharedClientPoolSize = 32
+
+// SetSharedClientPoolSize overrides the per-transport pool size. It is intended
+// to be called exactly once during apiserver startup, before the first storage
+// (and therefore the first acquireClient) is created, so no synchronization is
+// needed against acquireClient. Values below 1 are clamped to 1.
+func SetSharedClientPoolSize(n int) {
+	if n < 1 {
+		n = 1
+	}
+	sharedClientPoolSize = n
+}
 
 type runningClient struct {
 	clients           []*kubernetes.Client

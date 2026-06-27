@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	crd "go.miloapis.com/milo/config/crd"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
+	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 	projectstorage "go.miloapis.com/milo/internal/apiserver/storage/project"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -79,6 +80,7 @@ var (
 	eventsProviderTimeoutSeconds         int
 	eventsProviderRetries                int
 	eventsForwardExtras                  []string
+	sharedETCDClientPoolSize             int
 )
 
 // NewCommand creates a *cobra.Command object with default parameters
@@ -199,6 +201,7 @@ func NewCommand() *cobra.Command {
 	fs.IntVar(&eventsProviderTimeoutSeconds, "events-provider-timeout", 30, "Activity provider request timeout in seconds")
 	fs.IntVar(&eventsProviderRetries, "events-provider-retries", 3, "Activity provider request retries")
 	fs.StringSliceVar(&eventsForwardExtras, "events-forward-extras", []string{"iam.miloapis.com/parent-api-group", "iam.miloapis.com/parent-type", "iam.miloapis.com/parent-name"}, "User extras keys to forward to Activity for events")
+	fs.IntVar(&sharedETCDClientPoolSize, "shared-etcd-client-pool-size", 32, "Number of etcd client connections opened per transport and round-robined across all project control plane watch caches. Higher values spread watch progress traffic across more gRPC streams at the cost of more connections. Minimum 1.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
@@ -239,6 +242,9 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	klog.Infof("Version: %+v", version.Get())
 
 	klog.InfoS("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
+
+	etcdshared.SetSharedClientPoolSize(sharedETCDClientPoolSize)
+	klog.InfoS("Shared etcd client pool configured", "size", sharedETCDClientPoolSize)
 
 	config, err := NewConfig(opts)
 	if err != nil {
