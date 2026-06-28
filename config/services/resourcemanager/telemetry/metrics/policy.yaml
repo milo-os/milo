@@ -24,6 +24,8 @@ spec:
                   value: "object.metadata.uid"
                 - name: contact_email
                   value: "has(object.status.organization.contactEmail) ? object.status.organization.contactEmail : ''"
+
+    - name: resourcemanager-organization-memberships-created-timestamp
       resource:
         group: resourcemanager.miloapis.com
         version: v1alpha1
