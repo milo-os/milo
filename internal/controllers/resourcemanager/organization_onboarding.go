@@ -45,6 +45,13 @@ func reconcileOrganizationOnboarding(
 	namespaceName := resourcemanagerv1alpha.OrganizationNamespace(organization.Name)
 	var billingAccounts billingv1alpha1.BillingAccountList
 	if err := c.List(ctx, &billingAccounts, client.InNamespace(namespaceName)); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			onboardingCondition.Status = metav1.ConditionFalse
+			onboardingCondition.Reason = resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonBillingAccountMissing
+			onboardingCondition.Message = "Organization does not have a billing account"
+			apimeta.SetStatusCondition(&organization.Status.Conditions, *onboardingCondition)
+			return statusChanged(originalStatus, &organization.Status), nil
+		}
 		return false, fmt.Errorf("failed to list billing accounts for organization: %w", err)
 	}
 

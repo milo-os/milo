@@ -4,4 +4,3 @@ metadata:
   name: grant-policy-test-org
   labels:
     test.miloapis.com/scenario: "grant-creation-policy"
-spec:
