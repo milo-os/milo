@@ -21,8 +21,8 @@ spec:
     - jsonPath: .metadata.annotations.kubernetes\.io\/display-name
       name: Display Name
       type: string
-    - jsonPath: .spec.type
-      name: Type
+    - jsonPath: .status.conditions[?(@.type=='OnboardingComplete')].status
+      name: Onboarding
       type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
@@ -57,17 +57,61 @@ spec:
           spec:
             description: OrganizationSpec defines the desired state of Organization
             properties:
-              type:
-                description: The type of organization.
-                enum:
-                - Personal
-                - Standard
-                type: string
-                x-kubernetes-validations:
-                - message: organization type is immutable
-                  rule: type(oldSelf) == null_type || self == oldSelf
-            required:
-            - type
+              contactInfo:
+                description: |-
+                  ContactInfo describes who the organization is and how to reach them.
+                  Email and name are required for onboarding to complete.
+                properties:
+                  address:
+                    description: Address is the optional postal address for the organization.
+                    properties:
+                      city:
+                        description: City is the locality.
+                        maxLength: 128
+                        type: string
+                      country:
+                        description: Country is the ISO 3166-1 alpha-2 country code
+                          (e.g. "GB", "US").
+                        pattern: ^[A-Z]{2}$
+                        type: string
+                      line1:
+                        description: Line1 is the first line of the street address.
+                        maxLength: 256
+                        type: string
+                      line2:
+                        description: Line2 is the second line of the street address.
+                        maxLength: 256
+                        type: string
+                      postalCode:
+                        description: PostalCode is the post or zip code.
+                        maxLength: 32
+                        type: string
+                      region:
+                        description: Region is the state, province, or county.
+                        maxLength: 128
+                        type: string
+                    required:
+                    - country
+                    type: object
+                  businessName:
+                    description: BusinessName is the optional legal entity or company
+                      name.
+                    maxLength: 256
+                    type: string
+                  email:
+                    description: Email is the primary contact email for the organization.
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name is the display name of the primary contact.
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                required:
+                - email
+                - name
+                type: object
             type: object
           status:
             description: OrganizationStatus defines the observed state of Organization
@@ -79,9 +123,14 @@ spec:
                   reason: Unknown
                   status: Unknown
                   type: Ready
+                - lastTransitionTime: "1970-01-01T00:00:00Z"
+                  message: Organization contact information is incomplete
+                  reason: ContactInfoIncomplete
+                  status: "False"
+                  type: OnboardingComplete
                 description: |-
                   Conditions represents the observations of an organization's current state.
-                  Known condition types are: "Ready"
+                  Known condition types are: "Ready", "OnboardingComplete"
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -143,8 +192,6 @@ spec:
                 format: int64
                 type: integer
             type: object
-        required:
-        - spec
         type: object
     served: true
     storage: true

@@ -22,10 +22,8 @@ spec:
                   value: "object.metadata.namespace"
                 - name: uid
                   value: "object.metadata.uid"
-                - name: organization_type
-                  value: "has(object.spec.type) ? object.spec.type : ''"
-
-    - name: resourcemanager-organization-memberships-created-timestamp
+                - name: contact_email
+                  value: "has(object.status.organization.contactEmail) ? object.status.organization.contactEmail : ''"
       resource:
         group: resourcemanager.miloapis.com
         version: v1alpha1
@@ -90,8 +88,10 @@ spec:
                   value: "object.metadata.namespace"
                 - name: uid
                   value: "object.metadata.uid"
-                - name: organization_type
-                  value: "has(object.spec.type) ? object.spec.type : ''"
+                - name: onboarding_complete
+                  value: |
+                    object.status.conditions.exists(c, c.type == 'OnboardingComplete') ?
+                      object.status.conditions.filter(c, c.type == 'OnboardingComplete')[0].status : ''
 
     - name: resourcemanager-organizations-created-timestamp
       resource:

@@ -3,4 +3,3 @@ kind: Organization
 metadata:
   name: test-vap-org-b
 spec:
-  type: Standard

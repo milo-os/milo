@@ -4,5 +4,4 @@ metadata:
   name: premium-test-org
   labels:
     test.miloapis.com/scenario: "grant-creation-policy"
-spec:
-  type: "Standard"
+spec: {}

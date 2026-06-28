@@ -10,4 +10,3 @@ metadata:
     environment: test
     purpose: slack-notification-test
 spec:
-  type: Standard

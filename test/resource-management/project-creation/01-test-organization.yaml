@@ -8,4 +8,3 @@ metadata:
     kubernetes.io/description: "Organization for testing project creation"
     kubernetes.io/display-name: "Test Project Creation Organization"
 spec:
-  type: Standard

@@ -37,9 +37,7 @@ func TestProjectValidator_ValidateUpdate(t *testing.T) {
 			Name: orgName,
 			UID:  types.UID("org-123"),
 		},
-		Spec: v1alpha1.OrganizationSpec{
-			Type: "Business",
-		},
+		Spec: v1alpha1.OrganizationSpec{},
 	}
 
 	// Create test user for the fake client

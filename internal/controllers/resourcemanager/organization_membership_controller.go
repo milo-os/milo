@@ -178,9 +178,13 @@ func (r *OrganizationMembershipController) Reconcile(ctx context.Context, req ct
 	organizationMembership.Status.ObservedGeneration = organizationMembership.Generation
 
 	// Update organization status information
+	contactEmail := ""
+	if organization.Spec.ContactInfo != nil {
+		contactEmail = organization.Spec.ContactInfo.Email
+	}
 	organizationMembership.Status.Organization = resourcemanagerv1alpha.OrganizationMembershipOrganizationStatus{
-		Type:        organization.Spec.Type,
-		DisplayName: organization.Annotations["kubernetes.io/display-name"],
+		DisplayName:  organization.Annotations["kubernetes.io/display-name"],
+		ContactEmail: contactEmail,
 	}
 
 	// Update user status information

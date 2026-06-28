@@ -8,10 +8,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	resourcemanagerv1alpha "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 )
 
@@ -21,6 +25,8 @@ type OrganizationController struct {
 }
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=billing.miloapis.com,resources=billingaccounts,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
@@ -34,7 +40,6 @@ func (r *OrganizationController) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get organization: %w", err)
 	}
 
-	// Don't need to continue if the organization is being deleted from the cluster.
 	if !organization.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
@@ -42,35 +47,33 @@ func (r *OrganizationController) Reconcile(ctx context.Context, req ctrl.Request
 	logger.Info("reconciling organization")
 	defer logger.Info("reconcile complete")
 
-	// Find the namespace for this organization
-	namespaceName := fmt.Sprintf("organization-%s", organization.Name)
+	namespaceName := resourcemanagerv1alpha.OrganizationNamespace(organization.Name)
 	var namespace corev1.Namespace
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: namespaceName}, &namespace); apierrors.IsNotFound(err) {
-		// Namespace doesn't exist, nothing to do
-		logger.Info("organization namespace not found", "namespace", namespaceName)
-		return ctrl.Result{}, nil
-	} else if err != nil {
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: namespaceName}, &namespace); err == nil {
+		hasOwnerRef, ownerErr := controllerutil.HasOwnerReference(namespace.OwnerReferences, &organization, r.Client.Scheme())
+		if ownerErr != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to check if organization is owner reference: %w", ownerErr)
+		} else if !hasOwnerRef {
+			logger.Info("adding organization as owner reference to namespace", "namespace", namespaceName)
+			if err := controllerutil.SetControllerReference(&organization, &namespace, r.Client.Scheme()); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
+			}
+			if err := r.Client.Update(ctx, &namespace); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update namespace owner references: %w", err)
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, fmt.Errorf("failed to get organization namespace: %w", err)
 	}
 
-	// Check if the organization is already set as the controller owner reference
-	hasOwnerRef, err := controllerutil.HasOwnerReference(namespace.OwnerReferences, &organization, r.Client.Scheme())
+	statusChanged, err := reconcileOrganizationOnboarding(ctx, r.Client, &organization)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to check if organization is owner reference: %w", err)
-	} else if hasOwnerRef {
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, err
 	}
-
-	logger.Info("adding organization as owner reference to namespace", "namespace", namespaceName)
-
-	// Set the organization as the controller owner reference for the namespace
-	if err := controllerutil.SetControllerReference(&organization, &namespace, r.Client.Scheme()); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
-	}
-
-	// Update the namespace with the owner reference
-	if err := r.Client.Update(ctx, &namespace); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update namespace owner references: %w", err)
+	if statusChanged {
+		if err := r.Client.Status().Update(ctx, &organization); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update organization onboarding status: %w", err)
+		}
 	}
 
 	return ctrl.Result{}, nil
@@ -82,6 +85,18 @@ func (r *OrganizationController) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&resourcemanagerv1alpha.Organization{}).
+		Watches(
+			&billingv1alpha1.BillingAccount{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				keys := mapBillingAccountToOrganization(ctx, obj)
+				requests := make([]reconcile.Request, 0, len(keys))
+				for _, key := range keys {
+					requests = append(requests, reconcile.Request{NamespacedName: key})
+				}
+				return requests
+			}),
+			builder.WithPredicates(),
+		).
 		Named("organization").
 		Complete(r)
 }

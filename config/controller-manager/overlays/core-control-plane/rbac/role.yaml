@@ -46,6 +46,14 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - billing.miloapis.com
+  resources:
+  - billingaccounts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - dns.networking.miloapis.com
   resources:
   - dnszoneclasses
@@ -320,6 +328,7 @@ rules:
   - resourcemanager.miloapis.com
   resources:
   - organizationmemberships/status
+  - organizations/status
   - projects/status
   verbs:
   - get

@@ -7,4 +7,3 @@ metadata:
   annotations:
     kubernetes.io/display-name: "UserInvitation GC Test Organization"
 spec:
-  type: Standard

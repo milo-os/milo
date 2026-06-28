@@ -49,7 +49,6 @@ import (
 //
 // +k8s:openapi-gen=true
 // +kubebuilder:printcolumn:name="Organization",type="string",JSONPath=".spec.organizationRef.name"
-// +kubebuilder:printcolumn:name="Organization Type",type="string",JSONPath=".status.organization.type"
 // +kubebuilder:printcolumn:name="Organization Display Name",type="string",JSONPath=".status.organization.displayName"
 // +kubebuilder:printcolumn:name="User",type="string",JSONPath=".spec.userRef.name"
 // +kubebuilder:printcolumn:name="User Email",type="string",JSONPath=".status.user.email",priority=1
@@ -311,12 +310,13 @@ type OrganizationMembershipUserStatus struct {
 
 // OrganizationMembershipOrganizationStatus defines the observed state of an organization in a membership.
 type OrganizationMembershipOrganizationStatus struct {
-	// Type is the type of the organization in the membership.
-	// +kubebuilder:validation:Optional
-	Type string `json:"type,omitempty"`
 	// DisplayName is the display name of the organization in the membership.
 	// +kubebuilder:validation:Optional
 	DisplayName string `json:"displayName,omitempty"`
+
+	// ContactEmail is the primary contact email cached from the organization.
+	// +kubebuilder:validation:Optional
+	ContactEmail string `json:"contactEmail,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

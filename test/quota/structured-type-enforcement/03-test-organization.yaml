@@ -5,4 +5,3 @@ metadata:
   labels:
     test.miloapis.com/quota: "structured-type"
 spec:
-  type: Standard

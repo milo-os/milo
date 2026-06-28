@@ -8,4 +8,3 @@ metadata:
     kubernetes.io/description: "Organization for validating owner deletion guard"
     kubernetes.io/display-name: "Owner Protection Test Organization"
 spec:
-  type: Standard
