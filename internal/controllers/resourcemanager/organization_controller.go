@@ -6,6 +6,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -83,9 +85,11 @@ func (r *OrganizationController) Reconcile(ctx context.Context, req ctrl.Request
 func (r *OrganizationController) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&resourcemanagerv1alpha.Organization{}).
-		Watches(
+	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
+		For(&resourcemanagerv1alpha.Organization{})
+
+	if billingAccountsSupported(mgr.GetRESTMapper()) {
+		controllerBuilder = controllerBuilder.Watches(
 			&billingv1alpha1.BillingAccount{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 				keys := mapBillingAccountToOrganization(ctx, obj)
@@ -96,7 +100,18 @@ func (r *OrganizationController) SetupWithManager(mgr ctrl.Manager) error {
 				return requests
 			}),
 			builder.WithPredicates(),
-		).
+		)
+	}
+
+	return controllerBuilder.
 		Named("organization").
 		Complete(r)
+}
+
+func billingAccountsSupported(mapper meta.RESTMapper) bool {
+	_, err := mapper.RESTMapping(
+		schema.GroupKind{Group: "billing.miloapis.com", Kind: "BillingAccount"},
+		"v1alpha1",
+	)
+	return err == nil
 }
