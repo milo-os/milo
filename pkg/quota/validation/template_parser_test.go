@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"go.miloapis.com/milo/internal/quota/templateutil"
+	"go.miloapis.com/milo/pkg/quota/templateutil"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 

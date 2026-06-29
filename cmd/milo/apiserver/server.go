@@ -44,7 +44,7 @@ import (
 	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver"
 	"k8s.io/kubernetes/pkg/controlplane/apiserver/options"
 
-	admissionquota "go.miloapis.com/milo/internal/quota/admission"
+	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
 
 	// Import features package to register Milo feature gates via init()
 	_ "go.miloapis.com/milo/pkg/features"

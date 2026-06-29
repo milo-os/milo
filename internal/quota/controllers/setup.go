@@ -15,8 +15,8 @@ import (
 	"go.miloapis.com/milo/internal/quota/controllers/core"
 	"go.miloapis.com/milo/internal/quota/controllers/lifecycle"
 	"go.miloapis.com/milo/internal/quota/controllers/policy"
-	"go.miloapis.com/milo/internal/quota/engine"
-	"go.miloapis.com/milo/internal/quota/validation"
+	"go.miloapis.com/milo/pkg/quota/engine"
+	"go.miloapis.com/milo/pkg/quota/validation"
 )
 
 // SetupQuotaControllers registers all quota controllers with the provided multicluster manager.

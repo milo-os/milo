@@ -8,7 +8,7 @@ import (
 	validatingwebhook "k8s.io/apiserver/pkg/admission/plugin/webhook/validating"
 	"k8s.io/kubernetes/pkg/kubeapiserver/options"
 
-	admissionquota "go.miloapis.com/milo/internal/quota/admission"
+	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
 )
 
 // GetMiloOrderedPlugins returns the complete ordered list of admission plugins,

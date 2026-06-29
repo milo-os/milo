@@ -10,6 +10,7 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	"go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	milorequest "go.miloapis.com/milo/pkg/request"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,16 +21,15 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
-type key int
-
-const orgId key = iota
-
 // OrganizationID returns the organization ID stashed on the request context by
 // OrganizationContextHandler, if any. Used by middleware that needs to detect
 // whether the current request is being made in the context of an organization.
+//
+// Deprecated: use go.miloapis.com/milo/pkg/request.OrganizationID. This thin
+// wrapper is retained for backwards compatibility and reads the same context
+// value set by WithOrganization.
 func OrganizationID(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(orgId).(string)
-	return id, ok
+	return milorequest.OrganizationID(ctx)
 }
 
 // OrganizationContextHandler will react to requests sent to a pseudo API path
@@ -71,7 +71,7 @@ func OrganizationContextHandler(handler http.Handler, s runtime.NegotiatedSerial
 				return
 			}
 
-			ctx := context.WithValue(req.Context(), orgId, organizationID)
+			ctx := milorequest.WithOrganization(req.Context(), organizationID)
 			req = req.WithContext(ctx)
 
 			// Check to see if the request is a direct request for the organization
@@ -100,7 +100,7 @@ func OrganizationContextHandler(handler http.Handler, s runtime.NegotiatedSerial
 func OrganizationContextAuthorizationDecorator(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
-		orgId, ok := ctx.Value(orgId).(string)
+		orgId, ok := milorequest.OrganizationID(ctx)
 		if !ok {
 			// Not an org scoped request
 			handler.ServeHTTP(w, req)
@@ -150,7 +150,7 @@ func OrganizationProjectListConstraintDecorator(handler http.Handler) http.Handl
 		}
 
 		if info.APIGroup == "resourcemanager.miloapis.com" && info.Resource == "projects" && info.Verb == "list" {
-			organizationID, ok := ctx.Value(orgId).(string)
+			organizationID, ok := milorequest.OrganizationID(ctx)
 			if ok {
 				requirements, err := labels.ParseToRequirements(info.LabelSelector)
 				if err != nil {

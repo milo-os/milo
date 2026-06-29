@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 
-	quotacel "go.miloapis.com/milo/internal/quota/cel"
+	quotacel "go.miloapis.com/milo/pkg/quota/cel"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 )
 
