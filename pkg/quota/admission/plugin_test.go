@@ -22,9 +22,9 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	"go.miloapis.com/milo/pkg/quota/engine"
 	"go.miloapis.com/milo/pkg/quota/validation"
-	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	milorequest "go.miloapis.com/milo/pkg/request"
 )
 
@@ -1918,4 +1918,101 @@ func TestUserFacingClaimError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestClusterScopedClaimNamespace covers a ClaimCreationPolicy that targets a
+// cluster-scoped resource (no namespace) without pinning
+// spec.target.resourceClaimTemplate.metadata.namespace. With the configured
+// default the ResourceClaim namespace is filled in and quota enforces; only
+// when that default is explicitly cleared does admission fail — with an
+// actionable misconfiguration error rather than the opaque downstream "the
+// server could not find the requested resource".
+func TestClusterScopedClaimNamespace(t *testing.T) {
+	clusterGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "ClusterWidget"}
+
+	newPolicy := func() *quotav1alpha1.ClaimCreationPolicy {
+		return &quotav1alpha1.ClaimCreationPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "clusterwidget-policy"},
+			Spec: quotav1alpha1.ClaimCreationPolicySpec{
+				Trigger: quotav1alpha1.ClaimTriggerSpec{
+					Resource: quotav1alpha1.ClaimTriggerResource{APIVersion: "example.com/v1", Kind: "ClusterWidget"},
+				},
+				Disabled: ptr.To(false),
+				Target: quotav1alpha1.ClaimTargetSpec{
+					ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
+						// No Metadata.Namespace — cluster-scoped target relies on the default.
+						Metadata: quotav1alpha1.ObjectMetaTemplate{},
+						Spec: quotav1alpha1.ResourceClaimSpec{
+							ConsumerRef: quotav1alpha1.ConsumerRef{APIGroup: "resourcemanager.miloapis.com", Kind: "Organization", Name: "test-org"},
+							Requests:    []quotav1alpha1.ResourceRequest{{ResourceType: "example.com/ClusterWidget", Amount: 1}},
+						},
+					},
+				},
+			},
+			Status: quotav1alpha1.ClaimCreationPolicyStatus{
+				Conditions: []metav1.Condition{{Type: quotav1alpha1.ClaimCreationPolicyReady, Status: metav1.ConditionTrue, Reason: "TestReady"}},
+			},
+		}
+	}
+
+	newAttrs := func() *testAdmissionAttributes {
+		obj := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "example.com/v1",
+			"kind":       "ClusterWidget",
+			"metadata":   map[string]interface{}{"name": "widget-1"}, // cluster-scoped: no namespace
+		}}
+		return &testAdmissionAttributes{
+			operation: admission.Create,
+			object:    obj,
+			gvk:       clusterGVK,
+			name:      obj.GetName(),
+			namespace: "", // cluster-scoped
+			userInfo:  &user.DefaultInfo{Name: "test-user"},
+		}
+	}
+
+	newPlugin := func(cfg *AdmissionPluginConfig, dyn dynamic.Interface, policy *quotav1alpha1.ClaimCreationPolicy) *ResourceQuotaEnforcementPlugin {
+		logger := zap.New(zap.UseDevMode(true))
+		celEngine, err := engine.NewCELEngine()
+		if err != nil {
+			t.Fatalf("Failed to create CEL engine: %v", err)
+		}
+		p := &ResourceQuotaEnforcementPlugin{
+			Handler:        admission.NewHandler(admission.Create),
+			dynamicClient:  dyn,
+			policyEngine:   &testPolicyEngine{policy: policy, gvk: clusterGVK},
+			templateEngine: engine.NewTemplateEngine(celEngine, logger.WithName("template")),
+			config:         cfg,
+			logger:         logger.WithName("plugin"),
+		}
+		p.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+		return p
+	}
+
+	t.Run("defaults to configured namespace and enforces", func(t *testing.T) {
+		scheme := runtime.NewScheme()
+		quotav1alpha1.AddToScheme(scheme)
+		dyn := &fakeGrantingDynamicClient{FakeDynamicClient: fake.NewSimpleDynamicClient(scheme)}
+		plugin := newPlugin(DefaultAdmissionPluginConfig(), dyn, newPolicy())
+
+		if err := plugin.Validate(context.Background(), newAttrs(), nil); err != nil {
+			t.Fatalf("expected admission to succeed via the default cluster-scoped namespace, got: %v", err)
+		}
+	})
+
+	t.Run("misconfigured when default explicitly cleared", func(t *testing.T) {
+		scheme := runtime.NewScheme()
+		quotav1alpha1.AddToScheme(scheme)
+		cfg := DefaultAdmissionPluginConfig()
+		cfg.ClusterScopedClaimNamespace = ""
+		plugin := newPlugin(cfg, fake.NewSimpleDynamicClient(scheme), newPolicy())
+
+		err := plugin.Validate(context.Background(), newAttrs(), nil)
+		if err == nil {
+			t.Fatal("expected admission to fail when no cluster-scoped claim namespace is configured, got nil")
+		}
+		if !contains(err.Error(), "misconfigured") {
+			t.Errorf("expected an actionable misconfiguration error, got: %v", err)
+		}
+	})
 }

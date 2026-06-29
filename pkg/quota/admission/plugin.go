@@ -589,6 +589,8 @@ func admissionOutcomeFor(kind claimFailureKind) string {
 		return "timeout"
 	case claimFailureConflict:
 		return "conflict"
+	case claimFailureMisconfigured:
+		return "policy_misconfigured"
 	default:
 		return "internal_error"
 	}
@@ -622,6 +624,9 @@ func userFacingClaimError(f *claimFailure) error {
 		}
 		//lint:ignore ST1005 user-facing message
 		return fmt.Errorf("We're still cleaning up from a previous attempt to create this resource. Please try again in a few seconds.")
+	case claimFailureMisconfigured:
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("Quota enforcement for this resource type is misconfigured and can't be applied. This needs a fix from the service provider — please contact support.")
 	default:
 		//lint:ignore ST1005 user-facing message
 		return fmt.Errorf("Something went wrong while checking your quota for this request. Please try again — if this keeps happening, contact support.")
@@ -657,6 +662,27 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		return newInternalFailure(fmt.Errorf("failed to determine claim name: %w", err))
 	}
 	namespace := p.getClaimNamespace(policy, evalContext)
+	if namespace == "" {
+		// A ResourceClaim is namespaced, but a cluster-scoped target resource has
+		// no namespace to inherit and ClaimCreationPolicy is itself cluster
+		// scoped. Default to the configured cluster-scoped claim namespace so
+		// quota still enforces; a policy can override per-resource by pinning
+		// spec.target.resourceClaimTemplate.metadata.namespace (literal or CEL).
+		namespace = p.config.ClusterScopedClaimNamespace
+		if namespace == "" {
+			// Only reachable if the default was explicitly cleared. Fail with an
+			// actionable reason instead of the opaque downstream "the server
+			// could not find the requested resource".
+			err := fmt.Errorf("ClaimCreationPolicy %q resolved an empty ResourceClaim namespace for cluster-scoped resource %s and no cluster-scoped claim namespace is configured; set spec.target.resourceClaimTemplate.metadata.namespace or AdmissionPluginConfig.ClusterScopedClaimNamespace", policy.Name, attrs.GetResource().GroupResource())
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Empty claim namespace for cluster-scoped resource")
+			return newMisconfiguredFailure("EmptyClaimNamespace", err)
+		}
+		p.logger.V(2).Info("Defaulting ResourceClaim namespace for cluster-scoped resource",
+			"namespace", namespace,
+			"policy", policy.Name,
+			"resource", attrs.GetResource().GroupResource().String())
+	}
 
 	span.SetAttributes(
 		attribute.String("claim.name", claimName),
