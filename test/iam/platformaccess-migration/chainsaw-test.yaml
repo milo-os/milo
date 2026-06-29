@@ -1,0 +1,185 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platformaccess-migration
+spec:
+  description: |
+    Validates that PlatformAccess resources are automatically created and synced
+    based on User state and registration approval status by using the appropriate
+    supporting resources (PlatformAccessApproval, PlatformAccessRejection, UserDeactivation).
+  steps:
+  - name: create-user-and-verify-pa
+    description: Create a User and verify that a corresponding PlatformAccess is created in Pending state.
+    try:
+    - apply:
+        file: test-data/user.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-migration-user
+        timeout: 30s
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformAccess
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.state}'
+            value: Pending
+
+  - name: test-sync-to-approved
+    description: Create PlatformAccessApproval and verify User status and PlatformAccess state update to Approved.
+    try:
+    - apply:
+        file: test-data/approval.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Approved
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformAccess
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.state}'
+            value: Approved
+
+  - name: test-sync-to-rejected
+    description: Remove approval, create PlatformAccessRejection, and verify status sync to Rejected.
+    try:
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: PlatformAccessApproval
+          name: test-migration-user-approval
+    - apply:
+        file: test-data/rejection.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Rejected
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformAccess
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.state}'
+            value: Rejected
+
+  - name: test-sync-to-suspended
+    description: Create UserDeactivation, set Ready status, and verify status sync to Suspended (Inactive).
+    try:
+    - apply:
+        file: test-data/deactivation.yaml
+    - script:
+        timeout: 30s
+        content: |
+          kubectl patch userdeactivation test-migration-user-deactivation --type=merge --subresource=status -p '{"status": {"conditions": [{"type": "Ready", "status": "True", "reason": "Reconciled", "message": "Manual override for test", "lastTransitionTime": "2026-06-25T11:53:00Z"}]}}'
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.status.state}'
+            value: Inactive
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformAccess
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.state}'
+            value: Suspended
+
+  - name: test-sync-back-to-approved
+    description: Remove deactivation and rejection, re-apply approval, and verify sync back to Approved.
+    try:
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: UserDeactivation
+          name: test-migration-user-deactivation
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: PlatformAccessRejection
+          name: test-migration-user-rejection
+    - apply:
+        file: test-data/approval.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.status.state}'
+            value: Active
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Approved
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformAccess
+        name: test-migration-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.spec.state}'
+            value: Approved
+
+  - name: cleanup-and-verify-deletion
+    description: Delete the User and verify everything is cleaned up and garbage collected.
+    try:
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          name: test-migration-user
+    - error:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          metadata:
+            name: test-migration-user
+        timeout: 30s
+    - error:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: PlatformAccess
+          metadata:
+            name: test-migration-user
+        timeout: 30s
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: PlatformAccessApproval
+          name: test-migration-user-approval

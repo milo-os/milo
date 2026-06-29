@@ -570,6 +570,10 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				logger.Error(err, "Error setting up platform access rejection webhook")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
+			if err := iamv1alpha1webhook.SetupPlatformAccessWebhooksWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up platform access webhook")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
 			if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up policybinding webhook")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
@@ -720,6 +724,14 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			if err := userCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up user controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			platformAccessMigrationCtrl := iamcontroller.PlatformAccessMigrationReconciler{
+				Client: ctrl.GetClient(),
+			}
+			if err := platformAccessMigrationCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up platform access migration controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 

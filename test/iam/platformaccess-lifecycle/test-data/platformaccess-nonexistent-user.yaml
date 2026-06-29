@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccess
+metadata:
+  name: test-nonexistent-user-access
+spec:
+  userRef:
+    name: non-existent-user
+  state: Pending

@@ -700,7 +700,7 @@ PlatformAccessSpec defines the desired access state for a user on the platform.
     </thead>
     <tbody><tr>
         <td><b>state</b></td>
-        <td>enum</td>
+        <td>string</td>
         <td>
           State is the desired platform access state for the user.
 Valid transitions:
@@ -710,7 +710,6 @@ Valid transitions:
   Approved → Rejected  (admin disapproves)
   Suspended → Approved (admin reactivates)<br/>
           <br/>
-            <i>Enum</i>: Pending, Approved, Rejected, Suspended<br/>
             <i>Default</i>: Pending<br/>
         </td>
         <td>true</td>
@@ -720,6 +719,8 @@ Valid transitions:
         <td>
           UserRef is a reference to the User this resource governs.
 User is a cluster-scoped resource.<br/>
+          <br/>
+            <i>Validations</i>:<li>oldSelf == null || self == oldSelf: userRef is immutable</li>
         </td>
         <td>true</td>
       </tr><tr>
