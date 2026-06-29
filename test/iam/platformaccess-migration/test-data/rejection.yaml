@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccessRejection
+metadata:
+  name: test-migration-user-rejection
+spec:
+  subjectRef:
+    name: test-migration-user
+  reason: "Testing rejection migration"

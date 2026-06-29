@@ -1,0 +1,116 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platformaccess-lifecycle
+spec:
+  description: |
+    Validates the full lifecycle of the PlatformAccess resource.
+    Specifically:
+    - Creation validation and defaulting (OwnerReference to User)
+    - Rejection of invalid state transitions (CEL Validation)
+    - Rejection of modifying the immutable userRef field (CEL Validation)
+    - Prevention of duplicate PlatformAccess resources for the same user (Validating Webhook)
+    - Prevention of PlatformAccess deletion (Validating Webhook)
+    - Garbage collection of PlatformAccess upon User deletion (OwnerReference)
+  steps:
+  - name: create-user-and-pa
+    description: Create User, then PlatformAccess, and verify it gets created with correct OwnerReference.
+    try:
+    - apply:
+        file: test-data/user.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: test-pa-user
+        timeout: 30s
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - apply:
+        file: test-data/platformaccess.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformAccess
+        name: test-pa-user
+        timeout: 30s
+        for:
+          jsonPath:
+            path: '{.metadata.ownerReferences[0].name}'
+            value: test-pa-user
+
+  - name: test-invalid-state-value
+    description: Attempt to transition to a wrong state value not allowed by the enum.
+    try:
+    - patch:
+        file: test-data/platformaccess-wrong-state.yaml
+        expect:
+        - check:
+            ($error != null): true
+            (contains($error, 'supported values')): true
+
+  - name: test-immutable-userref
+    description: Attempt to modify the immutable userRef field, which is not allowed.
+    try:
+    - patch:
+        file: test-data/platformaccess-patch-userref.yaml
+        expect:
+        - check:
+            ($error != null): true
+            (contains($error, 'userRef is immutable')): true
+
+  - name: test-nonexistent-user
+    description: Attempt to create PlatformAccess referencing a non-existent user, which is not allowed.
+    try:
+    - create:
+        file: test-data/platformaccess-nonexistent-user.yaml
+        expect:
+        - check:
+            ($error != null): true
+            (contains($error, 'not found')): true
+
+  - name: test-duplicate-platformaccess
+    description: Attempt to create another PlatformAccess for the same user, which is not allowed.
+    try:
+    - create:
+        file: test-data/platformaccess-duplicate.yaml
+        expect:
+        - check:
+            ($error != null): true
+            (contains($error, 'already exists')): true
+
+  - name: test-prevent-deletion
+    description: Attempt to delete the PlatformAccess resource, which must be blocked.
+    try:
+    - continueOnError: true
+      delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: PlatformAccess
+          name: test-pa-user
+        expect:
+        - check:
+            ($error != null): true
+
+  - name: test-garbage-collection-on-user-delete
+    description: Delete the User and verify the PlatformAccess is garbage collected.
+    try:
+    - delete:
+        ref:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          name: test-pa-user
+    - error:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: User
+          metadata:
+            name: test-pa-user
+        timeout: 30s
+    - error:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: PlatformAccess
+          metadata:
+            name: test-pa-user
+        timeout: 30s

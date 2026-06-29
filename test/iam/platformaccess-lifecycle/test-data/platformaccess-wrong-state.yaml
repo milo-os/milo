@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccess
+metadata:
+  name: test-pa-user
+spec:
+  userRef:
+    name: test-pa-user
+  state: InvalidState

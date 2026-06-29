@@ -118,6 +118,17 @@ rules:
 - apiGroups:
   - iam.miloapis.com
   resources:
+  - platformaccesses
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - iam.miloapis.com
+  resources:
   - platformaccessrejections
   verbs:
   - delete
