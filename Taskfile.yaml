@@ -333,7 +333,7 @@ tasks:
       - "\"{{.TOOL_DIR}}/controller-gen\" webhook paths=\"./internal/webhooks/...\" output:dir=\"./config/webhook\""
       # Generate RBAC rules for the controllers.
       - echo "Generating RBAC rules for the controllers..."
-      - "\"{{.TOOL_DIR}}/controller-gen\" rbac:roleName=milo-controller-manager paths=\"./internal/controllers/...\" paths=\"./internal/quota/controllers/...\" output:dir=\"./config/controller-manager/overlays/core-control-plane/rbac\""
+      - "\"{{.TOOL_DIR}}/controller-gen\" rbac:roleName=milo-controller-manager paths=\"./internal/controllers/...\" paths=\"./internal/quota/controllers/...\" paths=\"./internal/webhooks/...\" output:dir=\"./config/controller-manager/overlays/core-control-plane/rbac\""
     silent: true
 
   generate:openapi:identity:

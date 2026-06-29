@@ -1,0 +1,13 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: name-only-group-binding
+  namespace: ($namespace)
+spec:
+  subjects:
+    # The webhook resolved the uid from the named Group, and it matches the
+    # uid the API server assigned the Group at create time.
+    - kind: Group
+      name: resolve-me-group
+      namespace: ($namespace)
+      uid: ($grp.metadata.uid)

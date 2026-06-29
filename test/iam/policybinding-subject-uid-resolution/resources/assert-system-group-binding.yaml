@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: system-group-binding
+  namespace: ($namespace)
+spec:
+  # The binding was admitted with a uid-less system group subject: the webhook
+  # skipped resolution and the validating CEL rule permitted it.
+  subjects:
+    - kind: Group
+      name: system:authenticated-users

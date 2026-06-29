@@ -1,0 +1,20 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: name-only-group-binding
+  namespace: ($namespace)
+spec:
+  roleRef:
+    name: resolve-me-role
+    namespace: ($namespace)
+  # The Group subject is referenced by name only, with no uid. The mutating
+  # webhook must resolve the Group's metadata.uid before the validating CEL
+  # rule runs.
+  subjects:
+    - kind: Group
+      name: resolve-me-group
+      namespace: ($namespace)
+  resourceSelector:
+    resourceKind:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization

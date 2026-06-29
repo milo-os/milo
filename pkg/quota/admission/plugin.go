@@ -27,13 +27,10 @@ import (
 	legacyregistry "k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
-
-	"go.miloapis.com/milo/internal/quota/engine"
-	"go.miloapis.com/milo/internal/quota/validation"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+	"go.miloapis.com/milo/pkg/quota/engine"
+	"go.miloapis.com/milo/pkg/quota/validation"
 	milorequest "go.miloapis.com/milo/pkg/request"
-	milofilters "go.miloapis.com/milo/pkg/server/filters"
 )
 
 const (
@@ -100,6 +97,14 @@ type ResourceQuotaEnforcementPlugin struct {
 	watchManagers sync.Map // map[string]ClaimWatchManager (projectID -> watch manager, "" = root)
 	config        *AdmissionPluginConfig
 	logger        logr.Logger
+
+	// objectConvertor converts structured native (internal) types to their
+	// external versioned representation before evaluating policy constraints.
+	// It is optional and nil-guarded: when nil, structured objects are used
+	// as-is. CRDs are always decoded as *unstructured.Unstructured and never
+	// require conversion. Milo injects k8s.io/kubernetes legacyscheme.Scheme
+	// here; external hosts (e.g. IPAM) that only serve CRDs may leave it nil.
+	objectConvertor runtime.ObjectConvertor
 }
 
 // Ensure ResourceQuotaEnforcementPlugin implements the required initializer interfaces
@@ -137,6 +142,17 @@ func (p *ResourceQuotaEnforcementPlugin) SetDynamicClient(dynamicClient dynamic.
 func (p *ResourceQuotaEnforcementPlugin) SetLoopbackConfig(cfg *rest.Config) {
 	p.loopbackConfig = cfg
 	p.logger.V(2).Info("Loopback config injected", "plugin", PluginName)
+}
+
+// SetObjectConvertor injects the convertor used to convert structured native
+// (internal) types to their external versioned form before policy evaluation.
+// It is optional: hosts that only serve CRDs (decoded as unstructured) may
+// skip injection, in which case structured objects are used as-is. Milo
+// injects k8s.io/kubernetes legacyscheme.Scheme to preserve behavior for
+// native structured types.
+func (p *ResourceQuotaEnforcementPlugin) SetObjectConvertor(convertor runtime.ObjectConvertor) {
+	p.objectConvertor = convertor
+	p.logger.V(2).Info("Object convertor injected", "plugin", PluginName)
 }
 
 // ValidateInitialization implements admission.InitializationValidator
@@ -482,8 +498,13 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 		// then use ToUnstructured to get proper Kubernetes JSON structure.
 		toConvert := obj
 		targetGV := schema.GroupVersion{Group: gvk.Group, Version: gvk.Version}
-		if versioned, convErr := legacyscheme.Scheme.ConvertToVersion(obj, targetGV); convErr == nil {
-			toConvert = versioned
+		// Convert internal types to their external versioned form when a
+		// convertor has been injected. When nil (e.g. external CRD-only hosts),
+		// use the object as-is.
+		if p.objectConvertor != nil {
+			if versioned, convErr := p.objectConvertor.ConvertToVersion(obj, targetGV); convErr == nil {
+				toConvert = versioned
+			}
 		}
 		unstructuredMap, convErr := runtime.DefaultUnstructuredConverter.ToUnstructured(toConvert)
 		if convErr != nil {
@@ -568,6 +589,8 @@ func admissionOutcomeFor(kind claimFailureKind) string {
 		return "timeout"
 	case claimFailureConflict:
 		return "conflict"
+	case claimFailureMisconfigured:
+		return "policy_misconfigured"
 	default:
 		return "internal_error"
 	}
@@ -601,6 +624,9 @@ func userFacingClaimError(f *claimFailure) error {
 		}
 		//lint:ignore ST1005 user-facing message
 		return fmt.Errorf("We're still cleaning up from a previous attempt to create this resource. Please try again in a few seconds.")
+	case claimFailureMisconfigured:
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("Quota enforcement for this resource type is misconfigured and can't be applied. This needs a fix from the service provider — please contact support.")
 	default:
 		//lint:ignore ST1005 user-facing message
 		return fmt.Errorf("Something went wrong while checking your quota for this request. Please try again — if this keeps happening, contact support.")
@@ -636,6 +662,27 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		return newInternalFailure(fmt.Errorf("failed to determine claim name: %w", err))
 	}
 	namespace := p.getClaimNamespace(policy, evalContext)
+	if namespace == "" {
+		// A ResourceClaim is namespaced, but a cluster-scoped target resource has
+		// no namespace to inherit and ClaimCreationPolicy is itself cluster
+		// scoped. Default to the configured cluster-scoped claim namespace so
+		// quota still enforces; a policy can override per-resource by pinning
+		// spec.target.resourceClaimTemplate.metadata.namespace (literal or CEL).
+		namespace = p.config.ClusterScopedClaimNamespace
+		if namespace == "" {
+			// Only reachable if the default was explicitly cleared. Fail with an
+			// actionable reason instead of the opaque downstream "the server
+			// could not find the requested resource".
+			err := fmt.Errorf("ClaimCreationPolicy %q resolved an empty ResourceClaim namespace for cluster-scoped resource %s and no cluster-scoped claim namespace is configured; set spec.target.resourceClaimTemplate.metadata.namespace or AdmissionPluginConfig.ClusterScopedClaimNamespace", policy.Name, attrs.GetResource().GroupResource())
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Empty claim namespace for cluster-scoped resource")
+			return newMisconfiguredFailure("EmptyClaimNamespace", err)
+		}
+		p.logger.V(2).Info("Defaulting ResourceClaim namespace for cluster-scoped resource",
+			"namespace", namespace,
+			"policy", policy.Name,
+			"resource", attrs.GetResource().GroupResource().String())
+	}
 
 	span.SetAttributes(
 		attribute.String("claim.name", claimName),
@@ -815,7 +862,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 				Kind:     "Project",
 				Name:     projectID,
 			}
-		} else if orgID, ok := milofilters.OrganizationID(ctx); ok && orgID != "" {
+		} else if orgID, ok := milorequest.OrganizationID(ctx); ok && orgID != "" {
 			claim.Spec.ConsumerRef = quotav1alpha1.ConsumerRef{
 				APIGroup: "resourcemanager.miloapis.com",
 				Kind:     "Organization",
