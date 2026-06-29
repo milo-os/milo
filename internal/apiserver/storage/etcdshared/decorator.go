@@ -3,6 +3,8 @@ package etcdshared
 import (
 	"sync"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/kubernetes"
 	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -11,6 +13,7 @@ import (
 	"k8s.io/apiserver/pkg/storage"
 	cacherstorage "k8s.io/apiserver/pkg/storage/cacher"
 	"k8s.io/apiserver/pkg/storage/etcd3"
+	etcdfeature "k8s.io/apiserver/pkg/storage/feature"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	"k8s.io/apiserver/pkg/storage/value/encrypt/identity"
@@ -34,6 +37,29 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 		return nil, nil, err
 	}
 
+	// etcd3.New calls DefaultFeatureSupportChecker.CheckClient using the client we
+	// pass it. The per-store client below has no endpoints (NewCtxClient), so the
+	// check would be a no-op. Call it explicitly for the pool client here instead.
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConsistentListFromCache) ||
+		utilfeature.DefaultFeatureGate.Enabled(genericfeatures.WatchList) {
+		etcdfeature.DefaultFeatureSupportChecker.CheckClient(
+			client.Ctx(), client.Client, storage.RequestWatchProgress)
+	}
+
+	// Each store gets its own gRPC watch stream over the shared TCP connection so
+	// that watch creations don't serialize across stores sharing the same pool slot.
+	// KV, Lease, and Maintenance still use the shared pool client.
+	//
+	// NewCtxClient allocates a fresh *clientv3.Client with its own mutexes — no
+	// mutex-bearing struct copy. We then graft only the interface fields we need.
+	perStoreBase := clientv3.NewCtxClient(client.Ctx())
+	perStoreBase.KV = client.KV
+	perStoreBase.Lease = client.Client.Lease
+	perStoreBase.Maintenance = client.Client.Maintenance
+	perStoreBase.Watcher = clientv3.NewWatcher(client.Client)
+	perStoreClient := &kubernetes.Client{Client: perStoreBase}
+	perStoreClient.Kubernetes = perStoreClient
+
 	transformer := c.Transformer
 	if transformer == nil {
 		transformer = identity.NewEncryptCheckTransformer()
@@ -46,9 +72,10 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 		transformer = etcd3.WithCorruptObjErrorHandlingTransformer(transformer)
 		decoder = etcd3.WithCorruptObjErrorHandlingDecoder(decoder)
 	}
-	store, err := etcd3.New(client, compactor, c.Codec, newFunc, newListFunc, c.Prefix, resourcePrefix, c.GroupResource, transformer, c.LeaseManagerConfig, decoder, versioner)
+	store, err := etcd3.New(perStoreClient, compactor, c.Codec, newFunc, newListFunc, c.Prefix, resourcePrefix, c.GroupResource, transformer, c.LeaseManagerConfig, decoder, versioner)
 	if err != nil {
 		stopCompactor()
+		perStoreBase.Watcher.Close()
 		releaseClient()
 		return nil, nil, err
 	}
@@ -57,6 +84,7 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 		once.Do(func() {
 			stopCompactor()
 			store.Close()
+			perStoreBase.Watcher.Close()
 			releaseClient()
 		})
 	}
