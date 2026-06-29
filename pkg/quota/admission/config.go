@@ -65,15 +65,27 @@ func DefaultWatchManagerConfig() *WatchManagerConfig {
 	}
 }
 
+// DefaultClusterScopedClaimNamespace is where ResourceClaims for cluster-scoped
+// target resources are created. Cluster-scoped resources have no namespace to
+// inherit, and ResourceClaims are namespaced, so they need a fixed home.
+const DefaultClusterScopedClaimNamespace = "milo-system"
+
 // AdmissionPluginConfig holds configuration for the ClaimCreationPlugin
 type AdmissionPluginConfig struct {
 	// WatchManager configuration
 	WatchManager *WatchManagerConfig
+
+	// ClusterScopedClaimNamespace is the namespace used for ResourceClaims when
+	// the triggering resource is cluster-scoped and the ClaimCreationPolicy does
+	// not pin spec.target.resourceClaimTemplate.metadata.namespace. Defaults to
+	// DefaultClusterScopedClaimNamespace.
+	ClusterScopedClaimNamespace string
 }
 
 // DefaultAdmissionPluginConfig returns the default configuration for the admission plugin
 func DefaultAdmissionPluginConfig() *AdmissionPluginConfig {
 	return &AdmissionPluginConfig{
-		WatchManager: DefaultWatchManagerConfig(),
+		WatchManager:                DefaultWatchManagerConfig(),
+		ClusterScopedClaimNamespace: DefaultClusterScopedClaimNamespace,
 	}
 }

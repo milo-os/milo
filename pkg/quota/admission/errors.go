@@ -41,6 +41,13 @@ const (
 	// startup failures, dynamic client errors, and anything else that is not
 	// attributable to quota capacity.
 	claimFailureInternal
+
+	// claimFailureMisconfigured indicates the ClaimCreationPolicy cannot enforce
+	// quota for the triggering resource as written — e.g. it targets a
+	// cluster-scoped resource but does not pin a ResourceClaim namespace. The
+	// request can't succeed until an operator corrects the policy, so it is kept
+	// distinct from transient internal errors (which advise "try again").
+	claimFailureMisconfigured
 )
 
 // claimFailure is the structured error returned from the claim creation/wait
@@ -99,4 +106,11 @@ func newConflictFailure(message string, cause error) *claimFailure {
 // (template render, watch manager, dynamic client, etc).
 func newInternalFailure(cause error) *claimFailure {
 	return &claimFailure{kind: claimFailureInternal, cause: cause}
+}
+
+// newMisconfiguredFailure constructs a claimFailure for a ClaimCreationPolicy
+// that cannot enforce quota as written. cause carries the operator-facing
+// detail (policy name, offending field) for logs and traces.
+func newMisconfiguredFailure(reason string, cause error) *claimFailure {
+	return &claimFailure{kind: claimFailureMisconfigured, reason: reason, cause: cause}
 }
