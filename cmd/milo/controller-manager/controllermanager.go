@@ -518,7 +518,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				logger.Error(err, "Error setting up organizationmembership webhook")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
-			if err := iamv1alpha1webhook.SetupUserWebhooksWithManager(ctrl, SystemNamespace, "iam-user-self-manage"); err != nil {
+			if err := iamv1alpha1webhook.SetupUserWebhooksWithManager(ctrl, SystemNamespace, "iam-user-self-manage", "activity-self-audit-log-querier"); err != nil {
 				logger.Error(err, "Error setting up user webhook")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}

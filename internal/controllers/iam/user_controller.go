@@ -224,6 +224,24 @@ func (r *UserController) ensureOwnerReferences(ctx context.Context, user *iamv1a
 		log.Info("Updated PolicyBinding with owner reference", "user", user.Name)
 	}
 
+	// Update self audit-log PolicyBinding (only present when the activity service
+	// overlay is deployed; otherwise the webhook skips creating it).
+	auditLogPolicyBindingName := fmt.Sprintf("user-self-audit-log-%s", user.Name)
+	auditLogPolicyBinding := &iamv1alpha1.PolicyBinding{}
+	err = r.Client.Get(ctx, types.NamespacedName{Name: auditLogPolicyBindingName, Namespace: "milo-system"}, auditLogPolicyBinding)
+	if apierrors.IsNotFound(err) {
+		// Binding absent: activity overlay not deployed, or webhook hasn't created it yet.
+		log.Info("Self audit-log PolicyBinding not found, skipping", "user", user.Name, "policyBinding", auditLogPolicyBindingName)
+	} else if err != nil {
+		return fmt.Errorf("failed to get self audit-log policy binding: %w", err)
+	} else if !hasOwnerReference(auditLogPolicyBinding.OwnerReferences, ownerRef) {
+		auditLogPolicyBinding.OwnerReferences = append(auditLogPolicyBinding.OwnerReferences, ownerRef)
+		if err := r.Client.Update(ctx, auditLogPolicyBinding); err != nil {
+			return fmt.Errorf("failed to update self audit-log policy binding with owner reference: %w", err)
+		}
+		log.Info("Updated self audit-log PolicyBinding with owner reference", "user", user.Name)
+	}
+
 	// Update UserPreference
 	userPreferenceName := fmt.Sprintf("userpreference-%s", user.Name)
 	userPreference := &iamv1alpha1.UserPreference{}
