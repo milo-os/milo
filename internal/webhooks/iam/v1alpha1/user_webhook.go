@@ -26,7 +26,7 @@ var userlog = logf.Log.WithName("user-resource")
 // +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-user,mutating=false,failurePolicy=fail,sideEffects=NoneOnDryRun,groups=iam.miloapis.com,resources=users,verbs=create;update,versions=v1alpha1,name=vuser.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
 // SetupWebhooksWithManager sets up all iam.miloapis.com webhooks
-func SetupUserWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, userSelfManageRoleName string) error {
+func SetupUserWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, userSelfManageRoleName string, selfAuditLogRoleName string) error {
 	userlog.Info("Setting up iam.miloapis.com user webhooks")
 
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.User{}).
@@ -36,6 +36,7 @@ func SetupUserWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, user
 			scheme:                 mgr.GetScheme(),
 			systemNamespace:        systemNamespace,
 			userSelfManageRoleName: userSelfManageRoleName,
+			selfAuditLogRoleName:   selfAuditLogRoleName,
 		}).
 		Complete()
 }
@@ -48,6 +49,11 @@ type UserValidator struct {
 	decoder                admission.Decoder
 	systemNamespace        string
 	userSelfManageRoleName string
+	// selfAuditLogRoleName grants self-scoped audit-log query access. The role is
+	// shipped by the activity service overlay; when activity is not deployed this
+	// is empty and the binding is skipped, keeping the core control plane free of
+	// activity coupling.
+	selfAuditLogRoleName string
 }
 
 func (v *UserValidator) ValidateCreate(ctx context.Context, user *iamv1alpha1.User) (admission.Warnings, error) {
@@ -65,6 +71,11 @@ func (v *UserValidator) ValidateCreate(ctx context.Context, user *iamv1alpha1.Us
 	if err := v.createSelfManagePolicyBinding(ctx, user); err != nil {
 		userlog.Error(err, "Failed to create owner policy binding")
 		return nil, fmt.Errorf("failed to create owner policy binding: %w", err)
+	}
+
+	if err := v.createSelfAuditLogPolicyBinding(ctx, user); err != nil {
+		userlog.Error(err, "Failed to create self audit-log policy binding")
+		return nil, fmt.Errorf("failed to create self audit-log policy binding: %w", err)
 	}
 
 	userPreferences, err := v.createUserPreference(ctx, user)
@@ -237,6 +248,53 @@ func (v *UserValidator) createSelfManagePolicyBinding(ctx context.Context, user 
 
 	if err := v.client.Create(ctx, policyBinding); err != nil {
 		return fmt.Errorf("failed to create policy binding resource: %w", err)
+	}
+
+	return nil
+}
+
+// createSelfAuditLogPolicyBinding grants the user self-scoped audit-log query
+// access. The role lives in the activity service overlay; when activity is not
+// deployed, selfAuditLogRoleName is empty and this is skipped, so the core
+// control plane carries zero activity coupling. The binding is scoped to the
+// user's own User resource, mirroring the self-manage binding.
+func (v *UserValidator) createSelfAuditLogPolicyBinding(ctx context.Context, user *iamv1alpha1.User) error {
+	if v.selfAuditLogRoleName == "" {
+		return nil
+	}
+
+	userlog.Info("Attempting to create self audit-log PolicyBinding for new user", "user", user.Name)
+
+	policyBinding := &iamv1alpha1.PolicyBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("user-self-audit-log-%s", user.Name),
+			Namespace: v.systemNamespace,
+		},
+		Spec: iamv1alpha1.PolicyBindingSpec{
+			RoleRef: iamv1alpha1.RoleReference{
+				Name:      v.selfAuditLogRoleName,
+				Namespace: v.systemNamespace,
+			},
+			Subjects: []iamv1alpha1.Subject{
+				{
+					Kind: "User",
+					Name: user.Name,
+					UID:  string(user.GetUID()),
+				},
+			},
+			ResourceSelector: iamv1alpha1.ResourceSelector{
+				ResourceRef: &iamv1alpha1.ResourceReference{
+					APIGroup: iamv1alpha1.SchemeGroupVersion.Group,
+					Kind:     "User",
+					Name:     user.Name,
+					UID:      string(user.GetUID()),
+				},
+			},
+		},
+	}
+
+	if err := v.client.Create(ctx, policyBinding); err != nil {
+		return fmt.Errorf("failed to create self audit-log policy binding resource: %w", err)
 	}
 
 	return nil

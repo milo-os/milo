@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Self-scoped audit-log query capability, owned entirely by the activity
+# service overlay. A distinct Role (not a partial patch of iam-user-self-manage),
+# so it is applied by a single field manager and never collides with the core
+# role bundle. Granted per-user, scoped to the user's own User resource, by the
+# user webhook (mirrors the existing user-self-manage PolicyBinding).
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: activity-self-audit-log-querier
+  annotations:
+    kubernetes.io/display-name: Self Audit Log Querier
+    kubernetes.io/description: "Allows a user to query their own audit logs."
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: activity.miloapis.com-audit-log-querier
