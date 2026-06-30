@@ -320,6 +320,7 @@ func NewCommand() *cobra.Command {
 
 	verflag.AddFlags(namedFlagSets.FlagSet("global"))
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name(), logs.SkipLoggingConfigurationFlags())
+	utilfeature.DefaultMutableFeatureGate.AddFlag(namedFlagSets.FlagSet("feature gates"))
 	for _, f := range namedFlagSets.FlagSets {
 		fs.AddFlagSet(f)
 	}
