@@ -1,20 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Grants users the ability to query their own audit logs by inheriting the
-# activity.miloapis.com-audit-log-querier Role into iam-user-self-manage.
-#
-# This inheritance ships with the activity service overlay rather than the core
-# control-plane role bundle on purpose: the audit-log-querier Role is provided
-# by the activity stack, so referencing it from the foundational layer would
-# force the core control plane to depend on activity being up first (an
-# inverted dependency). Keeping it here means the core role bundle has zero
-# activity coupling, and this entry is only applied once activity is present.
-#
-# Under server-side apply this partial Role merges its single inheritedRoles
-# entry into the iam-user-self-manage Role owned by the core role bundle.
-# inheritedRoles is a map-type list keyed by name, so this overlay owns just
-# this entry while the core bundle continues to own launchStage and
-# includedPermissions.
 apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
