@@ -80,6 +80,9 @@ import (
 	// Register JSON logging format
 	_ "k8s.io/component-base/logs/json/register"
 
+	// Import features package to register Milo feature gates via init()
+	_ "go.miloapis.com/milo/pkg/features"
+
 	controlplane "go.miloapis.com/milo/internal/control-plane"
 	iamcontroller "go.miloapis.com/milo/internal/controllers/iam"
 	notescontroller "go.miloapis.com/milo/internal/controllers/notes"

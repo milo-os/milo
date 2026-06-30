@@ -2,19 +2,46 @@
 
 Run after deploying milo CRD/controller changes and the datum unified quota grant policy.
 
+## Feature gate rollout
+
+Unified organization behavior is controlled by the `UnifiedOrganizations` feature gate
+(Alpha, default **false**) on both milo controller-manager and datum controller-manager.
+
+| Component | Flag OFF (legacy) | Flag ON (unified) |
+|-----------|-------------------|-------------------|
+| milo controller-manager | Legacy org webhooks (user names, `spec.type` required) | System-assigned `org-` names, onboarding reconciler |
+| datum controller-manager | PersonalOrganizationController active | Controller disabled |
+| datum quota manifests | Apply `config/overlays/legacy-organizations` | Default `organization-project-quota-policy` |
+
+Toggle per environment via `--feature-gates` / `FEATURE_GATES`:
+
+```bash
+# milo controller-manager / apiserver
+FEATURE_GATES=UnifiedOrganizations=true
+
+# datum controller-manager
+--feature-gates=UnifiedOrganizations=true
+```
+
+Enable the gate and apply the unified quota overlay together in each environment.
+Do not run both legacy and unified project quota grant policies simultaneously.
+
 ## Prerequisites
 
 - `kubectl` configured against the target Milo management cluster
-- Milo version with unified `Organization` schema (no `spec.type`, optional `spec.contactInfo`)
-- Datum unified `organization-project-quota-policy` applied
+- Milo version with deprecated `Organization.spec.type` and optional `spec.contactInfo`
+- When `UnifiedOrganizations=true`: datum `organization-project-quota-policy` applied
+- When `UnifiedOrganizations=false`: datum legacy personal/standard grant policies applied
 
 ## Order of operations
 
-1. Apply new milo CRDs and controller-manager (organization onboarding reconciler, mutating webhook).
-2. Apply datum `organization-project-quota-policy` **before** removing legacy personal/standard grant policies.
-3. Run the migration steps below.
-4. Remove legacy grant policies and the personal organization controller deployment.
-5. Ship cloud-portal/staff-portal UI updates.
+1. Deploy milo with `UnifiedOrganizations=false` (default) to validate legacy behavior, or enable the gate for new environments.
+2. Apply datum quota policies matching the gate state (see table above).
+3. When enabling unified orgs in an existing environment:
+   - Set `UnifiedOrganizations=true` on milo and datum controller-managers
+   - Switch datum quota overlay from legacy to unified
+   - Run the migration steps below
+4. Ship cloud-portal/staff-portal UI updates after backend rollout.
 
 ## 1. Strip legacy org type
 

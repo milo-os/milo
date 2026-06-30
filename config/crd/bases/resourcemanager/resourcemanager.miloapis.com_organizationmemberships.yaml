@@ -366,6 +366,13 @@ spec:
                     description: DisplayName is the display name of the organization
                       in the membership.
                     type: string
+                  type:
+                    description: |-
+                      Type is the legacy organization type cached from the organization.
+
+                      Deprecated: This field reflects organization.spec.type, which is deprecated
+                      when the UnifiedOrganizations feature gate is enabled.
+                    type: string
                 type: object
               user:
                 description: |-

@@ -21,6 +21,9 @@ spec:
     - jsonPath: .metadata.annotations.kubernetes\.io\/display-name
       name: Display Name
       type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
     - jsonPath: .status.conditions[?(@.type=='OnboardingComplete')].status
       name: Onboarding
       type: string
@@ -112,6 +115,19 @@ spec:
                 - email
                 - name
                 type: object
+              type:
+                description: |-
+                  Type distinguishes personal and standard organizations in legacy mode.
+
+                  Deprecated: This field is ignored when the UnifiedOrganizations feature
+                  gate is enabled. Use unified organizations without a type distinction.
+                enum:
+                - Personal
+                - Standard
+                type: string
+                x-kubernetes-validations:
+                - message: organization type is immutable
+                  rule: type(oldSelf) == null_type || self == oldSelf
             type: object
           status:
             description: OrganizationStatus defines the observed state of Organization

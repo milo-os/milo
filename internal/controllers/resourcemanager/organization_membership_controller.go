@@ -183,6 +183,7 @@ func (r *OrganizationMembershipController) Reconcile(ctx context.Context, req ct
 		contactEmail = organization.Spec.ContactInfo.Email
 	}
 	organizationMembership.Status.Organization = resourcemanagerv1alpha.OrganizationMembershipOrganizationStatus{
+		Type:         organization.Spec.Type,
 		DisplayName:  organization.Annotations["kubernetes.io/display-name"],
 		ContactEmail: contactEmail,
 	}

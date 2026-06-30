@@ -6,19 +6,34 @@ import (
 )
 
 const (
+	// OrganizationTypePersonal is the legacy personal organization type.
+	OrganizationTypePersonal = "Personal"
+	// OrganizationTypeStandard is the legacy standard organization type.
+	OrganizationTypeStandard = "Standard"
+
 	// OrganizationConditionOnboardingComplete indicates whether the organization
 	// has completed onboarding (contact info, billing account, payment method).
 	OrganizationConditionOnboardingComplete = "OnboardingComplete"
 
-	OrganizationOnboardingCompleteReasonReady                    = "Ready"
-	OrganizationOnboardingCompleteReasonContactInfoIncomplete    = "ContactInfoIncomplete"
-	OrganizationOnboardingCompleteReasonBillingAccountMissing    = "BillingAccountMissing"
-	OrganizationOnboardingCompleteReasonPaymentMethodNotReady    = "PaymentMethodNotReady"
+	OrganizationOnboardingCompleteReasonReady                 = "Ready"
+	OrganizationOnboardingCompleteReasonContactInfoIncomplete = "ContactInfoIncomplete"
+	OrganizationOnboardingCompleteReasonBillingAccountMissing = "BillingAccountMissing"
+	OrganizationOnboardingCompleteReasonPaymentMethodNotReady = "PaymentMethodNotReady"
 )
 
 // OrganizationSpec defines the desired state of Organization
 // +k8s:protobuf=true
 type OrganizationSpec struct {
+	// Type distinguishes personal and standard organizations in legacy mode.
+	//
+	// Deprecated: This field is ignored when the UnifiedOrganizations feature
+	// gate is enabled. Use unified organizations without a type distinction.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Personal;Standard
+	// +kubebuilder:validation:XValidation:rule="type(oldSelf) == null_type || self == oldSelf",message="organization type is immutable"
+	Type string `json:"type,omitempty"`
+
 	// ContactInfo describes who the organization is and how to reach them.
 	// Email and name are required for onboarding to complete.
 	//
@@ -119,6 +134,7 @@ type OrganizationStatus struct {
 // Use lowercase for path, which influences plural name. Ensure kind is Organization.
 // +kubebuilder:resource:path=organizations,scope=Cluster,categories=datum,singular=organization
 // +kubebuilder:printcolumn:name="Display Name",type="string",JSONPath=".metadata.annotations.kubernetes\\.io\\/display-name"
+// +kubebuilder:printcolumn:name="Type",type="string",JSONPath=".spec.type"
 // +kubebuilder:printcolumn:name="Onboarding",type="string",JSONPath=".status.conditions[?(@.type=='OnboardingComplete')].status"
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"

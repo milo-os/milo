@@ -4,10 +4,16 @@ import (
 	"context"
 	"strings"
 
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/features"
 )
+
+func unifiedOrganizationsEnabled() bool {
+	return utilfeature.DefaultFeatureGate.Enabled(features.UnifiedOrganizations)
+}
 
 func validateOrganizationContactInfo(contact *resourcemanagerv1alpha1.OrganizationContactInfo, fldPath *field.Path) field.ErrorList {
 	if contact == nil {
@@ -35,15 +41,40 @@ func validateOrganizationSpec(spec *resourcemanagerv1alpha1.OrganizationSpec, fl
 	if spec == nil {
 		return nil
 	}
-	return validateOrganizationContactInfo(spec.ContactInfo, fldPath.Child("contactInfo"))
+
+	var allErrs field.ErrorList
+	allErrs = append(allErrs, validateOrganizationContactInfo(spec.ContactInfo, fldPath.Child("contactInfo"))...)
+
+	if !unifiedOrganizationsEnabled() {
+		switch spec.Type {
+		case "":
+			allErrs = append(allErrs, field.Required(fldPath.Child("type"), "type is required"))
+		case resourcemanagerv1alpha1.OrganizationTypePersonal, resourcemanagerv1alpha1.OrganizationTypeStandard:
+		default:
+			allErrs = append(allErrs, field.NotSupported(
+				fldPath.Child("type"),
+				spec.Type,
+				[]string{resourcemanagerv1alpha1.OrganizationTypePersonal, resourcemanagerv1alpha1.OrganizationTypeStandard},
+			))
+		}
+	}
+
+	return allErrs
 }
 
 func validateOrganizationUpdate(oldOrg, newOrg *resourcemanagerv1alpha1.Organization) field.ErrorList {
 	var allErrs field.ErrorList
 	allErrs = append(allErrs, validateOrganizationSpec(&newOrg.Spec, field.NewPath("spec"))...)
 
-	if oldOrg.Spec.ContactInfo != nil && newOrg.Spec.ContactInfo == nil {
-		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "contactInfo"), nil, "contactInfo cannot be removed once set"))
+	if unifiedOrganizationsEnabled() {
+		if oldOrg.Spec.ContactInfo != nil && newOrg.Spec.ContactInfo == nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "contactInfo"), nil, "contactInfo cannot be removed once set"))
+		}
+		return allErrs
+	}
+
+	if oldOrg.Spec.Type != newOrg.Spec.Type {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "type"), "organization type is immutable"))
 	}
 
 	return allErrs

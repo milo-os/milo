@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,6 +20,7 @@ import (
 
 	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	resourcemanagerv1alpha "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/features"
 )
 
 // OrganizationController reconciles an Organization object
@@ -68,13 +70,15 @@ func (r *OrganizationController) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get organization namespace: %w", err)
 	}
 
-	statusChanged, err := reconcileOrganizationOnboarding(ctx, r.Client, &organization)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if statusChanged {
-		if err := r.Client.Status().Update(ctx, &organization); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update organization onboarding status: %w", err)
+	if utilfeature.DefaultFeatureGate.Enabled(features.UnifiedOrganizations) {
+		statusChanged, err := reconcileOrganizationOnboarding(ctx, r.Client, &organization)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if statusChanged {
+			if err := r.Client.Status().Update(ctx, &organization); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update organization onboarding status: %w", err)
+			}
 		}
 	}
 
@@ -88,7 +92,7 @@ func (r *OrganizationController) SetupWithManager(mgr ctrl.Manager) error {
 	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
 		For(&resourcemanagerv1alpha.Organization{})
 
-	if billingAccountsSupported(mgr.GetRESTMapper()) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.UnifiedOrganizations) && billingAccountsSupported(mgr.GetRESTMapper()) {
 		controllerBuilder = controllerBuilder.Watches(
 			&billingv1alpha1.BillingAccount{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {

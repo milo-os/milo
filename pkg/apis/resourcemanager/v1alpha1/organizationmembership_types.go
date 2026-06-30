@@ -310,6 +310,14 @@ type OrganizationMembershipUserStatus struct {
 
 // OrganizationMembershipOrganizationStatus defines the observed state of an organization in a membership.
 type OrganizationMembershipOrganizationStatus struct {
+	// Type is the legacy organization type cached from the organization.
+	//
+	// Deprecated: This field reflects organization.spec.type, which is deprecated
+	// when the UnifiedOrganizations feature gate is enabled.
+	//
+	// +kubebuilder:validation:Optional
+	Type string `json:"type,omitempty"`
+
 	// DisplayName is the display name of the organization in the membership.
 	// +kubebuilder:validation:Optional
 	DisplayName string `json:"displayName,omitempty"`
