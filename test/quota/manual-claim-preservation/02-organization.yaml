@@ -4,4 +4,5 @@ metadata:
   name: manual-claim-test-org
   labels:
     test.miloapis.com/scenario: "manual-claim-preservation"
-spec: {}
+spec:
+  type: Standard

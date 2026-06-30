@@ -2,4 +2,5 @@ apiVersion: resourcemanager.miloapis.com/v1alpha1
 kind: Organization
 metadata:
   name: test-group-org
-spec: {}
+spec:
+  type: Standard

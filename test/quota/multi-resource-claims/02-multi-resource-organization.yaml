@@ -8,4 +8,5 @@ metadata:
   labels:
     test.miloapis.com/quota: "multi-resource"
     test.miloapis.com/scenario: "multi-resource-claims"
-spec: {}
+spec:
+  type: Standard

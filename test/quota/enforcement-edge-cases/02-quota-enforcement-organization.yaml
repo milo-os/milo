@@ -8,4 +8,5 @@ metadata:
   labels:
     test.miloapis.com/quota: "enforcement"
     test.miloapis.com/scenario: "quota-enforcement"
-spec: {}
+spec:
+  type: Standard

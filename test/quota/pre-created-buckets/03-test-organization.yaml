@@ -9,3 +9,4 @@ metadata:
     test.miloapis.com/quota: "pre-created-buckets"
     test.miloapis.com/scenario: "bucket-pre-creation"
 spec:
+  type: Standard

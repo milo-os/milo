@@ -5,3 +5,4 @@ metadata:
   labels:
     test.miloapis.com/notes: "clusternote-multicluster"
 spec:
+  type: Standard

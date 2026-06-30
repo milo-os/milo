@@ -5,3 +5,4 @@ metadata:
   labels:
     test.miloapis.com/scenario: "namespace-template"
 spec:
+  type: Standard

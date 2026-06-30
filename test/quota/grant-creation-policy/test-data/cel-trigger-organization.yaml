@@ -5,3 +5,4 @@ metadata:
   labels:
     test.miloapis.com/scenario: "grant-creation-policy"
 spec:
+  type: Standard

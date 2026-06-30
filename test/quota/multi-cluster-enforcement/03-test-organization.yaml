@@ -5,3 +5,4 @@ metadata:
   labels:
     test.miloapis.com/quota: "multicluster"
 spec:
+  type: Standard

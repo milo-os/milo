@@ -3,5 +3,4 @@ kind: Organization
 metadata:
   name: fieldsel-org
 spec:
-
-
+  type: Standard

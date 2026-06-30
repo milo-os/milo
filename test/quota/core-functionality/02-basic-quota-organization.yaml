@@ -8,4 +8,5 @@ metadata:
   labels:
     test.miloapis.com/quota: "basic"
     test.miloapis.com/scenario: "core-functionality"
-spec: {}
+spec:
+  type: Standard

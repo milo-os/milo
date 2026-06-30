@@ -5,3 +5,4 @@ metadata:
   annotations:
     kubernetes.io/display-name: Org Membership GC Test
 spec:
+  type: Standard

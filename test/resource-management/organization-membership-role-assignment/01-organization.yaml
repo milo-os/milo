@@ -8,3 +8,4 @@ metadata:
     kubernetes.io/description: "Organization for testing membership role assignments"
     kubernetes.io/display-name: "Test Membership Roles Organization"
 spec:
+  type: Standard
