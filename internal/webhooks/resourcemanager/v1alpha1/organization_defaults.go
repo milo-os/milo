@@ -7,7 +7,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	"go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"go.miloapis.com/milo/pkg/features"
 )
 
