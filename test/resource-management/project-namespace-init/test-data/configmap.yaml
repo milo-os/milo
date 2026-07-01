@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: default
+  labels:
+    test.miloapis.com/scenario: "project-namespace-init"
+data:
+  key: value
