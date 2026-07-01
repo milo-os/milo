@@ -18,7 +18,6 @@ import (
 	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -28,7 +27,6 @@ import (
 	notesv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notes/v1alpha1"
 	notificationv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notification/v1alpha1"
 	resourcemanagerv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/resourcemanager/v1alpha1"
-	miloprovider "go.miloapis.com/milo/pkg/multicluster-runtime/milo"
 	milowebhook "go.miloapis.com/milo/pkg/webhook"
 )
 
@@ -55,6 +53,13 @@ func newClusterAwareWebhookServer(opts *Options, port int) webhook.Server {
 }
 
 func registerCoreControlPlaneWebhooks(mgr controllerruntime.Manager, mcMgr mcmanager.Manager) error {
+	if err := registerCoreControlPlaneWebhooksWithoutNotes(mgr); err != nil {
+		return err
+	}
+	return registerNoteWebhooks(mgr, mcMgr)
+}
+
+func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager) error {
 	if err := resourcemanagerv1alpha1webhook.SetupProjectWebhooksWithManager(mgr, SystemNamespace, ProjectOwnerRoleName, ProjectOwnerRoleNamespace); err != nil {
 		return fmt.Errorf("setting up project webhook: %w", err)
 	}
@@ -109,6 +114,10 @@ func registerCoreControlPlaneWebhooks(mgr controllerruntime.Manager, mcMgr mcman
 	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up policybinding webhook: %w", err)
 	}
+	return nil
+}
+
+func registerNoteWebhooks(mgr controllerruntime.Manager, mcMgr mcmanager.Manager) error {
 	if err := notesv1alpha1webhook.SetupNoteWebhooksWithManager(mgr, mcMgr); err != nil {
 		return fmt.Errorf("setting up note webhook: %w", err)
 	}
@@ -116,59 +125,6 @@ func registerCoreControlPlaneWebhooks(mgr controllerruntime.Manager, mcMgr mcman
 		return fmt.Errorf("setting up clusternote webhook: %w", err)
 	}
 	return nil
-}
-
-// createWebhookLookupMulticlusterManager creates a lightweight multicluster manager
-// used only for note webhook project control plane lookups. Quota controllers are
-// not registered; only the local cluster is engaged and the provider is started.
-func createWebhookLookupMulticlusterManager(
-	ctx context.Context,
-	webhookMgr controllerruntime.Manager,
-	ctrlConfig *rest.Config,
-	logger klog.Logger,
-) (mcmanager.Manager, error) {
-	provider, err := miloprovider.New(webhookMgr, miloprovider.Options{
-		ClusterOptions: []cluster.Option{
-			func(o *cluster.Options) {
-				o.Scheme = Scheme
-				o.Cache = cache.Options{
-					DefaultTransform:            cache.TransformStripManagedFields(),
-					ReaderFailOnMissingInformer: true,
-				}
-			},
-		},
-		InternalServiceDiscovery: false,
-		ProjectRestConfig:        ctrlConfig,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating Milo provider for webhook lookups: %w", err)
-	}
-
-	mcMgr, err := mcmanager.New(ctrlConfig, provider, mcmanager.Options{
-		Scheme: Scheme,
-		Logger: logger.WithName("multicluster-webhooks"),
-		Metrics: metricsserver.Options{
-			BindAddress: "0",
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating multicluster manager for webhooks: %w", err)
-	}
-
-	localCluster := mcMgr.GetLocalManager()
-	if err := mcMgr.Engage(ctx, "", localCluster); err != nil {
-		return nil, fmt.Errorf("engaging local cluster for webhook lookups: %w", err)
-	}
-
-	go func() {
-		logger.Info("Starting multicluster manager for webhook lookups")
-		if err := mcMgr.Start(ctx); err != nil {
-			logger.Error(err, "Webhook multicluster manager failed; shutting down controller-manager")
-			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-		}
-	}()
-
-	return mcMgr, nil
 }
 
 func newWebhookRESTMapper(ctx context.Context, rootClientBuilder clientbuilder.ControllerClientBuilder) meta.RESTMapper {
@@ -219,12 +175,7 @@ func startCoreControlPlaneWebhooks(
 		return fmt.Errorf("building webhook manager: %w", err)
 	}
 
-	mcMgr, err := createWebhookLookupMulticlusterManager(ctx, webhookMgr, ctrlConfig, logger)
-	if err != nil {
-		return err
-	}
-
-	if err := registerCoreControlPlaneWebhooks(webhookMgr, mcMgr); err != nil {
+	if err := registerCoreControlPlaneWebhooksWithoutNotes(webhookMgr); err != nil {
 		return err
 	}
 
@@ -236,5 +187,12 @@ func startCoreControlPlaneWebhooks(
 		}
 	}()
 
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		return webhookMgr.GetWebhookServer().StartedChecker()(nil) == nil, nil
+	}); err != nil {
+		return fmt.Errorf("waiting for webhook server to become ready: %w", err)
+	}
+
+	logger.Info("Core control plane webhook server is ready", "port", opts.ControllerRuntimeWebhookPort)
 	return nil
 }

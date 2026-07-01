@@ -338,13 +338,6 @@ rules:
   - resourcemanager.miloapis.com
   resources:
   - organizations
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - resourcemanager.miloapis.com
-  resources:
   - projects
   verbs:
   - get
