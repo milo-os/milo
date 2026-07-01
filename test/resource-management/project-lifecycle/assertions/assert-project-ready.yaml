@@ -1,0 +1,21 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: project-lifecycle-test
+  labels:
+    test.miloapis.com/scenario: "project-lifecycle"
+    resourcemanager.miloapis.com/organization-name: test-project-lifecycle-org
+  ownerReferences:
+  - apiVersion: resourcemanager.miloapis.com/v1alpha1
+    kind: Organization
+    name: test-project-lifecycle-org
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-project-lifecycle-org
+status:
+  conditions:
+  - type: Ready
+    status: "True"
+    reason: Ready
+    message: Project is ready
