@@ -5,3 +5,4 @@ metadata:
   annotations:
     kubernetes.io/display-name: Datum Technology, Inc.
 spec:
+  type: Standard
