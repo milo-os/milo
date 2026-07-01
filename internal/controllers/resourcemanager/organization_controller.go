@@ -26,12 +26,20 @@ import (
 // OrganizationController reconciles an Organization object
 type OrganizationController struct {
 	Client client.Client
+
+	// OwnerRoleName is the role granted to the organization creator.
+	OwnerRoleName string
+
+	// OwnerRoleNamespace is the namespace containing OwnerRoleName.
+	OwnerRoleNamespace string
 }
 
-// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
 // +kubebuilder:rbac:groups=billing.miloapis.com,resources=billingaccounts,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
 func (r *OrganizationController) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, err error) {
@@ -46,6 +54,12 @@ func (r *OrganizationController) Reconcile(ctx context.Context, req ctrl.Request
 
 	if !organization.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.UnifiedOrganizations) {
+		if err := r.reconcileOrganizationOwnerBootstrap(ctx, &organization); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reconciling organization owner bootstrap: %w", err)
+		}
 	}
 
 	logger.Info("reconciling organization")

@@ -81,6 +81,7 @@ func TestOrganizationMutator_Default(t *testing.T) {
 		}
 		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
 			Username: "user@example.com",
+			UID:      "uid-123",
 			Groups:   []string{"system:authenticated"},
 		})
 
@@ -92,6 +93,9 @@ func TestOrganizationMutator_Default(t *testing.T) {
 		}
 		if org.GenerateName != "org-" {
 			t.Fatalf("generateName = %q, want org-", org.GenerateName)
+		}
+		if org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation] != "uid-123" {
+			t.Fatalf("creator annotation = %q, want uid-123", org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation])
 		}
 	})
 }

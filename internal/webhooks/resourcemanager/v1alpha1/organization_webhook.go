@@ -6,15 +6,14 @@ import (
 	"slices"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 )
@@ -57,7 +56,15 @@ func (m *OrganizationMutator) Default(ctx context.Context, org *resourcemanagerv
 	}
 
 	org.Spec.Type = ""
-	return ensureOrganizationGenerateName(ctx, org)
+	if err := ensureOrganizationGenerateName(ctx, org); err != nil {
+		return err
+	}
+
+	if org.Annotations == nil {
+		org.Annotations = map[string]string{}
+	}
+	org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation] = string(req.UserInfo.UID)
+	return nil
 }
 
 // +kubebuilder:webhook:path=/validate-resourcemanager-miloapis-com-v1alpha1-organization,mutating=false,failurePolicy=fail,sideEffects=NoneOnDryRun,groups=resourcemanager.miloapis.com,resources=organizations,verbs=create;update,versions=v1alpha1,name=vorganization.datum.net,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
@@ -113,26 +120,28 @@ func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourc
 		)
 	}
 
-	// Don't create policy binding or organization membership for dry run
-	// requests.
+	// Don't create namespace or organization membership for dry run requests.
 	if req.DryRun != nil && *req.DryRun {
 		return nil, nil
 	}
 
-	// Create namespace and PolicyBinding on Organization Create operation
-	if err := v.createOrganizationNamespace(ctx, org); err != nil {
+	// generateName creates are reconciled after the apiserver assigns a name.
+	if org.Name == "" {
+		return nil, nil
+	}
+
+	// Create namespace and owner membership on Organization Create operation.
+	if err := resourcemanagercontroller.EnsureOrganizationNamespace(ctx, v.client, org); err != nil {
 		return nil, fmt.Errorf("failed to create organization namespace: %w", err)
 	}
 
-	// Organizations created by system:masters shouldn't have a policy binding
-	// or organization membership created because they're creating the organization
-	// for another user in the system. It's expected those organizations will
-	// create the necessary policy binding and organization membership to provide
-	// the user access.
+	// Organizations created by system:masters shouldn't have an organization
+	// membership created because they're creating the organization for another
+	// user in the system. It's expected those organizations will create the
+	// necessary organization membership to provide the user access.
 	//
 	// TODO: Convert this to use a SubjectAccessReview to check if the user has
-	//       permission to create an organization without a policy binding or
-	//       organization membership.
+	//       permission to create an organization without an organization membership.
 	if slices.Contains(req.UserInfo.Groups, "system:masters") {
 		return nil, nil
 	}
@@ -144,7 +153,14 @@ func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourc
 	}
 
 	// Create OrganizationMembership with owner role for the organization owner
-	if err := v.createOrganizationMembership(ctx, org, user); err != nil {
+	if err := resourcemanagercontroller.EnsureOwnerOrganizationMembership(
+		ctx,
+		v.client,
+		org,
+		user,
+		v.ownerRoleName,
+		v.ownerRoleNamespace,
+	); err != nil {
 		return nil, fmt.Errorf("failed to create organization membership: %w", err)
 	}
 
@@ -191,67 +207,4 @@ func (v *OrganizationValidator) lookupUser(ctx context.Context) (*iamv1alpha1.Us
 	}
 
 	return foundUser, nil
-}
-
-// createOrganizationNamespace creates a namespace for organization-scoped resources
-func (v *OrganizationValidator) createOrganizationNamespace(ctx context.Context, org *resourcemanagerv1alpha1.Organization) error {
-	namespaceName := resourcemanagerv1alpha1.OrganizationNamespace(org.Name)
-	organizationlog.Info("Creating namespace for organization", "organization", org.Name, "namespace", namespaceName)
-
-	// Build the namespace object
-	namespace := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: namespaceName,
-			Labels: map[string]string{
-				"resourcemanager.miloapis.com/organization": org.Name,
-				"resourcemanager.miloapis.com/type":         "organization",
-			},
-		},
-	}
-
-	if err := v.client.Create(ctx, namespace); err != nil {
-		return fmt.Errorf("failed to create namespace resource: %w", err)
-	}
-
-	return nil
-}
-
-func (v *OrganizationValidator) createOrganizationMembership(ctx context.Context, org *resourcemanagerv1alpha1.Organization, user *iamv1alpha1.User) error {
-	organizationlog.Info("Creating OrganizationMembership for organization owner", "organization", org.Name, "user", user.Name)
-
-	// Build the OrganizationMembership object with owner role
-	organizationMembership := &resourcemanagerv1alpha1.OrganizationMembership{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("member-%s", user.Name),
-			Namespace: resourcemanagerv1alpha1.OrganizationNamespace(org.Name),
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: iamv1alpha1.SchemeGroupVersion.String(),
-					Kind:       "User",
-					Name:       user.Name,
-					UID:        user.UID,
-				},
-			},
-		},
-		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
-			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{
-				Name: org.Name,
-			},
-			UserRef: resourcemanagerv1alpha1.MemberReference{
-				Name: user.Name,
-			},
-			Roles: []resourcemanagerv1alpha1.RoleReference{
-				{
-					Name:      v.ownerRoleName,
-					Namespace: v.ownerRoleNamespace,
-				},
-			},
-		},
-	}
-
-	if err := v.client.Create(ctx, organizationMembership); err != nil {
-		return fmt.Errorf("failed to create organization membership resource: %w", err)
-	}
-
-	return nil
 }

@@ -507,7 +507,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 
 			organizationCtrl := resourcemanagercontroller.OrganizationController{
-				Client: ctrl.GetClient(),
+				Client:               ctrl.GetClient(),
+				OwnerRoleName:        OrganizationOwnerRoleName,
+				OwnerRoleNamespace:   OrganizationOwnerRoleNamespace,
 			}
 			if err := organizationCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up organization controller")
