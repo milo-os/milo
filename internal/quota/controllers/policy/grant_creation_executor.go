@@ -23,8 +23,8 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"go.miloapis.com/milo/internal/informer"
-	"go.miloapis.com/milo/pkg/quota/engine"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+	"go.miloapis.com/milo/pkg/quota/engine"
 )
 
 // GrantCreationController watches trigger resources and creates grants based on active policies.

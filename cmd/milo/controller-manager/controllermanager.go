@@ -80,6 +80,7 @@ import (
 	// Import features package to register Milo feature gates via init()
 	_ "go.miloapis.com/milo/pkg/features"
 
+	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	controlplane "go.miloapis.com/milo/internal/control-plane"
 	iamcontroller "go.miloapis.com/milo/internal/controllers/iam"
 	notescontroller "go.miloapis.com/milo/internal/controllers/notes"
@@ -97,7 +98,6 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	miloprovider "go.miloapis.com/milo/pkg/multicluster-runtime/milo"
-	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 )
 
@@ -507,9 +507,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 
 			organizationCtrl := resourcemanagercontroller.OrganizationController{
-				Client:               ctrl.GetClient(),
-				OwnerRoleName:        OrganizationOwnerRoleName,
-				OwnerRoleNamespace:   OrganizationOwnerRoleNamespace,
+				Client:             ctrl.GetClient(),
+				OwnerRoleName:      OrganizationOwnerRoleName,
+				OwnerRoleNamespace: OrganizationOwnerRoleNamespace,
 			}
 			if err := organizationCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up organization controller")
