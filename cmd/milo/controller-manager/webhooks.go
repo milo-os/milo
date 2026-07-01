@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,6 +43,24 @@ func buildControllerRuntimeConfig(opts *Options) (*rest.Config, error) {
 	ctrlConfig.Burst = 200
 
 	return ctrlConfig, nil
+}
+
+func servingCertPaths(opts *Options) (certPath, keyPath string) {
+	certDir := opts.SecureServing.ServerCert.CertDirectory
+	certName := strings.TrimPrefix(opts.SecureServing.ServerCert.CertKey.CertFile, certDir+"/")
+	keyName := strings.TrimPrefix(opts.SecureServing.ServerCert.CertKey.KeyFile, certDir+"/")
+	return filepath.Join(certDir, certName), filepath.Join(certDir, keyName)
+}
+
+func servingCertsReady(opts *Options) bool {
+	certPath, keyPath := servingCertPaths(opts)
+	if _, err := os.Stat(certPath); err != nil {
+		return false
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		return false
+	}
+	return true
 }
 
 func newClusterAwareWebhookServer(opts *Options, port int) webhook.Server {
@@ -180,6 +200,17 @@ func startCoreControlPlaneWebhooks(
 	}
 
 	go func() {
+		if err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+			if servingCertsReady(opts) {
+				return true, nil
+			}
+			logger.Info("Waiting for webhook serving certificates")
+			return false, nil
+		}); err != nil {
+			logger.Error(err, "Stopped waiting for webhook serving certificates")
+			return
+		}
+
 		logger.Info("Starting core control plane webhook server", "port", opts.ControllerRuntimeWebhookPort)
 		if err := webhookMgr.Start(ctx); err != nil {
 			logger.Error(err, "Webhook manager failed; shutting down controller-manager")
@@ -187,12 +218,5 @@ func startCoreControlPlaneWebhooks(
 		}
 	}()
 
-	if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
-		return webhookMgr.GetWebhookServer().StartedChecker()(nil) == nil, nil
-	}); err != nil {
-		return fmt.Errorf("waiting for webhook server to become ready: %w", err)
-	}
-
-	logger.Info("Core control plane webhook server is ready", "port", opts.ControllerRuntimeWebhookPort)
 	return nil
 }
