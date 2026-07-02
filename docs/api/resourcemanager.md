@@ -604,6 +604,13 @@ This information is populated by the controller from the referenced organization
         </tr>
     </thead>
     <tbody><tr>
+        <td><b>contactEmail</b></td>
+        <td>string</td>
+        <td>
+          ContactEmail is the primary contact email cached from the organization.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>displayName</b></td>
         <td>string</td>
         <td>
@@ -614,7 +621,10 @@ This information is populated by the controller from the referenced organization
         <td><b>type</b></td>
         <td>string</td>
         <td>
-          Type is the type of the organization in the membership.<br/>
+          Type is the legacy organization type cached from the organization.
+
+Deprecated: This field reflects organization.spec.type, which is deprecated
+when the UnifiedOrganizations feature gate is enabled.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -712,7 +722,7 @@ Organization is the Schema for the Organizations API
         <td>
           OrganizationSpec defines the desired state of Organization<br/>
         </td>
-        <td>true</td>
+        <td>false</td>
       </tr><tr>
         <td><b><a href="#organizationstatus">status</a></b></td>
         <td>object</td>
@@ -741,15 +751,137 @@ OrganizationSpec defines the desired state of Organization
         </tr>
     </thead>
     <tbody><tr>
+        <td><b><a href="#organizationspeccontactinfo">contactInfo</a></b></td>
+        <td>object</td>
+        <td>
+          ContactInfo describes who the organization is and how to reach them.
+Email and name are required for onboarding to complete.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>type</b></td>
         <td>enum</td>
         <td>
-          The type of organization.<br/>
+          Type distinguishes personal and standard organizations in legacy mode.
+
+Deprecated: This field is ignored when the UnifiedOrganizations feature
+gate is enabled. Use unified organizations without a type distinction.<br/>
           <br/>
             <i>Validations</i>:<li>type(oldSelf) == null_type || self == oldSelf: organization type is immutable</li>
             <i>Enum</i>: Personal, Standard<br/>
         </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Organization.spec.contactInfo
+<sup><sup>[↩ Parent](#organizationspec)</sup></sup>
+
+
+
+ContactInfo describes who the organization is and how to reach them.
+Email and name are required for onboarding to complete.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>email</b></td>
+        <td>string</td>
+        <td>
+          Email is the primary contact email for the organization.<br/>
+        </td>
         <td>true</td>
+      </tr><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the display name of the primary contact.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#organizationspeccontactinfoaddress">address</a></b></td>
+        <td>object</td>
+        <td>
+          Address is the optional postal address for the organization.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>businessName</b></td>
+        <td>string</td>
+        <td>
+          BusinessName is the optional legal entity or company name.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Organization.spec.contactInfo.address
+<sup><sup>[↩ Parent](#organizationspeccontactinfo)</sup></sup>
+
+
+
+Address is the optional postal address for the organization.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>country</b></td>
+        <td>string</td>
+        <td>
+          Country is the ISO 3166-1 alpha-2 country code (e.g. "GB", "US").<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>city</b></td>
+        <td>string</td>
+        <td>
+          City is the locality.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>line1</b></td>
+        <td>string</td>
+        <td>
+          Line1 is the first line of the street address.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>line2</b></td>
+        <td>string</td>
+        <td>
+          Line2 is the second line of the street address.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>postalCode</b></td>
+        <td>string</td>
+        <td>
+          PostalCode is the post or zip code.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>region</b></td>
+        <td>string</td>
+        <td>
+          Region is the state, province, or county.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -775,9 +907,9 @@ OrganizationStatus defines the observed state of Organization
         <td>[]object</td>
         <td>
           Conditions represents the observations of an organization's current state.
-Known condition types are: "Ready"<br/>
+Known condition types are: "Ready", "OnboardingComplete"<br/>
           <br/>
-            <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
+            <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready] map[lastTransitionTime:1970-01-01T00:00:00Z message:Organization contact information is incomplete reason:ContactInfoIncomplete status:False type:OnboardingComplete]]<br/>
         </td>
         <td>false</td>
       </tr><tr>

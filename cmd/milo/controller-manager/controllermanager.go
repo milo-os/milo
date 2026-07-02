@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/blang/semver/v4"
@@ -38,7 +37,6 @@ import (
 	metadatainformer "k8s.io/client-go/metadata/metadatainformer"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	certutil "k8s.io/client-go/util/cert"
@@ -74,12 +72,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	// Register JSON logging format
 	_ "k8s.io/component-base/logs/json/register"
 
+	// Import features package to register Milo feature gates via init()
+	_ "go.miloapis.com/milo/pkg/features"
+
+	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	controlplane "go.miloapis.com/milo/internal/control-plane"
 	iamcontroller "go.miloapis.com/milo/internal/controllers/iam"
 	notescontroller "go.miloapis.com/milo/internal/controllers/notes"
@@ -88,11 +89,6 @@ import (
 	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
 	infracluster "go.miloapis.com/milo/internal/infra-cluster"
 	quotacontroller "go.miloapis.com/milo/internal/quota/controllers"
-	iamv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/iam/v1alpha1"
-	identityv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/identity/v1alpha1"
-	notesv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notes/v1alpha1"
-	notificationv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notification/v1alpha1"
-	resourcemanagerv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/resourcemanager/v1alpha1"
 	crmv1alpha1 "go.miloapis.com/milo/pkg/apis/crm/v1alpha1"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	identityv1alpha1 "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
@@ -102,7 +98,6 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	miloprovider "go.miloapis.com/milo/pkg/multicluster-runtime/milo"
-	milowebhook "go.miloapis.com/milo/pkg/webhook"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 )
 
@@ -186,6 +181,7 @@ func init() {
 	utilruntime.Must(notificationv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(crmv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(quotav1alpha1.AddToScheme(Scheme))
+	utilruntime.Must(billingv1alpha1.AddToScheme(Scheme))
 	utilruntime.Must(apiregistrationv1.AddToScheme(Scheme))
 }
 
@@ -315,6 +311,7 @@ func NewCommand() *cobra.Command {
 
 	verflag.AddFlags(namedFlagSets.FlagSet("global"))
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name(), logs.SkipLoggingConfigurationFlags())
+	utilfeature.DefaultMutableFeatureGate.AddFlag(namedFlagSets.FlagSet("feature gates"))
 	for _, f := range namedFlagSets.FlagSets {
 		fs.AddFlagSet(f)
 	}
@@ -413,6 +410,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 
 	clientBuilder, rootClientBuilder := createClientBuilders(logger, c)
 
+	// When leader election is enabled, webhooks run on every replica (before
+	// election) so Service endpoints stay healthy. Controllers remain leader-only.
+	webhooksOnAllReplicas := c.ComponentConfig.Generic.LeaderElection.LeaderElect &&
+		opts.ControlPlane.Scope == controlplane.ScopeCore
+
 	run := func(ctx context.Context, controllerDescriptors map[string]*ControllerDescriptor) {
 		controllerContext, err := CreateControllerContext(ctx, c, rootClientBuilder, clientBuilder)
 		if err != nil {
@@ -444,18 +446,17 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				logger.Error(err, "Error building infrastructure cluster")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
-			// We intentionally use a new configuration here because the one built into
-			// the legacy controller manager component leverages protobuf encoding. The
-			// controller runtime uses JSON encoding when managing CRDs.
-			ctrlConfig, err := clientcmd.BuildConfigFromFlags(opts.Master, opts.Generic.ClientConnection.Kubeconfig)
+			ctrlConfig, err := buildControllerRuntimeConfig(opts)
 			if err != nil {
 				logger.Error(err, "Error building controller manager config")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			// Increase rate limits for controller-runtime manager to handle quota system load
-			ctrlConfig.QPS = 100
-			ctrlConfig.Burst = 200
+			webhookPort := opts.ControllerRuntimeWebhookPort
+			if webhooksOnAllReplicas {
+				// Webhooks already listen on all replicas; avoid binding 9443 twice.
+				webhookPort = 0
+			}
 
 			// TODO: This is a hack to get the controller manager to start. We should
 			//       find a better way to use the controller manager framework to manage
@@ -488,98 +489,13 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 					// project control plane context from UserInfo.Extra into the request context.
 					// This allows webhook handlers to use mccontext.ClusterFrom(ctx) to determine
 					// which project control plane the request is targeting.
-					WebhookServer: milowebhook.NewClusterAwareServer(webhook.NewServer(webhook.Options{
-						Port:    opts.ControllerRuntimeWebhookPort,
-						CertDir: opts.SecureServing.ServerCert.CertDirectory,
-						// The webhook server expects the key and cert files to be in the
-						// cert directory. This is different from how the webhook server
-						// built into the k8s controller manager component expects them to
-						// be configured so we need to trim the cert directory from the
-						// key and cert file names.
-						KeyName:  strings.TrimPrefix(opts.SecureServing.ServerCert.CertKey.KeyFile, opts.SecureServing.ServerCert.CertDirectory+"/"),
-						CertName: strings.TrimPrefix(opts.SecureServing.ServerCert.CertKey.CertFile, opts.SecureServing.ServerCert.CertDirectory+"/"),
-					})),
+					WebhookServer: newClusterAwareWebhookServer(opts, webhookPort),
 				},
 			)
 			if err != nil {
 				logger.Error(err, "Error building controller manager")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
-
-			if err := resourcemanagerv1alpha1webhook.SetupProjectWebhooksWithManager(ctrl, SystemNamespace, ProjectOwnerRoleName, ProjectOwnerRoleNamespace); err != nil {
-				logger.Error(err, "Error setting up project webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := resourcemanagerv1alpha1webhook.SetupOrganizationWebhooksWithManager(ctrl, SystemNamespace, OrganizationOwnerRoleName, OrganizationOwnerRoleNamespace); err != nil {
-				logger.Error(err, "Error setting up organization webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := resourcemanagerv1alpha1webhook.SetupOrganizationMembershipWebhooksWithManager(ctrl, OrganizationOwnerRoleName, OrganizationOwnerRoleNamespace); err != nil {
-				logger.Error(err, "Error setting up organizationmembership webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupUserWebhooksWithManager(ctrl, SystemNamespace, "iam-user-self-manage"); err != nil {
-				logger.Error(err, "Error setting up user webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupUserDeactivationWebhooksWithManager(ctrl, SystemNamespace); err != nil {
-				logger.Error(err, "Error setting up userdeactivation webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := identityv1alpha1webhook.SetupUserIdentityWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up useridentity webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notificationv1alpha1webhook.SetupEmailTemplateWebhooksWithManager(ctrl, SystemNamespace); err != nil {
-				logger.Error(err, "Error setting up emailtemplate webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notificationv1alpha1webhook.SetupEmailWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "unable to setup email webhook", "error", err)
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupUserInvitationWebhooksWithManager(ctrl, SystemNamespace, AssignableRolesNamespace); err != nil {
-				logger.Error(err, "Error setting up user invitation webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notificationv1alpha1webhook.SetupContactWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up contact webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notificationv1alpha1webhook.SetupContactGroupWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up contactgroup webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notificationv1alpha1webhook.SetupContactGroupMembershipWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up contactgroupmembership webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notificationv1alpha1webhook.SetupContactGroupMembershipRemovalWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up contactgroupmembershipremoval webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupPlatformInvitationWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up platform invitation webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupPlatformAccessApprovalWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up platform access approval webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupPlatformAccessRejectionWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up platform access rejection webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupPlatformAccessWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up platform access webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up policybinding webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			// Note webhooks are set up later after the multicluster manager is created,
-			// so they can use it for project control plane lookups.
 
 			projectCtrl := resourcemanagercontroller.ProjectController{
 				ControlPlaneClient: ctrl.GetClient(),
@@ -591,7 +507,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 
 			organizationCtrl := resourcemanagercontroller.OrganizationController{
-				Client: ctrl.GetClient(),
+				Client:             ctrl.GetClient(),
+				OwnerRoleName:      OrganizationOwnerRoleName,
+				OwnerRoleNamespace: OrganizationOwnerRoleNamespace,
 			}
 			if err := organizationCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up organization controller")
@@ -694,14 +612,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			logger.Info("Local cluster engaged successfully")
 
-			// Set up note webhooks with multicluster manager for project control plane lookups
-			if err := notesv1alpha1webhook.SetupNoteWebhooksWithManager(ctrl, mcMgr); err != nil {
-				logger.Error(err, "Error setting up note webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-			if err := notesv1alpha1webhook.SetupClusterNoteWebhooksWithManager(ctrl, mcMgr); err != nil {
-				logger.Error(err, "Error setting up clusternote webhook")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			if !webhooksOnAllReplicas {
+				if err := registerCoreControlPlaneWebhooks(ctrl, mcMgr); err != nil {
+					logger.Error(err, "Error setting up core control plane webhooks")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+				}
 			}
 
 			// The multicluster manager automatically starts the provider because
@@ -862,6 +777,13 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 		controllerDescriptors := NewControllerDescriptors()
 		run(ctx, controllerDescriptors)
 		return nil
+	}
+
+	if webhooksOnAllReplicas {
+		if err := startCoreControlPlaneWebhooks(ctx, opts, rootClientBuilder, logger); err != nil {
+			logger.Error(err, "Error starting core control plane webhooks")
+			return err
+		}
 	}
 
 	id, err := os.Hostname()

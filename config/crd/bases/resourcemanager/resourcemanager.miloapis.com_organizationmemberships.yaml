@@ -19,9 +19,6 @@ spec:
     - jsonPath: .spec.organizationRef.name
       name: Organization
       type: string
-    - jsonPath: .status.organization.type
-      name: Organization Type
-      type: string
     - jsonPath: .status.organization.displayName
       name: Organization Display Name
       type: string
@@ -361,12 +358,20 @@ spec:
                   Organization contains cached information about the organization in this membership.
                   This information is populated by the controller from the referenced organization.
                 properties:
+                  contactEmail:
+                    description: ContactEmail is the primary contact email cached
+                      from the organization.
+                    type: string
                   displayName:
                     description: DisplayName is the display name of the organization
                       in the membership.
                     type: string
                   type:
-                    description: Type is the type of the organization in the membership.
+                    description: |-
+                      Type is the legacy organization type cached from the organization.
+
+                      Deprecated: This field reflects organization.spec.type, which is deprecated
+                      when the UnifiedOrganizations feature gate is enabled.
                     type: string
                 type: object
               user:

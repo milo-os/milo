@@ -222,6 +222,27 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
+      path: /mutate-resourcemanager-miloapis-com-v1alpha1-organization
+      port: 9443
+  failurePolicy: Fail
+  name: morganization.datum.net
+  rules:
+  - apiGroups:
+    - resourcemanager.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - organizations
+  sideEffects: NoneOnDryRun
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
       path: /mutate-resourcemanager-miloapis-com-v1alpha1-project
       port: 9443
   failurePolicy: Fail
@@ -606,6 +627,7 @@ webhooks:
     - v1alpha1
     operations:
     - CREATE
+    - UPDATE
     resources:
     - organizations
   sideEffects: NoneOnDryRun

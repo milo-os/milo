@@ -7,9 +7,9 @@ import (
 	"github.com/google/cel-go/cel"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	quotacel "go.miloapis.com/milo/pkg/quota/cel"
 	"go.miloapis.com/milo/pkg/quota/validation"
-	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 )
 
 const (

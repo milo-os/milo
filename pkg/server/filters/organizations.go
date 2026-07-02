@@ -75,9 +75,9 @@ func OrganizationContextHandler(handler http.Handler, s runtime.NegotiatedSerial
 			req = req.WithContext(ctx)
 
 			// Check to see if the request is a direct request for the organization
-			// resource. If so, we need to allow the request to continue without any
-			// additional processing.
-			if len(parts) == 1 {
+			// resource or the status subresource. If so, we need to allow the request
+			// to continue without any additional processing.
+			if len(parts) == 1 || (len(parts) == 2 && parts[1] == "status") {
 				handler.ServeHTTP(w, req)
 				return
 			}
