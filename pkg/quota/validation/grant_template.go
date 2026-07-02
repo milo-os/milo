@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"go.miloapis.com/milo/pkg/quota/templateutil"
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+	"go.miloapis.com/milo/pkg/quota/templateutil"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
