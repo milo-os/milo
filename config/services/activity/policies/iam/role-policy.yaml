@@ -11,8 +11,8 @@ spec:
 
   auditRules:
     - name: create
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
-      summary: "{{ actor }} created role {{ has(audit.responseObject.metadata.name) ? link(audit.responseObject.metadata.name, audit.objectRef) : has(audit.objectRef.name) ? link(audit.objectRef.name, audit.objectRef) : (has(audit.responseObject.details) && has(audit.responseObject.details.name)) ? link(audit.responseObject.details.name, audit.objectRef) : link('a role', audit.objectRef) }}"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300"
+      summary: "{{ actor }} created role {{ link(audit.responseObject.metadata.name, audit.objectRef) }}"
 
     - name: delete
       match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
