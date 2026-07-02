@@ -31,12 +31,10 @@ type PlatformInvitationEmailVariables struct {
 }
 
 const platformInvitationUserEmailIndexKey = "iam.miloapis.com/useremailkey"
-const piPlatformAccessApprovalIndexKey = "iam.miloapis.com/pi-platformaccessapproval-key"
 
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=platforminvitations,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=platforminvitations/status,verbs=update
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=platformaccessapprovals,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=notification.miloapis.com,resources=emails,verbs=get;list;watch;create
 
 func (r *PlatformInvitationController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -87,24 +85,17 @@ func (r *PlatformInvitationController) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, fmt.Errorf("failed to list Users by email: %w", err)
 	}
 	if len(users.Items) > 0 {
-		log.Info("User already exists, skipping sending email and creating PlatformAccessApproval")
+		log.Info("User already exists, skipping sending email")
 		userExists = true
 	}
 
-	conditionMessage := "PlatformInvitation is ready. Email and PlatformAccessApproval not created as user already exists. "
+	conditionMessage := "PlatformInvitation is ready. Email not created as user already exists."
 	if !userExists {
-		// If here, the PlatformInvitation should be sent and the PlatformAccessApproval should be created
-		conditionMessage = "PlatformInvitation is ready. Email sent and PlatformAccessApproval created."
+		// If here, the PlatformInvitation should be sent
+		conditionMessage = "PlatformInvitation is ready. Email sent."
 
 		errMsg := ""
 		invitationErr := false
-
-		// Create the PlatformAccessApproval
-		if err := r.createPlatformAccessApproval(ctx, pi); err != nil {
-			log.Error(err, "Failed to create PlatformAccessApproval")
-			errMsg = fmt.Sprintf("failed to create PlatformAccessApproval: %v", err)
-			invitationErr = true
-		}
 
 		// Create the PlatformInvitation email
 		if err := r.createPlatformInvitationEmail(ctx, pi); err != nil {
@@ -160,15 +151,6 @@ func (r *PlatformInvitationController) SetupWithManager(mgr ctrl.Manager) error 
 		return fmt.Errorf("failed to set field index on User by .spec.email: %w", err)
 	}
 
-	// Index PlatformAccessApproval for efficient lookups (needed by createPlatformAccessApproval)
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &iamv1alpha1.PlatformAccessApproval{}, piPlatformAccessApprovalIndexKey, func(obj client.Object) []string {
-		paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-		return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-	}); err != nil {
-		log.Error(err, "Failed to set field index on PlatformAccessApproval")
-		return fmt.Errorf("failed to set field index on PlatformAccessApproval: %w", err)
-	}
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&iamv1alpha1.PlatformInvitation{}).
 		Named("platforminvitation").
@@ -190,45 +172,6 @@ func (r *PlatformInvitationController) updatePlatformInvitationStatus(ctx contex
 	} else {
 		log.Info("PlatformInvitation status unchanged, skipping update", "platformInvitation", pi.GetName())
 	}
-
-	return nil
-}
-
-// createPlatformAccessApproval creates a PlatformAccessApproval for the PlatformInvitation
-// This is an idempotent operation, so it will not create a new PlatformAccessApproval if one already exists
-func (r *PlatformInvitationController) createPlatformAccessApproval(ctx context.Context, pi *iamv1alpha1.PlatformInvitation) error {
-	log := logf.FromContext(ctx).WithName("platforminvitation-create-platformaccessapproval")
-	log.Info("Creating PlatformAccessApproval", "name", pi.Name, "email", pi.Spec.Email)
-
-	deterministicName := getDeterministicPlatformInvitationResourceName(*pi)
-
-	// Check if the PlatformAccessApproval already exists
-	// We check by email address, as a previous PlatformAccessApproval may have been created
-	// because of a UserInvitation for joining to an organization.
-	paas := &iamv1alpha1.PlatformAccessApprovalList{}
-	if err := r.Client.List(ctx, paas, client.MatchingFields{piPlatformAccessApprovalIndexKey: pi.Spec.Email}); err != nil {
-		log.Error(err, "failed to list platformaccessapprovals", "email", pi.Spec.Email)
-		return fmt.Errorf("failed to list platformaccessapprovals: %w", err)
-	}
-	if len(paas.Items) > 0 {
-		return nil
-	}
-
-	// Create the PlatformAccessApproval
-	paa := &iamv1alpha1.PlatformAccessApproval{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: deterministicName,
-		},
-		Spec: iamv1alpha1.PlatformAccessApprovalSpec{
-			SubjectRef: iamv1alpha1.SubjectReference{Email: pi.Spec.Email},
-		},
-	}
-	if err := r.Client.Create(ctx, paa); err != nil {
-		log.Error(err, "Failed to create PlatformAccessApproval")
-		return err
-	}
-
-	log.Info("PlatformAccessApproval created", "name", paa.Name)
 
 	return nil
 }
