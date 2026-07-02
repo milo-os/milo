@@ -29,8 +29,6 @@ import (
 
 const (
 	userInvitationFinalizerKey   = "iam.miloapis.com/userinvitation"
-	uiPlatformAccessApprovalKey  = "iam.miloapis.com/ui-platform-access-approval"
-	uiPlatformAccessRejectionKey = "iam.miloapis.com/ui-platform-access-rejection"
 )
 
 const (
@@ -98,8 +96,7 @@ const (
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations,verbs=get;list;watch
 // +kubebuilder:rbac:groups=notification.miloapis.com,resources=emails,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=notification.miloapis.com,resources=emailtemplates,verbs=get;list;watch
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=platformaccessrejections,verbs=get;list;watch;delete
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=platformaccessapprovals,verbs=get;list;watch
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch;update;delete
 
 func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithName("userinvitation-reconciler")
@@ -203,12 +200,6 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		log.Error(err, "Failed to get Invitee User")
 		return ctrl.Result{}, fmt.Errorf("failed to get Invitee User: %w", err)
-	}
-
-	// Grant the access approval to the invitee user
-	if err := r.grantAccessApproval(ctx, user, ui); err != nil {
-		log.Error(err, "Failed to grant access approval to invitee user")
-		return ctrl.Result{}, fmt.Errorf("failed to grant access approval to invitee user: %w", err)
 	}
 
 	// Send an email to the invitee user to accept the invitation
@@ -341,26 +332,6 @@ func (r *UserInvitationController) SetupWithManager(mgr ctrl.Manager) error {
 			return []string{strings.ToLower(ui.Spec.Email)}
 		}); err != nil {
 		return fmt.Errorf("failed to set field index on UserInvitation by .spec.email: %w", err)
-	}
-
-	// Register field indexer for PlatformAccessApproval for efficient lookup
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
-		&iamv1alpha1.PlatformAccessApproval{}, uiPlatformAccessApprovalKey,
-		func(obj client.Object) []string {
-			paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-			return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-		}); err != nil {
-		return fmt.Errorf("failed to set field index on PlatformAccessApproval by .spec.subjectRef.userRef.name: %w", err)
-	}
-
-	// Register field indexer for PlatformAccessRejection for efficient lookup
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
-		&iamv1alpha1.PlatformAccessRejection{}, uiPlatformAccessRejectionKey,
-		func(obj client.Object) []string {
-			par := obj.(*iamv1alpha1.PlatformAccessRejection)
-			return []string{par.Spec.UserRef.Name}
-		}); err != nil {
-		return fmt.Errorf("failed to set field index on PlatformAccessRejection by .spec.userRef.name: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -782,80 +753,6 @@ func isUserInvitationExpired(ui *iamv1alpha1.UserInvitation) bool {
 		return true
 	}
 	return false
-}
-
-// grantAccessApproval grants the access to the invitee user for the organization.
-func (r *UserInvitationController) grantAccessApproval(ctx context.Context, user *iamv1alpha1.User, ui *iamv1alpha1.UserInvitation) error {
-	log := logf.FromContext(ctx).WithName("userinvitation-grant-access-approval").WithValues("userInvitation", ui.GetName())
-	log.Info("Granting access approval to user", "userInvitation", ui.GetName(), "user")
-
-	// ================================
-	// WARNING: User may by nil
-	// ================================
-
-	// Look for existant PlatformAccessRejection for the invitee user
-	if user != nil {
-		// Only existant users can have a PlatformAccessRejection
-		platformAccessRejection := &iamv1alpha1.PlatformAccessRejectionList{}
-		if err := r.Client.List(ctx, platformAccessRejection, client.MatchingFields{uiPlatformAccessRejectionKey: user.GetName()}); err != nil {
-			log.Error(err, "Failed to list PlatformAccessRejections")
-			return fmt.Errorf("failed to list PlatformAccessRejections: %w", err)
-		}
-		if len(platformAccessRejection.Items) > 0 {
-			// Remove the PlatformAccessRejection
-			log.Info("PlatformAccessRejection already exists, removing it")
-			if err := r.Client.Delete(ctx, &platformAccessRejection.Items[0]); err != nil && !errors.IsNotFound(err) {
-				log.Error(err, "Failed to delete PlatformAccessRejection")
-				return fmt.Errorf("failed to delete PlatformAccessRejection: %w", err)
-			}
-		}
-	}
-
-	// Look for existant PlatformAccessApproval for the invitee user
-	// The user can already have a PlatformAccessApproval for the email address or the user reference
-	userReferences := []string{strings.ToLower(ui.Spec.Email)}
-	if user != nil {
-		userReferences = append(userReferences, user.Name)
-	}
-	for _, reference := range userReferences {
-		platformAccessApproval := &iamv1alpha1.PlatformAccessApprovalList{}
-		if err := r.Client.List(ctx, platformAccessApproval, client.MatchingFields{uiPlatformAccessApprovalKey: reference}); err != nil {
-			log.Error(err, "Failed to list PlatformAccessApprovals")
-			return fmt.Errorf("failed to list PlatformAccessApprovals: %w", err)
-		}
-		if len(platformAccessApproval.Items) > 0 {
-			log.Info("PlatformAccessApproval already exists, skipping grant access approval")
-			return nil
-		}
-	}
-
-	// Build the SubjectReference for the PlatformAccessApproval
-	subjectRef := iamv1alpha1.SubjectReference{}
-	if user == nil {
-		// Invitee hasn't created an account yet – approve the email address
-		subjectRef.Email = strings.ToLower(ui.Spec.Email)
-	} else {
-		// User exists – approve the specific user object
-		subjectRef.UserRef = &iamv1alpha1.UserReference{
-			Name: user.Name,
-		}
-	}
-
-	// If here, no PlatformAccessApproval exists for the invitee user, create a new one
-	platformAccessApproval := &iamv1alpha1.PlatformAccessApproval{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: getDeterministicResourceName("platform-access-approval", *ui),
-		},
-		Spec: iamv1alpha1.PlatformAccessApprovalSpec{
-			SubjectRef: subjectRef,
-		},
-	}
-	if err := r.Client.Create(ctx, platformAccessApproval); err != nil {
-		log.Error(err, "Failed to create PlatformAccessApproval")
-		return fmt.Errorf("failed to create PlatformAccessApproval: %w", err)
-	}
-
-	return nil
 }
 
 func (r *UserInvitationController) updateUserInvitationInviteeUserStatus(ctx context.Context, ui *iamv1alpha1.UserInvitation) error {
