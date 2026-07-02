@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	userInvitationFinalizerKey   = "iam.miloapis.com/userinvitation"
+	userInvitationFinalizerKey = "iam.miloapis.com/userinvitation"
 )
 
 const (

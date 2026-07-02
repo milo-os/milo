@@ -42,7 +42,6 @@ func Test_getDeterministicPlatformInvitationResourceName(t *testing.T) {
 	}
 }
 
-
 func Test_PlatformInvitationController_Reconcile_Scheduled(t *testing.T) {
 	ctx := context.TODO()
 	scheme := getPlatformInvitationTestScheme()
@@ -90,7 +89,6 @@ func Test_PlatformInvitationController_Reconcile_Scheduled(t *testing.T) {
 		t.Fatalf("scheduled condition missing or not true: %+v", updated.Status.Conditions)
 	}
 
-
 }
 
 func Test_PlatformInvitationController_Reconcile_UserExistsSkipsPAA(t *testing.T) {
@@ -124,8 +122,6 @@ func Test_PlatformInvitationController_Reconcile_UserExistsSkipsPAA(t *testing.T
 	if _, err := pc.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pi.Name}}); err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
-
-
 
 	// Ready condition should be true with appropriate message
 	updated := &iamv1alpha1.PlatformInvitation{}
@@ -169,8 +165,6 @@ func Test_PlatformInvitationController_Reconcile_NoUserCreatesPAA(t *testing.T) 
 	if res.RequeueAfter != 0 {
 		t.Fatalf("did not expect requeue for immediate invitation, got %v", res.RequeueAfter)
 	}
-
-
 
 	// Ready condition should be true with created message
 	updated := &iamv1alpha1.PlatformInvitation{}
