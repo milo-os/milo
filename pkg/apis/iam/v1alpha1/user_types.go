@@ -100,6 +100,11 @@ type UserStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Approved;Rejected
 	RegistrationApproval RegistrationApprovalState `json:"registrationApproval,omitempty"`
 
+	// PlatformAccess represents the user's access state on the platform.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Pending;Approved;Rejected;Suspended
+	PlatformAccess PlatformAccessState `json:"platformAccess,omitempty"`
+
 	// LastLoginProvider records the identity provider that was most recently used by the
 	// user to log in (e.g., "github" or "google"). This field is set by the auth provider
 	// based on authentication events.

@@ -149,7 +149,6 @@ rules:
   resources:
   - roles
   - serviceaccounts
-  - userdeactivations
   verbs:
   - get
   - list

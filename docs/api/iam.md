@@ -3573,6 +3573,13 @@ based on authentication events.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>platformAccess</b></td>
+        <td>string</td>
+        <td>
+          PlatformAccess represents the user's access state on the platform.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>registrationApproval</b></td>
         <td>enum</td>
         <td>

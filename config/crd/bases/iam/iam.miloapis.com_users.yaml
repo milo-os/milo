@@ -160,6 +160,21 @@ spec:
                   user to log in (e.g., "github" or "google"). This field is set by the auth provider
                   based on authentication events.
                 type: string
+              platformAccess:
+                allOf:
+                - enum:
+                  - Pending
+                  - Approved
+                  - Rejected
+                  - Suspended
+                - enum:
+                  - Pending
+                  - Approved
+                  - Rejected
+                  - Suspended
+                description: PlatformAccess represents the user's access state on
+                  the platform.
+                type: string
               registrationApproval:
                 description: |-
                   RegistrationApproval represents the administrator’s decision on the user’s registration request.
