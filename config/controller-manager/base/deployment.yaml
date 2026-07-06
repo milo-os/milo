@@ -42,7 +42,12 @@ spec:
           - --logging-format=$(LOGGING_FORMAT)
           - --v=$(LOG_LEVEL)
           - --control-plane-scope=$(CONTROL_PLANE_SCOPE)
+          # Feature gates controlled via FEATURE_GATES env var.
+          # Enable unified organizations: FEATURE_GATES=UnifiedOrganizations=true
+          - --feature-gates=$(FEATURE_GATES)
         env:
+          - name: FEATURE_GATES
+            value: ""
           - name: LEADER_ELECT_RESOURCE_NAMESPACE
             value: milo-system
           # Default to INFO level logging

@@ -42,6 +42,22 @@ func TestOrganizationContextHandler(t *testing.T) {
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
+		"direct organization request succeeds": {
+			path:         "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/some-org",
+			reqUser:      &user.DefaultInfo{},
+			expectedCode: http.StatusOK,
+			assertRequest: func(t *testing.T, req *http.Request) {
+				assert.Equal(t, "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/some-org", req.URL.Path)
+			},
+		},
+		"organization status subresource request succeeds": {
+			path:         "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/some-org/status",
+			reqUser:      &user.DefaultInfo{},
+			expectedCode: http.StatusOK,
+			assertRequest: func(t *testing.T, req *http.Request) {
+				assert.Equal(t, "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/some-org/status", req.URL.Path)
+			},
+		},
 		"org request succeeds": {
 			path:         "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/some-org/control-plane",
 			reqUser:      &user.DefaultInfo{},

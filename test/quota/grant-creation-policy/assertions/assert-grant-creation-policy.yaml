@@ -13,7 +13,7 @@ spec:
     constraints:
       # Trigger for Standard type organizations in the grant-creation-policy test suite
       # This may overlap with cel-name-policy for premium-test-org (intentional for testing)
-      - expression: 'trigger.spec.type == "Standard" && has(trigger.metadata.labels) && "test.miloapis.com/scenario" in trigger.metadata.labels && trigger.metadata.labels["test.miloapis.com/scenario"] == "grant-creation-policy"'
+      - expression: 'has(trigger.metadata.labels) && "test.miloapis.com/scenario" in trigger.metadata.labels && trigger.metadata.labels["test.miloapis.com/scenario"] == "grant-creation-policy"'
   target:
     resourceGrantTemplate:
       metadata:

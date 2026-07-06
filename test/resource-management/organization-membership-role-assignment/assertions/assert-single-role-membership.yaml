@@ -20,5 +20,4 @@ status:
     givenName: Alice
     familyName: Testuser
   organization:
-    type: Standard
     displayName: "Test Membership Roles Organization"

@@ -65,6 +65,15 @@ const (
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0
 	ServiceAccountKeys featuregate.Feature = "ServiceAccountKeys"
+
+	// UnifiedOrganizations enables unified organization behavior: system-assigned org
+	// names (generateName org- prefix), onboarding reconciliation, and deprecated
+	// spec.type is ignored/stripped. When disabled, legacy Personal/Standard types
+	// and user-chosen organization names are supported.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	UnifiedOrganizations featuregate.Feature = "UnifiedOrganizations"
 )
 
 func init() {
@@ -89,6 +98,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	Sessions: {
 		Default:    true,
 		PreRelease: featuregate.GA,
+	},
+	UnifiedOrganizations: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
 	},
 	UserIdentities: {
 		Default:    true,

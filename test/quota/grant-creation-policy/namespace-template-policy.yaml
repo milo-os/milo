@@ -12,7 +12,7 @@ spec:
       kind: "Organization"
     constraints:
       # Only trigger for Standard orgs with the namespace-template label
-      - expression: 'trigger.spec.type == "Standard" && has(trigger.metadata.labels) && "test.miloapis.com/scenario" in trigger.metadata.labels && trigger.metadata.labels["test.miloapis.com/scenario"] == "namespace-template"'
+      - expression: 'has(trigger.metadata.labels) && "test.miloapis.com/scenario" in trigger.metadata.labels && trigger.metadata.labels["test.miloapis.com/scenario"] == "namespace-template"'
   target:
     resourceGrantTemplate:
       metadata:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 
@@ -19,6 +20,7 @@ func getTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	_ = iamv1alpha1.AddToScheme(scheme)
 	_ = resourcemanagerv1alpha1.AddToScheme(scheme)
+	_ = billingv1alpha1.AddToScheme(scheme)
 	return scheme
 }
 
@@ -34,7 +36,10 @@ func TestOrganizationMembershipController_ReconcileRoles(t *testing.T) {
 			UID:  types.UID("org-uid-123"),
 		},
 		Spec: resourcemanagerv1alpha1.OrganizationSpec{
-			Type: "Enterprise",
+			ContactInfo: &resourcemanagerv1alpha1.OrganizationContactInfo{
+				Email: "owner@example.com",
+				Name:  "Owner",
+			},
 		},
 	}
 

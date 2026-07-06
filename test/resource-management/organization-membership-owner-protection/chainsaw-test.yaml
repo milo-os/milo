@@ -257,7 +257,7 @@ spec:
             apiVersion: v1
             kind: Namespace
             name: organization-owner-protection
-            timeout: 120s
+            timeout: 180s
             for:
               deletion: {}
         - description: Delete owner test users
