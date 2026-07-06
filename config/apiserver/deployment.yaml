@@ -84,12 +84,19 @@ spec:
           - --events-provider-retries=$(EVENTS_PROVIDER_RETRIES)
           - --events-forward-extras=$(EVENTS_FORWARD_EXTRAS)
           - --shutdown-delay-duration=$(SHUTDOWN_DELAY_DURATION)
+          # Number of pooled etcd connections per transport for the shared
+          # watch-cache client; tune per environment via SHARED_ETCD_CLIENT_POOL_SIZE
+          - --shared-etcd-client-pool-size=$(SHARED_ETCD_CLIENT_POOL_SIZE)
         env:
           # Feature gates configuration
           # Sessions and UserIdentities are GA (enabled by default)
           # Add EventsProxy=true to enable Events proxy to Activity service
           - name: FEATURE_GATES
             value: ""
+          # Pooled etcd connections per transport for the shared watch-cache
+          # client. Override per environment to tune watch progress spread.
+          - name: SHARED_ETCD_CLIENT_POOL_SIZE
+            value: "32"
           - name: LOG_LEVEL
             value: "4"
           - name: LOGGING_FORMAT
