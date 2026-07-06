@@ -1,0 +1,27 @@
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: project-overhead
+spec:
+  parallelism: 1
+  script:
+    configMap:
+      name: k6-project-overhead
+      file: script.js
+  runner:
+    env:
+      - name: API_SERVER_URL
+        value: "https://milo-apiserver.milo-system.svc.cluster.local:6443"
+      - name: K6_INSECURE_SKIP_TLS_VERIFY
+        value: "true"
+      - name: PERF_TEST_TOKEN
+        value: "test-admin-token"
+      - name: SCALE_PROJECTS
+        value: "20"
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "256Mi"
+      limits:
+        cpu: "2"
+        memory: "1Gi"
