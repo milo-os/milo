@@ -8,6 +8,7 @@ spec:
       labelsFromPath:
         name: [metadata, name]
         namespace: [metadata, namespace]
+        role_name: [spec, roleRef, name]
       metricNamePrefix: milo_policy_bindings
       metrics:
         - name: "info"
