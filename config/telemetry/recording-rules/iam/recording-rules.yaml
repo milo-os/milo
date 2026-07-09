@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: iam.miloapis.com-recording-rules
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: iam-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: iam.readiness.1m
+      interval: 15s
+      rules:
+        - record: iam_miloapis_com:policybindings:not_ready
+          expr: |
+            count(milo_policy_bindings_status_condition{type="Ready"} == 0)
