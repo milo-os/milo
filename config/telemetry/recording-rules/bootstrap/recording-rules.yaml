@@ -1,0 +1,138 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: miloapis.com-bootstrap-recording-rules
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: bootstrap
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: bootstrap.latency.1m
+      interval: 1m
+      rules:
+        - record: miloapis.com:bootstrap:user_ready_latency_seconds
+          expr: |
+            clamp_min(
+              clamp_max(
+                max by (email) (milo_users_status_condition_last_transition_time{type="Ready"})
+                - on(email) max by (email) (milo_users_created_timestamp),
+                86400
+              ),
+              0
+            )
+
+        - record: miloapis.com:bootstrap:org_onboarding_ready_latency_seconds
+          expr: |
+            clamp_min(
+              clamp_max(
+                sum by (resource_name) (milo_organizations_status_condition_last_transition_time{type="OnboardingComplete",reason="Ready"})
+                - sum by (resource_name) (milo_organizations_created_timestamp),
+                86400
+              ),
+              0
+            )
+
+        - record: miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds
+          expr: |
+            clamp_min(
+              clamp_max(
+                sum by (resource_namespace) (
+                  milo_policy_bindings_status_condition_last_transition_time{resource_namespace=~"organization-.*",resource_name=~"member-.*",role_name="owner",type="Ready"}
+                )
+                - sum by (resource_namespace) (
+                  milo_policy_bindings_created_timestamp{resource_namespace=~"organization-.*",resource_name=~"member-.*",role_name="owner"}
+                ),
+                86400
+              ),
+              0
+            )
+
+        - record: miloapis.com:bootstrap:project_ready_latency_seconds
+          expr: |
+            clamp_min(
+              clamp_max(
+                sum by (resource_name) (milo_projects_status_condition_last_transition_time{type="Ready"})
+                - sum by (resource_name) (milo_projects_created_timestamp),
+                86400
+              ),
+              0
+            )
+
+        - record: miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds
+          expr: |
+            clamp_min(
+              clamp_max(
+                sum by (resource_namespace) (
+                  milo_policy_bindings_status_condition_last_transition_time{resource_namespace=~"organization-.*",resource_name=~"project-.*",role_name="owner",type="Ready"}
+                )
+                - sum by (resource_namespace) (
+                  milo_policy_bindings_created_timestamp{resource_namespace=~"organization-.*",resource_name=~"project-.*",role_name="owner"}
+                ),
+                86400
+              ),
+              0
+            )
+
+        - record: miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds
+          expr: |
+            clamp_min(
+              clamp_max(
+                sum by (resource_namespace) (
+                  milo_policy_bindings_status_condition_last_transition_time{resource_namespace=~"organization-.*",resource_name=~"project-.*",role_name="owner",type="Ready"}
+                )
+                - on(resource_namespace) group_left()
+                label_replace(
+                  sum by (resource_name) (milo_organizations_created_timestamp),
+                  "resource_namespace", "organization-$1", "resource_name", "(.+)"
+                ),
+                86400
+              ),
+              0
+            )
+
+    - name: bootstrap.latency.quantiles.1m
+      interval: 1m
+      rules:
+        - record: miloapis.com:bootstrap:user_ready_latency_seconds:p50
+          expr: quantile(0.50, miloapis.com:bootstrap:user_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:user_ready_latency_seconds:p95
+          expr: quantile(0.95, miloapis.com:bootstrap:user_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:user_ready_latency_seconds:p99
+          expr: quantile(0.99, miloapis.com:bootstrap:user_ready_latency_seconds) or vector(0)
+
+        - record: miloapis.com:bootstrap:org_onboarding_ready_latency_seconds:p50
+          expr: quantile(0.50, miloapis.com:bootstrap:org_onboarding_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:org_onboarding_ready_latency_seconds:p95
+          expr: quantile(0.95, miloapis.com:bootstrap:org_onboarding_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:org_onboarding_ready_latency_seconds:p99
+          expr: quantile(0.99, miloapis.com:bootstrap:org_onboarding_ready_latency_seconds) or vector(0)
+
+        - record: miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds:p50
+          expr: quantile(0.50, miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds:p95
+          expr: quantile(0.95, miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds:p99
+          expr: quantile(0.99, miloapis.com:bootstrap:org_member_owner_binding_ready_latency_seconds) or vector(0)
+
+        - record: miloapis.com:bootstrap:project_ready_latency_seconds:p50
+          expr: quantile(0.50, miloapis.com:bootstrap:project_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:project_ready_latency_seconds:p95
+          expr: quantile(0.95, miloapis.com:bootstrap:project_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:project_ready_latency_seconds:p99
+          expr: quantile(0.99, miloapis.com:bootstrap:project_ready_latency_seconds) or vector(0)
+
+        - record: miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds:p50
+          expr: quantile(0.50, miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds:p95
+          expr: quantile(0.95, miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds:p99
+          expr: quantile(0.99, miloapis.com:bootstrap:project_owner_binding_ready_latency_seconds) or vector(0)
+
+        - record: miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds:p50
+          expr: quantile(0.50, miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds:p95
+          expr: quantile(0.95, miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds) or vector(0)
+        - record: miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds:p99
+          expr: quantile(0.99, miloapis.com:bootstrap:org_to_project_owner_binding_latency_seconds) or vector(0)
