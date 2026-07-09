@@ -8,6 +8,7 @@ spec:
       labelsFromPath:
         name: [metadata, name]
         namespace: [metadata, namespace]
+        email: [spec, email]
       metricNamePrefix: milo_users
       metrics:
         - name: "info"
@@ -16,8 +17,29 @@ spec:
             info:
               labelsFromPath:
                 "uid": [metadata, uid]
+                email: [spec, email]
+                state: [status, state]
         - name: "created_timestamp"
           each:
             type: Gauge
             gauge:
               path: [metadata, creationTimestamp]
+        - name: "status_condition"
+          each:
+            type: Gauge
+            gauge:
+              path: [status, conditions]
+              labelsFromPath:
+                type: ["type"]
+                reason: ["reason"]
+              valueFrom: ["status"]
+        - name: "status_condition_last_transition_time"
+          each:
+            type: Gauge
+            gauge:
+              path: [status, conditions]
+              labelsFromPath:
+                type: ["type"]
+                reason: ["reason"]
+                status: ["status"]
+              valueFrom: ["lastTransitionTime"]
