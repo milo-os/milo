@@ -526,6 +526,14 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			subjectBindingReaperCtrl := resourcemanagercontroller.SubjectBindingReaperController{
+				Client: ctrl.GetClient(),
+			}
+			if err := subjectBindingReaperCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up subject binding reaper controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			groupCtrl := iamcontroller.GroupController{
 				Client: ctrl.GetClient(),
 			}
