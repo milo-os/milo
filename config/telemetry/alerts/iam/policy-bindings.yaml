@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: iam.miloapis.com-alerting-rules
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: iam-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: iam.readiness
+      interval: 30s
+      rules:
+        - alert: PolicyBindingsNotReady
+          expr: iam_miloapis_com:policybindings:not_ready > 0
+          for: 2m
+          labels:
+            severity: critical
+            category: readiness
+            team: platform
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/policy-bindings-not-ready.md"
+            summary: "{{ $value }} policy bindings are not ready"
+            description: |
+              Policy bindings are not in Ready state, breaking access control.
+
+              Not ready count: {{ $value }}
+
+              Actions needed:
+              1. Check binding status: kubectl get policybindings -o wide
+              2. Review authorization provider sync errors
+              3. Verify role and principal references are valid

@@ -1,0 +1,24 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: resourcemanager.miloapis.com-recording-rules
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: resourcemanager-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: resourcemanager.readiness.1m
+      interval: 15s
+      rules:
+        # Grouped by resource_namespace (the "organization-<name>" namespace the
+        # membership lives in), which identifies the affected organization for
+        # the OrganizationMembershipsNotReady alert. Group by "organization_name"
+        # instead and every alert's Organization field renders blank -
+        # milo_organization_memberships_status_condition has no such label.
+        - record: resourcemanager_miloapis_com:organizationmemberships:not_ready
+          expr: |
+            count by (resource_namespace) (
+              milo_organization_memberships_status_condition{type="Ready"} == 0
+            )
