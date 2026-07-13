@@ -12,6 +12,10 @@ spec:
     - name: bootstrap.latency.1m
       interval: 1m
       rules:
+        # Per-resource latency = last_transition_time - created_timestamp.
+        # Always subtract matching series (on / group_left), never sum()
+        # unix timestamps across resources — that produces N*epoch-scale
+        # values that clamp to the 86400s ceiling and show as "1 day".
         - record: miloapis.com:bootstrap:user_ready_latency_seconds
           expr: |
             clamp_min(
@@ -27,8 +31,10 @@ spec:
           expr: |
             clamp_min(
               clamp_max(
-                sum by (resource_name) (milo_organizations_status_condition_last_transition_time{type="OnboardingComplete",reason="Ready"})
-                - sum by (resource_name) (milo_organizations_created_timestamp),
+                max by (resource_name) (
+                  milo_organizations_status_condition_last_transition_time{type="OnboardingComplete",reason="Ready"}
+                )
+                - on(resource_name) max by (resource_name) (milo_organizations_created_timestamp),
                 86400
               ),
               0
@@ -38,10 +44,11 @@ spec:
           expr: |
             clamp_min(
               clamp_max(
-                sum by (resource_namespace) (
+                max by (resource_namespace, resource_name) (
                   milo_policy_bindings_status_condition_last_transition_time{resource_namespace=~"organization-.*",resource_name=~"member-.*",role_name="owner",type="Ready"}
                 )
-                - sum by (resource_namespace) (
+                - on(resource_namespace, resource_name) group_left()
+                max by (resource_namespace, resource_name) (
                   milo_policy_bindings_created_timestamp{resource_namespace=~"organization-.*",resource_name=~"member-.*",role_name="owner"}
                 ),
                 86400
@@ -53,8 +60,8 @@ spec:
           expr: |
             clamp_min(
               clamp_max(
-                sum by (resource_name) (milo_projects_status_condition_last_transition_time{type="Ready"})
-                - sum by (resource_name) (milo_projects_created_timestamp),
+                max by (resource_name) (milo_projects_status_condition_last_transition_time{type="Ready"})
+                - on(resource_name) max by (resource_name) (milo_projects_created_timestamp),
                 86400
               ),
               0
@@ -64,10 +71,11 @@ spec:
           expr: |
             clamp_min(
               clamp_max(
-                sum by (resource_namespace) (
+                max by (resource_namespace, resource_name) (
                   milo_policy_bindings_status_condition_last_transition_time{resource_namespace=~"organization-.*",resource_name=~"project-.*",role_name="owner",type="Ready"}
                 )
-                - sum by (resource_namespace) (
+                - on(resource_namespace, resource_name) group_left()
+                max by (resource_namespace, resource_name) (
                   milo_policy_bindings_created_timestamp{resource_namespace=~"organization-.*",resource_name=~"project-.*",role_name="owner"}
                 ),
                 86400
@@ -79,12 +87,12 @@ spec:
           expr: |
             clamp_min(
               clamp_max(
-                sum by (resource_namespace) (
+                max by (resource_namespace, resource_name) (
                   milo_policy_bindings_status_condition_last_transition_time{resource_namespace=~"organization-.*",resource_name=~"project-.*",role_name="owner",type="Ready"}
                 )
                 - on(resource_namespace) group_left()
                 label_replace(
-                  sum by (resource_name) (milo_organizations_created_timestamp),
+                  max by (resource_name) (milo_organizations_created_timestamp),
                   "resource_namespace", "organization-$1", "resource_name", "(.+)"
                 ),
                 86400
