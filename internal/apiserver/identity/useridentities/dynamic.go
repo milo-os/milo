@@ -48,6 +48,7 @@ type Config struct {
 
 type DynamicProvider struct {
 	base        *rest.Config
+	baseRT      http.RoundTripper // shared transport — reuses TCP connections across requests
 	gvr         schema.GroupVersionResource
 	to          time.Duration
 	retries     int
@@ -83,10 +84,18 @@ func NewDynamicProvider(cfg Config) (*DynamicProvider, error) {
 		base.Timeout = cfg.Timeout
 	}
 
+	// Build the base transport once so the underlying TCP connections and TLS
+	// sessions are reused across all per-user requests.
+	baseRT, err := rest.TransportFor(base)
+	if err != nil {
+		return nil, fmt.Errorf("building useridentities provider transport: %w", err)
+	}
+
 	gvr := identityv1alpha1.SchemeGroupVersion.WithResource("useridentities")
 
 	return &DynamicProvider{
 		base:        base,
+		baseRT:      baseRT,
 		gvr:         gvr,
 		to:          cfg.Timeout,
 		retries:     max(0, cfg.Retries),
@@ -95,6 +104,7 @@ func NewDynamicProvider(cfg Config) (*DynamicProvider, error) {
 }
 
 // dynForUser creates a per-call client-go dynamic.Interface that forwards identity via X-Remote-*.
+// The underlying HTTP transport is shared across calls so TCP connections are reused.
 func (b *DynamicProvider) dynForUser(ctx context.Context) (dynamic.Interface, error) {
 	u, ok := apirequest.UserFrom(ctx)
 	if !ok || u == nil {
@@ -104,17 +114,15 @@ func (b *DynamicProvider) dynForUser(ctx context.Context) (dynamic.Interface, er
 	if b.to > 0 {
 		cfg.Timeout = b.to
 	}
-	prev := cfg.WrapTransport
-	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-		if prev != nil {
-			rt = prev(rt)
-		}
+	// Wrap the shared base transport with per-user X-Remote-* headers only.
+	// This avoids building a new TLS transport on every request.
+	cfg.WrapTransport = func(_ http.RoundTripper) http.RoundTripper {
 		return transport.NewAuthProxyRoundTripper(
 			u.GetName(),
 			u.GetUID(),
 			u.GetGroups(),
 			b.filterExtras(u.GetExtra()),
-			rt,
+			b.baseRT,
 		)
 	}
 	return dynamic.NewForConfig(cfg)

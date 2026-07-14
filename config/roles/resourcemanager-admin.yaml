@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: resourcemanager-admin
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: Resource Manager Admin
     kubernetes.io/description: Full access to manage organizations and projects
+    taxonomy.miloapis.com/product: Organization & Projects
+    taxonomy.miloapis.com/sort-order: "10"
 spec:
   launchStage: Beta
   inheritedRoles:

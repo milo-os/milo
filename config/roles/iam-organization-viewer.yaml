@@ -2,8 +2,12 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-organization-viewer
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: IAM Organization Viewer
+    taxonomy.miloapis.com/product: "Identity & Access Management"
+    taxonomy.miloapis.com/sort-order: "30"
     kubernetes.io/description: "View organization-scoped IAM resources"
 spec:
   launchStage: Beta

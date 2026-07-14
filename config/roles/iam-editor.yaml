@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: iam-editor
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: IAM Editor
     kubernetes.io/description: "Edit IAM resources"
+    taxonomy.miloapis.com/product: "Identity & Access Management"
+    taxonomy.miloapis.com/sort-order: "20"
 spec:
   launchStage: Beta
   inheritedRoles:

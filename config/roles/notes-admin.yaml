@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notes-admin
+  labels:
+    taxonomy.miloapis.com/role-category: feature
   annotations:
     kubernetes.io/display-name: Notes Admin
     kubernetes.io/description: "Full administrative access to notes and cluster notes."
+    taxonomy.miloapis.com/product: "Notes"
+    taxonomy.miloapis.com/sort-order: "10"
 spec:
   launchStage: Beta
   inheritedRoles:

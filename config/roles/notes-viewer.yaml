@@ -2,7 +2,11 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notes-viewer
+  labels:
+    taxonomy.miloapis.com/role-category: feature
   annotations:
+    taxonomy.miloapis.com/product: "Notes"
+    taxonomy.miloapis.com/sort-order: "30"
     kubernetes.io/display-name: Notes Viewer
     kubernetes.io/description: "Allows viewing notes and cluster notes."
 spec:

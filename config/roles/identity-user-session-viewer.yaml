@@ -2,9 +2,13 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: identity-user-session-viewer
+  labels:
+    taxonomy.miloapis.com/role-category: service
   annotations:
     kubernetes.io/display-name: Identity User-Session Viewer
     kubernetes.io/description: "Allows viewing user sessions and user identities."
+    taxonomy.miloapis.com/product: "Identity & Access Management"
+    taxonomy.miloapis.com/sort-order: "30"
 spec:
   launchStage: Beta
   includedPermissions:

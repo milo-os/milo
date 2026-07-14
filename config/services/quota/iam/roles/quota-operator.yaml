@@ -1,14 +1,17 @@
 apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
-  name: quota.miloapis.com-operator
   namespace: milo-system
+  name: quota.miloapis.com-operator
   annotations:
     kubernetes.io/display-name: Quota Operator
     kubernetes.io/description: Operational access to quota resources for system reconciliation, including full management of allowance buckets
+    taxonomy.miloapis.com/product: Quota
+    taxonomy.miloapis.com/sort-order: "30"
   labels:
     quota.miloapis.com/role-type: operator
     quota.miloapis.com/service: quota
+    taxonomy.miloapis.com/role-category: service
 spec:
   launchStage: Beta
   includedPermissions:

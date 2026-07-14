@@ -2,7 +2,11 @@ apiVersion: iam.miloapis.com/v1alpha1
 kind: Role
 metadata:
   name: notes-creator-editor
+  labels:
+    taxonomy.miloapis.com/role-category: feature
   annotations:
+    taxonomy.miloapis.com/product: "Notes"
+    taxonomy.miloapis.com/sort-order: "20"
     kubernetes.io/display-name: Notes Creator Editor
     kubernetes.io/description: "Allows the creator of a note to edit and delete their own note."
 spec:
