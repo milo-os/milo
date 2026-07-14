@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: milo-controller-manager
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: milo-controller-manager
