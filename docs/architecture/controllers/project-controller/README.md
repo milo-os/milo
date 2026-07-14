@@ -66,8 +66,7 @@ the following reconciliation logic:
 
 1. **Fetch Project**: Retrieve the `Project` resource from the control plane
    cluster
-2. **Handle Finalizers**: Process deletion and cleanup if the project is being
-   deleted
+2. **Handle Finalizers & Cleanup**: If the project is being deleted, transition through resource cleanup conditions (see Deletion and Cleanup section below) before removing the finalizer.
 3. **Check Readiness**: Skip reconciliation if the project is already in a ready
    state
 4. **Provision Infrastructure**: Create or update the `ProjectControlPlane` in
@@ -214,30 +213,35 @@ sequenceDiagram
     API->>PC: Project Deletion Event
 
     PC->>PC: Check finalizers exist
-    PC->>InfraAPI: Get ProjectControlPlane
-    InfraAPI-->>PC: ProjectControlPlane found
-
-    PC->>InfraAPI: Delete ProjectControlPlane
-    InfraAPI-->>PC: ProjectControlPlane deleted
-
-    Note over PC: Wait for infrastructure cleanup
-    PC->>InfraAPI: Verify ProjectControlPlane deleted
-    InfraAPI-->>PC: Not Found (404)
-
-    PC->>API: Remove finalizer from Project
+    Note over PC: Start multi-phase resource cleanup
+    loop Resource cleanup process
+        PC->>PC: Set ResourceCleanup condition to CleanupStarted
+        PC->>InfraAPI: Issue delete commands for project resources
+        PC->>PC: Set ResourceCleanup condition to CleanupAwaitingCompletion
+        PC->>InfraAPI: Poll resource state (IsPurgeComplete)
+        alt Resources remain
+            PC->>PC: Set ResourceCleanup condition to CleanupStarted (reissue deletes)
+        else All resources gone
+            PC->>PC: Set ResourceCleanup condition to CleanupComplete
+            PC->>API: Remove finalizer
+        end
+    end
     API->>API: Complete Project deletion
     API-->>User: Project deleted
 ```
 
 #### Deletion Steps
 
-The controller implements proper cleanup using Kubernetes finalizers:
+The controller implements proper multi-phase cleanup using Kubernetes finalizers and status conditions:
 
-1. **Finalizer Registration**: Adds finalizer to `Project` during creation
-2. **Deletion Detection**: Detects when `Project` has `deletionTimestamp` set
-3. **Infrastructure Cleanup**: Deletes corresponding `ProjectControlPlane` in
-   infrastructure cluster
-4. **Finalizer Removal**: Removes finalizer from `Project` to allow deletion
+1. **Finalizer Registration**: Adds finalizer to `Project` during creation.
+2. **Deletion Detection**: Detects when `Project` has `deletionTimestamp` set.
+3. **Resource Cleanup Initiation**: Sets the `ResourceCleanup` condition with reason `CleanupStarted`, issues delete commands for project resources.
+4. **Awaiting Resource Deletion**: Sets the condition to `CleanupAwaitingCompletion` while waiting for all project resources (e.g., namespaces, resources) to be removed in the target cluster.
+5. **Retry if Needed**: If resources remain, sets `CleanupStarted` again to re-issue deletes.
+6. **Cleanup Complete**: When resources are deleted, sets reason `CleanupComplete` and removes the finalizer from the Project to complete deletion.
+
+During this process, the controller accurately updates status conditions so clients and users can track deletion progress.
 
 ### Status Conditions
 
@@ -247,12 +251,19 @@ The controller implements proper cleanup using Kubernetes finalizers:
   - `True`: Project and infrastructure are ready
   - `False`: Project is provisioning or has issues
   - `Unknown`: Initial state or waiting for infrastructure
+- **ResourceCleanup**: Indicates resource cleanup progress during project deletion
+  - `True`, reason: `CleanupStarted` — Resource cleanup (deletion) has started, and the controller is actively issuing delete commands for project resources.
+  - `True`, reason: `CleanupAwaitingCompletion` — Delete commands have been issued and the controller is waiting for all referenced resources to be removed.
+  - `False`, reason: `CleanupComplete` — All project resources have been deleted; project deletion may now proceed.
 
 #### Condition Reasons
 
 - `Ready`: Project is fully operational
 - `Provisioning`: Project is being created/updated
 - `ProjectNameConflict`: Name already exists
+- `CleanupStarted`: Project resource deletion has started, delete commands issued
+- `CleanupAwaitingCompletion`: Waiting for resources to be removed after delete
+- `CleanupComplete`: All resources removed, deletion can complete
 - Infrastructure-specific reasons propagated from `ProjectControlPlane`
 
 ### Cross-Cluster Watching
@@ -312,3 +323,4 @@ The controller exposes standard controller-runtime metrics:
 
 Structured logging is used throughout the controller for reconciliation events,
 status updates, and error conditions.
+ 
