@@ -110,39 +110,5 @@ func (v *ProjectSuspensionValidator) ValidateUpdate(ctx context.Context, oldObj,
 }
 
 func (v *ProjectSuspensionValidator) ValidateDelete(ctx context.Context, obj *resourcemanagerv1alpha1.ProjectSuspension) (admission.Warnings, error) {
-	projectsuspensionlog.Info("Validating ProjectSuspension delete", "name", obj.Name)
-
-	// Allow deletion if the project is deleted or being deleted (garbage collection / cleanup)
-	projectName := obj.Spec.ProjectRef.Name
-	project := &resourcemanagerv1alpha1.Project{}
-	err := v.client.Get(ctx, client.ObjectKey{Name: projectName}, project)
-	if errors.IsNotFound(err) || (err == nil && project.DeletionTimestamp != nil) {
-		return nil, nil
-	}
-
-	req, err := admission.RequestFromContext(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get admission request from context: %w", err)
-	}
-
-	// Operators are members of "system:masters"
-	isOperator := false
-	for _, group := range req.UserInfo.Groups {
-		if group == "system:masters" {
-			isOperator = true
-			break
-		}
-	}
-
-	if obj.Spec.ReinstateAuthority == resourcemanagerv1alpha1.AuthorityOperator {
-		if !isOperator {
-			return nil, errors.NewForbidden(
-				resourcemanagerv1alpha1.GroupVersion.WithResource("projectsuspensions").GroupResource(),
-				obj.Name,
-				fmt.Errorf("only operators can lift/delete this suspension"),
-			)
-		}
-	}
-
 	return nil, nil
 }
