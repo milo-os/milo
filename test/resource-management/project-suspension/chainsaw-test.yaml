@@ -1,0 +1,109 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-suspension
+spec:
+  description: |
+    Tests ProjectSuspension validation webhooks and CEL validation rules.
+
+    This test verifies:
+    - Rejection of ProjectSuspension creation when referencing a non-existent project
+    - Immutable spec fields are protected by CEL validation rules on updates
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+
+  steps:
+    - name: setup-organization
+      description: Create Organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-suspension-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create Project in organization context
+      cluster: org
+      try:
+        - apply:
+            file: 02-test-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-suspension-project
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+
+    - name: test-invalid-project-reference
+      description: Verify that referencing a non-existent project is rejected by validating webhook
+      cluster: main
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main apply -f 04-invalid-project-ref.yaml 2>&1 | grep -q "not found"
+
+    - name: test-immutability-validation
+      description: Verify that immutable spec fields cannot be modified after creation
+      cluster: main
+      try:
+        - apply:
+            file: 03-projectsuspension.yaml
+        # Verify immutability of projectRef.name
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main patch projectsuspension active-suspension --type=merge -p '{"spec":{"projectRef":{"name":"changed-project"}}}' 2>&1 | grep -q "projectRef is immutable"
+        # Verify immutability of reason
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main patch projectsuspension active-suspension --type=merge -p '{"spec":{"reason":"Billing"}}' 2>&1 | grep -q "reason is immutable"
+        # Verify immutability of reinstateAuthority
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main patch projectsuspension active-suspension --type=merge -p '{"spec":{"reinstateAuthority":"Consumer"}}' 2>&1 | grep -q "reinstateAuthority is immutable"
+        # Verify immutability of requestedBy
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main patch projectsuspension active-suspension --type=merge -p '{"spec":{"requestedBy":"another-operator"}}' 2>&1 | grep -q "requestedBy is immutable"
+
+    - name: test-garbage-collection
+      description: Delete the project and verify that the ProjectSuspension is garbage collected
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              name: test-suspension-project
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-suspension-project
+            timeout: 60s
+            for:
+              deletion: {}
+        # Verify the ProjectSuspension is garbage collected (NotFound)
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main get projectsuspension active-suspension 2>&1 | grep -q "NotFound"

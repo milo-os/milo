@@ -11,6 +11,8 @@ spec:
           # Override kubeconfig to point to Milo API server
           - name: KUBECONFIG
             value: "/etc/kubernetes/config/kubeconfig"
+          - name: FEATURE_GATES
+            value: "ProjectSuspension=true"
         volumeMounts:
           - name: kubeconfig
             mountPath: /etc/kubernetes/config
