@@ -13,6 +13,9 @@ resources:
   - resourcemanager-reader.yaml
   - resourcemanager-editor.yaml
   - resourcemanager-admin.yaml
+  - resourcemanager-projectsuspensions-reader.yaml
+  - resourcemanager-projectsuspensions-editor.yaml
+  - resourcemanager-projectsuspensions-admin.yaml
   - core-reader.yaml
   - core-editor.yaml
   - core-admin.yaml

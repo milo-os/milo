@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: resourcemanager-projectsuspensions-admin
+  annotations:
+    kubernetes.io/display-name: Project Suspension Admin
+    kubernetes.io/description: Full access to manage project suspensions
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: resourcemanager-projectsuspensions-editor

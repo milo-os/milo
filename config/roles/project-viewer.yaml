@@ -11,3 +11,6 @@ spec:
     - resourcemanager.miloapis.com/projects.get
     - resourcemanager.miloapis.com/projects.list
     - resourcemanager.miloapis.com/projects.watch
+    - resourcemanager.miloapis.com/projectsuspensions.get
+    - resourcemanager.miloapis.com/projectsuspensions.list
+    - resourcemanager.miloapis.com/projectsuspensions.watch
