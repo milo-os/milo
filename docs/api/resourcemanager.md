@@ -14,6 +14,8 @@ Resource Types:
 
 - [Project](#project)
 
+- [ProjectSuspension](#projectsuspension)
+
 
 
 
@@ -1221,6 +1223,180 @@ with respect to the current state of the instance.<br/>
           <br/>
             <i>Format</i>: int64<br/>
             <i>Minimum</i>: 0<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+## ProjectSuspension
+<sup><sup>[↩ Parent](#resourcemanagermiloapiscomv1alpha1 )</sup></sup>
+
+
+
+
+
+
+ProjectSuspension represents the intent/record of a project suspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+      <td><b>apiVersion</b></td>
+      <td>string</td>
+      <td>resourcemanager.miloapis.com/v1alpha1</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b>kind</b></td>
+      <td>string</td>
+      <td>ProjectSuspension</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">metadata</a></b></td>
+      <td>object</td>
+      <td>Refer to the Kubernetes API documentation for the fields of the `metadata` field.</td>
+      <td>true</td>
+      </tr><tr>
+        <td><b><a href="#projectsuspensionspec">spec</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectSuspensionSpec defines the desired state of ProjectSuspension.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#projectsuspensionstatus">status</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectSuspensionStatus defines the observed state of ProjectSuspension.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProjectSuspension.spec
+<sup><sup>[↩ Parent](#projectsuspension)</sup></sup>
+
+
+
+ProjectSuspensionSpec defines the desired state of ProjectSuspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#projectsuspensionspecprojectref">projectRef</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectRef is a reference to the project that is suspended.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: projectRef is immutable</li>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reason</b></td>
+        <td>enum</td>
+        <td>
+          Reason is the category of suspension.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: reason is immutable</li>
+            <i>Enum</i>: Abuse, Billing, Compliance, Administrative<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reinstateAuthority</b></td>
+        <td>enum</td>
+        <td>
+          ReinstateAuthority defines who can lift this suspension.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: reinstateAuthority is immutable</li>
+            <i>Enum</i>: Operator, Consumer<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>requestedBy</b></td>
+        <td>string</td>
+        <td>
+          RequestedBy identifies the operator or automated system that requested the suspension.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: requestedBy is immutable</li>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>description</b></td>
+        <td>string</td>
+        <td>
+          Description provides human-readable context or notes about the suspension.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProjectSuspension.spec.projectRef
+<sup><sup>[↩ Parent](#projectsuspensionspec)</sup></sup>
+
+
+
+ProjectRef is a reference to the project that is suspended.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the name of resource being referenced<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### ProjectSuspension.status
+<sup><sup>[↩ Parent](#projectsuspension)</sup></sup>
+
+
+
+ProjectSuspensionStatus defines the observed state of ProjectSuspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>phase</b></td>
+        <td>enum</td>
+        <td>
+          Phase is the current status of the suspension.<br/>
+          <br/>
+            <i>Enum</i>: Active, Lifted<br/>
         </td>
         <td>false</td>
       </tr></tbody>
