@@ -1,0 +1,118 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: projectsuspensions.resourcemanager.miloapis.com
+spec:
+  group: resourcemanager.miloapis.com
+  names:
+    kind: ProjectSuspension
+    listKind: ProjectSuspensionList
+    plural: projectsuspensions
+    singular: projectsuspension
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.projectRef.name
+      name: Project
+      type: string
+    - jsonPath: .spec.reason
+      name: Reason
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ProjectSuspension represents the intent/record of a project suspension.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ProjectSuspensionSpec defines the desired state of ProjectSuspension.
+            properties:
+              description:
+                description: Description provides human-readable context or notes
+                  about the suspension.
+                type: string
+              projectRef:
+                description: ProjectRef is a reference to the project that is suspended.
+                properties:
+                  name:
+                    description: Name is the name of resource being referenced
+                    type: string
+                required:
+                - name
+                type: object
+                x-kubernetes-validations:
+                - message: projectRef is immutable
+                  rule: self == oldSelf
+              reason:
+                description: Reason is the category of suspension.
+                enum:
+                - Abuse
+                - Billing
+                - Compliance
+                - Administrative
+                type: string
+                x-kubernetes-validations:
+                - message: reason is immutable
+                  rule: self == oldSelf
+              reinstateAuthority:
+                description: ReinstateAuthority defines who can lift this suspension.
+                enum:
+                - Operator
+                - Consumer
+                type: string
+                x-kubernetes-validations:
+                - message: reinstateAuthority is immutable
+                  rule: self == oldSelf
+              requestedBy:
+                description: RequestedBy identifies the operator or automated system
+                  that requested the suspension.
+                type: string
+                x-kubernetes-validations:
+                - message: requestedBy is immutable
+                  rule: self == oldSelf
+            required:
+            - projectRef
+            - reason
+            - reinstateAuthority
+            - requestedBy
+            type: object
+          status:
+            description: ProjectSuspensionStatus defines the observed state of ProjectSuspension.
+            properties:
+              phase:
+                description: Phase is the current status of the suspension.
+                enum:
+                - Active
+                - Lifted
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,13 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: resourcemanager-projectsuspensions-reader
+  annotations:
+    kubernetes.io/display-name: Project Suspension Viewer
+    kubernetes.io/description: View access to project suspensions
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - resourcemanager.miloapis.com/projectsuspensions.get
+    - resourcemanager.miloapis.com/projectsuspensions.list
+    - resourcemanager.miloapis.com/projectsuspensions.watch

@@ -28,11 +28,26 @@ const (
 	// ProjectResourceCleanup indicates that project resources are being deleted
 	// as part of project teardown.
 	ProjectResourceCleanup = "ResourceCleanup"
+
+	// ProjectSuspended indicates whether the project is suspended.
+	ProjectSuspended = "Suspended"
 )
 
 const (
 	// ProjectReadyReason indicates that the project is ready for use.
 	ProjectReadyReason = "Ready"
+
+	// ProjectSuspendedReason indicates that the project is suspended.
+	ProjectSuspendedReason = "Suspended"
+
+	// ProjectSuspendingReason indicates that the project suspension is in progress.
+	ProjectSuspendingReason = "Suspending"
+
+	// ProjectReinstatingReason indicates that the project reinstatement is in progress.
+	ProjectReinstatingReason = "Reinstating"
+
+	// ProjectActiveReason indicates that the project is active.
+	ProjectActiveReason = "Active"
 
 	// ProjectProvisioningReason indicates that the project is provisioning.
 	ProjectProvisioningReason = "Provisioning"

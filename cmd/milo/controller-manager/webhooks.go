@@ -80,6 +80,9 @@ func registerCoreControlPlaneWebhooks(mgr controllerruntime.Manager, mcMgr mcman
 }
 
 func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager) error {
+	if err := resourcemanagerv1alpha1webhook.SetupProjectSuspensionWebhooksWithManager(mgr, SystemNamespace); err != nil {
+		return fmt.Errorf("setting up projectsuspension webhook: %w", err)
+	}
 	if err := resourcemanagerv1alpha1webhook.SetupProjectWebhooksWithManager(mgr, SystemNamespace, ProjectOwnerRoleName, ProjectOwnerRoleNamespace); err != nil {
 		return fmt.Errorf("setting up project webhook: %w", err)
 	}

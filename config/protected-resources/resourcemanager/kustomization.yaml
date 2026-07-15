@@ -5,3 +5,4 @@ resources:
   - organization.yaml
   - organizationmembership.yaml
   - project.yaml
+  - projectsuspension.yaml
