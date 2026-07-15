@@ -74,6 +74,12 @@ const (
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0
 	UnifiedOrganizations featuregate.Feature = "UnifiedOrganizations"
+
+	// ProjectSuspension enables project suspension and lifecycle controls.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	ProjectSuspension featuregate.Feature = "ProjectSuspension"
 )
 
 func init() {
@@ -88,6 +94,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		PreRelease: featuregate.Alpha,
 	},
 	EventsProxy: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	ProjectSuspension: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
