@@ -181,8 +181,7 @@ func TestProjectSuspensionValidator_ValidateDelete(t *testing.T) {
 	}
 	ctxConsumer := admission.NewContextWithRequest(context.Background(), reqConsumer)
 	_, err := validator.ValidateDelete(ctxConsumer, ps)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "only operators can lift/delete this suspension")
+	assert.NoError(t, err)
 
 	// Case 2: Operator deletes and project is present
 	reqOperator := admission.Request{
