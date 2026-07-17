@@ -4,19 +4,12 @@ metadata:
   name: test-suspension-lifecycle-project
 status:
   suspensions:
-  - projectSuspensionRef:
-      name: suspension-1
-    reason: Abuse
-  - projectSuspensionRef:
-      name: suspension-2
-    reason: Billing
-  - projectSuspensionRef:
-      name: suspension-3
-    reason: Compliance
-  conditions:
-  - type: Suspended
-    status: "True"
+  - reason: Abuse
+    reinstateAuthority: Operator
+  - reason: Billing
+    reinstateAuthority: Operator
+  - reason: Compliance
+    reinstateAuthority: Operator
+  (conditions[?type == 'Suspended']):
+  - status: "True"
     reason: Suspended
-  - type: Ready
-    status: "True"
-    reason: Ready

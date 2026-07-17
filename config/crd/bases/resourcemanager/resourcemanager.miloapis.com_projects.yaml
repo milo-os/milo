@@ -142,15 +142,6 @@ spec:
                   description: ProjectSuspensionInfo contains the details of a suspension
                     affecting the project.
                   properties:
-                    projectSuspensionRef:
-                      description: ProjectSuspensionRef is a reference to the ProjectSuspension.
-                      properties:
-                        name:
-                          description: Name is the name of resource being referenced
-                          type: string
-                      required:
-                      - name
-                      type: object
                     reason:
                       description: Reason is the category of suspension.
                       enum:
@@ -159,9 +150,21 @@ spec:
                       - Compliance
                       - Administrative
                       type: string
+                    reinstateAuthority:
+                      description: ReinstateAuthority defines who can lift this suspension.
+                      enum:
+                      - Operator
+                      - Consumer
+                      type: string
+                    suspendedAt:
+                      description: SuspendedAt is the timestamp when the suspension
+                        was created.
+                      format: date-time
+                      type: string
                   required:
-                  - projectSuspensionRef
                   - reason
+                  - reinstateAuthority
+                  - suspendedAt
                   type: object
                 type: array
             type: object

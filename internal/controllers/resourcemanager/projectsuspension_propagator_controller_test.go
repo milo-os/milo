@@ -78,7 +78,8 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 		}
 		suspension1 := &resourcemanagerv1alpha1.ProjectSuspension{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "suspension-b",
+				Name:              "suspension-b",
+				CreationTimestamp: metav1.Now(),
 			},
 			Spec: resourcemanagerv1alpha1.ProjectSuspensionSpec{
 				ProjectRef: resourcemanagerv1alpha1.ProjectReference{
@@ -93,7 +94,8 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 		}
 		suspension2 := &resourcemanagerv1alpha1.ProjectSuspension{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "suspension-a",
+				Name:              "suspension-a",
+				CreationTimestamp: metav1.Now(),
 			},
 			Spec: resourcemanagerv1alpha1.ProjectSuspensionSpec{
 				ProjectRef: resourcemanagerv1alpha1.ProjectReference{
@@ -146,10 +148,12 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 		}
 
 		if len(updatedProject.Status.Suspensions) != 2 ||
-			updatedProject.Status.Suspensions[0].ProjectSuspensionRef.Name != "suspension-a" ||
-			updatedProject.Status.Suspensions[0].Reason != resourcemanagerv1alpha1.ReasonBilling ||
-			updatedProject.Status.Suspensions[1].ProjectSuspensionRef.Name != "suspension-b" ||
-			updatedProject.Status.Suspensions[1].Reason != resourcemanagerv1alpha1.ReasonAbuse {
+			updatedProject.Status.Suspensions[0].Reason != resourcemanagerv1alpha1.ReasonAbuse ||
+			updatedProject.Status.Suspensions[0].ReinstateAuthority != resourcemanagerv1alpha1.AuthorityOperator ||
+			updatedProject.Status.Suspensions[0].SuspendedAt.IsZero() ||
+			updatedProject.Status.Suspensions[1].Reason != resourcemanagerv1alpha1.ReasonBilling ||
+			updatedProject.Status.Suspensions[1].ReinstateAuthority != resourcemanagerv1alpha1.AuthorityOperator ||
+			updatedProject.Status.Suspensions[1].SuspendedAt.IsZero() {
 			t.Errorf("unexpected suspensions: %+v", updatedProject.Status.Suspensions)
 		}
 
@@ -174,7 +178,8 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 		}
 		suspension1 := &resourcemanagerv1alpha1.ProjectSuspension{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "suspension-lifted",
+				Name:              "suspension-lifted",
+				CreationTimestamp: metav1.Now(),
 			},
 			Spec: resourcemanagerv1alpha1.ProjectSuspensionSpec{
 				ProjectRef: resourcemanagerv1alpha1.ProjectReference{
@@ -217,8 +222,9 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 		}
 
 		if len(updatedProject.Status.Suspensions) != 1 ||
-			updatedProject.Status.Suspensions[0].ProjectSuspensionRef.Name != "suspension-lifted" ||
-			updatedProject.Status.Suspensions[0].Reason != resourcemanagerv1alpha1.ReasonAbuse {
+			updatedProject.Status.Suspensions[0].Reason != resourcemanagerv1alpha1.ReasonAbuse ||
+			updatedProject.Status.Suspensions[0].ReinstateAuthority != resourcemanagerv1alpha1.AuthorityOperator ||
+			updatedProject.Status.Suspensions[0].SuspendedAt.IsZero() {
 			t.Errorf("unexpected suspensions: %+v", updatedProject.Status.Suspensions)
 		}
 

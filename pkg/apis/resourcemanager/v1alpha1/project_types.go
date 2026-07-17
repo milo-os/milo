@@ -12,22 +12,19 @@ type ProjectSpec struct {
 	OwnerRef OwnerReference `json:"ownerRef"`
 }
 
-// ProjectSuspensionReference contains information that points to the ProjectSuspension being referenced.
-type ProjectSuspensionReference struct {
-	// Name is the name of resource being referenced
-	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-}
-
 // ProjectSuspensionInfo contains the details of a suspension affecting the project.
 type ProjectSuspensionInfo struct {
-	// ProjectSuspensionRef is a reference to the ProjectSuspension.
-	// +kubebuilder:validation:Required
-	ProjectSuspensionRef ProjectSuspensionReference `json:"projectSuspensionRef"`
-
 	// Reason is the category of suspension.
 	// +kubebuilder:validation:Required
 	Reason ProjectSuspensionReason `json:"reason"`
+
+	// SuspendedAt is the timestamp when the suspension was created.
+	// +kubebuilder:validation:Required
+	SuspendedAt metav1.Time `json:"suspendedAt"`
+
+	// ReinstateAuthority defines who can lift this suspension.
+	// +kubebuilder:validation:Required
+	ReinstateAuthority ProjectSuspensionReinstateAuthority `json:"reinstateAuthority"`
 }
 
 // ProjectStatus defines the observed state of Project.

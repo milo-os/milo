@@ -61,10 +61,9 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 
 	for _, ps := range suspensionList.Items {
 		suspensions = append(suspensions, resourcemanagerv1alpha.ProjectSuspensionInfo{
-			ProjectSuspensionRef: resourcemanagerv1alpha.ProjectSuspensionReference{
-				Name: ps.Name,
-			},
-			Reason: ps.Spec.Reason,
+			Reason:             ps.Spec.Reason,
+			SuspendedAt:        ps.CreationTimestamp,
+			ReinstateAuthority: ps.Spec.ReinstateAuthority,
 		})
 		// Phase is active if it's explicitly Active, or not set to Lifted.
 		if ps.Status.Phase == resourcemanagerv1alpha.PhaseActive || ps.Status.Phase == "" {
@@ -72,9 +71,12 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 		}
 	}
 
-	// Sort suspensions by name for deterministic status output
+	// Sort suspensions deterministically (by Reason first, then by SuspendedAt)
 	sort.Slice(suspensions, func(i, j int) bool {
-		return suspensions[i].ProjectSuspensionRef.Name < suspensions[j].ProjectSuspensionRef.Name
+		if suspensions[i].Reason != suspensions[j].Reason {
+			return suspensions[i].Reason < suspensions[j].Reason
+		}
+		return suspensions[i].SuspendedAt.Before(&suspensions[j].SuspendedAt)
 	})
 	sort.Strings(activeSuspensionNames)
 

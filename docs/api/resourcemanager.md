@@ -1253,13 +1253,6 @@ ProjectSuspensionInfo contains the details of a suspension affecting the project
         </tr>
     </thead>
     <tbody><tr>
-        <td><b><a href="#projectstatussuspensionsindexprojectsuspensionref">projectSuspensionRef</a></b></td>
-        <td>object</td>
-        <td>
-          ProjectSuspensionRef is a reference to the ProjectSuspension.<br/>
-        </td>
-        <td>true</td>
-      </tr><tr>
         <td><b>reason</b></td>
         <td>enum</td>
         <td>
@@ -1268,31 +1261,22 @@ ProjectSuspensionInfo contains the details of a suspension affecting the project
             <i>Enum</i>: Abuse, Billing, Compliance, Administrative<br/>
         </td>
         <td>true</td>
-      </tr></tbody>
-</table>
-
-
-### Project.status.suspensions[index].projectSuspensionRef
-<sup><sup>[↩ Parent](#projectstatussuspensionsindex)</sup></sup>
-
-
-
-ProjectSuspensionRef is a reference to the ProjectSuspension.
-
-<table>
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Description</th>
-            <th>Required</th>
-        </tr>
-    </thead>
-    <tbody><tr>
-        <td><b>name</b></td>
+      </tr><tr>
+        <td><b>reinstateAuthority</b></td>
+        <td>enum</td>
+        <td>
+          ReinstateAuthority defines who can lift this suspension.<br/>
+          <br/>
+            <i>Enum</i>: Operator, Consumer<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>suspendedAt</b></td>
         <td>string</td>
         <td>
-          Name is the name of resource being referenced<br/>
+          SuspendedAt is the timestamp when the suspension was created.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
         </td>
         <td>true</td>
       </tr></tbody>
