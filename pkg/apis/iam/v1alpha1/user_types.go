@@ -101,10 +101,10 @@ type UserStatus struct {
 	RegistrationApproval RegistrationApprovalState `json:"registrationApproval,omitempty"`
 
 	// LastLoginProvider records the identity provider that was most recently used by the
-	// user to log in (e.g., "github" or "google"). This field is set by the auth provider
-	// based on authentication events.
+	// user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
+	// by the auth provider based on authentication events.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=github;google
+	// +kubebuilder:validation:Enum=github;google;passkey;email
 	LastLoginProvider AuthProvider `json:"lastLoginProvider,omitempty"`
 
 	// AvatarURL points to the avatar image associated with the user. This value is
@@ -124,12 +124,14 @@ type UserList struct {
 }
 
 // AuthProvider represents an external identity provider used for user authentication.
-// +kubebuilder:validation:Enum=github;google
+// +kubebuilder:validation:Enum=github;google;passkey;email
 type AuthProvider string
 
 const (
-	AuthProviderGitHub AuthProvider = "github"
-	AuthProviderGoogle AuthProvider = "google"
+	AuthProviderGitHub  AuthProvider = "github"
+	AuthProviderGoogle  AuthProvider = "google"
+	AuthProviderPasskey AuthProvider = "passkey"
+	AuthProviderEmail   AuthProvider = "email"
 )
 
 const (
