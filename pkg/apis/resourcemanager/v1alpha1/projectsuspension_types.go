@@ -6,10 +6,11 @@ import (
 )
 
 // ProjectSuspensionReason specifies the reason for the project suspension.
-// +kubebuilder:validation:Enum=Abuse;Billing;Compliance;Administrative
+// +kubebuilder:validation:Enum=Fraud;Abuse;Billing;Compliance;Administrative
 type ProjectSuspensionReason string
 
 const (
+	ReasonFraud          ProjectSuspensionReason = "Fraud"
 	ReasonAbuse          ProjectSuspensionReason = "Abuse"
 	ReasonBilling        ProjectSuspensionReason = "Billing"
 	ReasonCompliance     ProjectSuspensionReason = "Compliance"
@@ -83,6 +84,7 @@ type ProjectSuspensionStatus struct {
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.spec.reason`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:selectablefield:JSONPath=".spec.projectRef.name"
 
 // ProjectSuspension represents the intent/record of a project suspension.
 type ProjectSuspension struct {

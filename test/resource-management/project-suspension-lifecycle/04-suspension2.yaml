@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: ProjectSuspension
+metadata:
+  name: suspension-2
+spec:
+  projectRef:
+    name: test-suspension-lifecycle-project
+  reason: Billing
+  reinstateAuthority: Operator
+  requestedBy: operator-admin

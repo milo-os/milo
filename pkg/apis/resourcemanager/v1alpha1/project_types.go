@@ -12,12 +12,31 @@ type ProjectSpec struct {
 	OwnerRef OwnerReference `json:"ownerRef"`
 }
 
+// ProjectSuspensionInfo contains the details of a suspension affecting the project.
+type ProjectSuspensionInfo struct {
+	// Reason is the category of suspension.
+	// +kubebuilder:validation:Required
+	Reason ProjectSuspensionReason `json:"reason"`
+
+	// SuspendedAt is the timestamp when the suspension was created.
+	// +kubebuilder:validation:Required
+	SuspendedAt metav1.Time `json:"suspendedAt"`
+
+	// ReinstateAuthority defines who can lift this suspension.
+	// +kubebuilder:validation:Required
+	ReinstateAuthority ProjectSuspensionReinstateAuthority `json:"reinstateAuthority"`
+}
+
 // ProjectStatus defines the observed state of Project.
 type ProjectStatus struct {
 	// Represents the observations of a project's current state.
 	// Known condition types are: "Ready"
 	// +kubebuilder:default={{type: "Ready", status: "Unknown", reason: "Unknown", message: "Waiting for control plane to reconcile", lastTransitionTime: "1970-01-01T00:00:00Z"}}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Suspensions lists the active/all suspensions currently affecting the project.
+	// +kubebuilder:validation:Optional
+	Suspensions []ProjectSuspensionInfo `json:"suspensions,omitempty"`
 }
 
 const (
@@ -39,12 +58,6 @@ const (
 
 	// ProjectSuspendedReason indicates that the project is suspended.
 	ProjectSuspendedReason = "Suspended"
-
-	// ProjectSuspendingReason indicates that the project suspension is in progress.
-	ProjectSuspendingReason = "Suspending"
-
-	// ProjectReinstatingReason indicates that the project reinstatement is in progress.
-	ProjectReinstatingReason = "Reinstating"
 
 	// ProjectActiveReason indicates that the project is active.
 	ProjectActiveReason = "Active"

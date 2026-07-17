@@ -1,0 +1,121 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-suspension-lifecycle
+spec:
+  description: |
+    Tests the full lifecycle of project suspension propagation.
+
+    This test verifies:
+    - Adding multiple suspensions updates the project status with all references and reasons.
+    - Setting active suspensions sets the project condition 'Suspended' to True.
+    - Removing suspensions updates the status list accordingly.
+    - When all suspensions are removed, the 'Suspended' condition is set to False (Active).
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+
+  steps:
+    - name: setup-organization
+      description: Create Organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-suspension-lifecycle-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create Project in organization context
+      cluster: org
+      try:
+        - apply:
+            file: 02-test-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-suspension-lifecycle-project
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: add-first-suspension
+      description: Add first suspension and verify project is suspended
+      cluster: main
+      try:
+        - apply:
+            file: 03-suspension1.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspension1.yaml
+
+    - name: add-second-suspension
+      description: Add second suspension and verify project status lists both
+      cluster: main
+      try:
+        - apply:
+            file: 04-suspension2.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspension2.yaml
+
+    - name: add-third-suspension
+      description: Add third suspension and verify project status lists all three
+      cluster: main
+      try:
+        - apply:
+            file: 05-suspension3.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspension3.yaml
+
+    - name: remove-first-suspension
+      description: Delete first suspension and verify it is removed from project status
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-1
+        - assert:
+            cluster: org
+            file: assertions/assert-after-del1.yaml
+
+    - name: remove-second-suspension
+      description: Delete second suspension and verify it is removed from project status
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-2
+        - assert:
+            cluster: org
+            file: assertions/assert-after-del2.yaml
+
+    - name: remove-third-suspension
+      description: Delete third suspension and verify project returns to Active status
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-3
+        - assert:
+            cluster: org
+            file: assertions/assert-after-del3.yaml

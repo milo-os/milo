@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: ProjectSuspension
+metadata:
+  name: suspension-3
+spec:
+  projectRef:
+    name: test-suspension-lifecycle-project
+  reason: Compliance
+  reinstateAuthority: Operator
+  requestedBy: operator-admin

@@ -14,8 +14,7 @@ spec:
     kind: Organization
     name: test-project-creation-org
 status:
-  conditions:
-  - type: Ready
-    status: "True"
+  (conditions[?type == 'Ready']):
+  - status: "True"
     reason: Ready
     message: Project is ready
