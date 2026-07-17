@@ -1,0 +1,16 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-suspension-lifecycle-project
+status:
+  suspensions:
+  - projectSuspensionRef:
+      name: suspension-1
+    reason: Abuse
+  conditions:
+  - type: Suspended
+    status: "True"
+    reason: Suspended
+  - type: Ready
+    status: "True"
+    reason: Ready
