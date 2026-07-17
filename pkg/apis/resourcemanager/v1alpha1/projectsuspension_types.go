@@ -83,6 +83,7 @@ type ProjectSuspensionStatus struct {
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.spec.reason`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:selectablefield:JSONPath=".spec.projectRef.name"
 
 // ProjectSuspension represents the intent/record of a project suspension.
 type ProjectSuspension struct {

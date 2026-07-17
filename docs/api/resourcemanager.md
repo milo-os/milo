@@ -1148,6 +1148,13 @@ Known condition types are: "Ready"<br/>
             <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b><a href="#projectstatussuspensionsindex">suspensions</a></b></td>
+        <td>[]object</td>
+        <td>
+          Suspensions lists the active/all suspensions currently affecting the project.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -1225,6 +1232,69 @@ with respect to the current state of the instance.<br/>
             <i>Minimum</i>: 0<br/>
         </td>
         <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Project.status.suspensions[index]
+<sup><sup>[↩ Parent](#projectstatus)</sup></sup>
+
+
+
+ProjectSuspensionInfo contains the details of a suspension affecting the project.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#projectstatussuspensionsindexprojectsuspensionref">projectSuspensionRef</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectSuspensionRef is a reference to the ProjectSuspension.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reason</b></td>
+        <td>enum</td>
+        <td>
+          Reason is the category of suspension.<br/>
+          <br/>
+            <i>Enum</i>: Abuse, Billing, Compliance, Administrative<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### Project.status.suspensions[index].projectSuspensionRef
+<sup><sup>[↩ Parent](#projectstatussuspensionsindex)</sup></sup>
+
+
+
+ProjectSuspensionRef is a reference to the ProjectSuspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the name of resource being referenced<br/>
+        </td>
+        <td>true</td>
       </tr></tbody>
 </table>
 

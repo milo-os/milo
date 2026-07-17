@@ -351,3 +351,11 @@ rules:
   - projects/finalizers
   verbs:
   - update
+- apiGroups:
+  - resourcemanager.miloapis.com
+  resources:
+  - projectsuspensions
+  verbs:
+  - get
+  - list
+  - watch

@@ -135,6 +135,35 @@ spec:
                   - type
                   type: object
                 type: array
+              suspensions:
+                description: Suspensions lists the active/all suspensions currently
+                  affecting the project.
+                items:
+                  description: ProjectSuspensionInfo contains the details of a suspension
+                    affecting the project.
+                  properties:
+                    projectSuspensionRef:
+                      description: ProjectSuspensionRef is a reference to the ProjectSuspension.
+                      properties:
+                        name:
+                          description: Name is the name of resource being referenced
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    reason:
+                      description: Reason is the category of suspension.
+                      enum:
+                      - Abuse
+                      - Billing
+                      - Compliance
+                      - Administrative
+                      type: string
+                  required:
+                  - projectSuspensionRef
+                  - reason
+                  type: object
+                type: array
             type: object
         required:
         - spec

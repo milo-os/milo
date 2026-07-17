@@ -12,12 +12,34 @@ type ProjectSpec struct {
 	OwnerRef OwnerReference `json:"ownerRef"`
 }
 
+// ProjectSuspensionReference contains information that points to the ProjectSuspension being referenced.
+type ProjectSuspensionReference struct {
+	// Name is the name of resource being referenced
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+}
+
+// ProjectSuspensionInfo contains the details of a suspension affecting the project.
+type ProjectSuspensionInfo struct {
+	// ProjectSuspensionRef is a reference to the ProjectSuspension.
+	// +kubebuilder:validation:Required
+	ProjectSuspensionRef ProjectSuspensionReference `json:"projectSuspensionRef"`
+
+	// Reason is the category of suspension.
+	// +kubebuilder:validation:Required
+	Reason ProjectSuspensionReason `json:"reason"`
+}
+
 // ProjectStatus defines the observed state of Project.
 type ProjectStatus struct {
 	// Represents the observations of a project's current state.
 	// Known condition types are: "Ready"
 	// +kubebuilder:default={{type: "Ready", status: "Unknown", reason: "Unknown", message: "Waiting for control plane to reconcile", lastTransitionTime: "1970-01-01T00:00:00Z"}}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Suspensions lists the active/all suspensions currently affecting the project.
+	// +kubebuilder:validation:Optional
+	Suspensions []ProjectSuspensionInfo `json:"suspensions,omitempty"`
 }
 
 const (

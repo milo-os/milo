@@ -506,6 +506,14 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			projectSuspensionCtrl := resourcemanagercontroller.ProjectSuspensionPropagatorController{
+				Client: ctrl.GetClient(),
+			}
+			if err := projectSuspensionCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up project suspension controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			organizationCtrl := resourcemanagercontroller.OrganizationController{
 				Client:             ctrl.GetClient(),
 				OwnerRoleName:      OrganizationOwnerRoleName,
