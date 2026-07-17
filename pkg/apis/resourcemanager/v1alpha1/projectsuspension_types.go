@@ -6,10 +6,11 @@ import (
 )
 
 // ProjectSuspensionReason specifies the reason for the project suspension.
-// +kubebuilder:validation:Enum=Abuse;Billing;Compliance;Administrative
+// +kubebuilder:validation:Enum=Fraud;Abuse;Billing;Compliance;Administrative
 type ProjectSuspensionReason string
 
 const (
+	ReasonFraud          ProjectSuspensionReason = "Fraud"
 	ReasonAbuse          ProjectSuspensionReason = "Abuse"
 	ReasonBilling        ProjectSuspensionReason = "Billing"
 	ReasonCompliance     ProjectSuspensionReason = "Compliance"

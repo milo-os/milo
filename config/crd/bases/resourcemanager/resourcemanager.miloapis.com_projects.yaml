@@ -145,6 +145,7 @@ spec:
                     reason:
                       description: Reason is the category of suspension.
                       enum:
+                      - Fraud
                       - Abuse
                       - Billing
                       - Compliance

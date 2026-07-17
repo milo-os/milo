@@ -1258,7 +1258,7 @@ ProjectSuspensionInfo contains the details of a suspension affecting the project
         <td>
           Reason is the category of suspension.<br/>
           <br/>
-            <i>Enum</i>: Abuse, Billing, Compliance, Administrative<br/>
+            <i>Enum</i>: Fraud, Abuse, Billing, Compliance, Administrative<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -1368,7 +1368,7 @@ ProjectSuspensionSpec defines the desired state of ProjectSuspension.
           Reason is the category of suspension.<br/>
           <br/>
             <i>Validations</i>:<li>self == oldSelf: reason is immutable</li>
-            <i>Enum</i>: Abuse, Billing, Compliance, Administrative<br/>
+            <i>Enum</i>: Fraud, Abuse, Billing, Compliance, Administrative<br/>
         </td>
         <td>true</td>
       </tr><tr>
