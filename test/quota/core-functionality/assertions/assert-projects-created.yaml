@@ -6,14 +6,12 @@ items:
   metadata:
     name: core-test-basic-project-1
   status:
-    conditions:
-    - type: Ready
-      status: "True"
+    (conditions[?type == 'Ready']):
+    - status: "True"
 - apiVersion: resourcemanager.miloapis.com/v1alpha1
   kind: Project
   metadata:
     name: core-test-basic-project-2
   status:
-    conditions:
-    - type: Ready
-      status: "True"
+    (conditions[?type == 'Ready']):
+    - status: "True"
