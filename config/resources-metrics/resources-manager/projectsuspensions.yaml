@@ -1,0 +1,24 @@
+kind: CustomResourceStateMetrics
+spec:
+  resources:
+    - groupVersionKind:
+        group: "resourcemanager.miloapis.com"
+        kind: "ProjectSuspension"
+        version: "v1alpha1"
+      labelsFromPath:
+        name: [metadata, name]
+      metricNamePrefix: milo_projectsuspensions
+      metrics:
+        - name: "info"
+          each:
+            type: Info
+            info:
+              labelsFromPath:
+                project: ["spec", "projectRef", "name"]
+                reason: ["spec", "reason"]
+                phase: ["status", "phase"]
+        - name: "created_timestamp"
+          each:
+            type: Gauge
+            gauge:
+              path: [metadata, creationTimestamp]
