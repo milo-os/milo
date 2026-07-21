@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: admission-suspension-project
+spec:
+  ownerRef:
+    kind: Organization
+    name: admission-suspension-org
