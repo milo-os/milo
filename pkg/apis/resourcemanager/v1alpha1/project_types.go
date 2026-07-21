@@ -52,6 +52,15 @@ const (
 	ProjectSuspended = "Suspended"
 )
 
+// ProjectSuspendedCause is the metav1.StatusCause Type set on the
+// Details.Causes of the 403 Forbidden response returned by the
+// ProjectSuspensionEnforcement admission plugin when a write is denied
+// because the request's target project is suspended. API clients match on
+// this value (via apierrors.StatusError.ErrStatus.Details.Causes) to
+// distinguish suspension-caused denials from other admission failures
+// (quota, RBAC, NamespaceLifecycle's NamespaceTerminatingCause).
+const ProjectSuspendedCause metav1.CauseType = "ProjectSuspended"
+
 const (
 	// ProjectReadyReason indicates that the project is ready for use.
 	ProjectReadyReason = "Ready"
