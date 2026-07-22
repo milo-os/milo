@@ -147,5 +147,39 @@ at all. Using test-user is what actually exercises that code path.
 | 4 | `script` | 0 | 0 | *No description* |
 | 5 | `script` | 0 | 0 | *No description* |
 
+### Step: `unsuspend-project`
+
+Remove suspension from the project and wait for Suspended=False
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `delete` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
+| 3 | `sleep` | 0 | 0 | *No description* |
+
+### Step: `verify-create-allowed-after-reinstatement`
+
+Verify that creating a resource is allowed again after unsuspending
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `verify-update-allowed-after-reinstatement`
+
+Verify that updating a resource is allowed again after unsuspending
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `patch` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
+
 ---
 

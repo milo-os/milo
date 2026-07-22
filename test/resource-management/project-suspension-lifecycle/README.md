@@ -21,7 +21,7 @@ This test verifies:
 
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
-| 1 | [setup-organization](#step-setup-organization) | 0 | 2 | 0 | 0 | 0 |
+| 1 | [setup-organization](#step-setup-organization) | 0 | 3 | 0 | 0 | 0 |
 | 2 | [create-project](#step-create-project) | 0 | 2 | 0 | 0 | 0 |
 | 3 | [seed-namespace-before-suspension](#step-seed-namespace-before-suspension) | 0 | 2 | 0 | 0 | 0 |
 | 4 | [add-first-suspension](#step-add-first-suspension) | 0 | 2 | 0 | 0 | 0 |
@@ -44,7 +44,8 @@ Create Organization
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
-| 2 | `wait` | 0 | 0 | *No description* |
+| 2 | `apply` | 0 | 0 | *No description* |
+| 3 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `create-project`
 
