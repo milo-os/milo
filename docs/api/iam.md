@@ -3568,8 +3568,8 @@ populated by the auth provider or any service that provides a user avatar URL.<b
         <td>string</td>
         <td>
           LastLoginProvider records the identity provider that was most recently used by the
-user to log in (e.g., "github" or "google"). This field is set by the auth provider
-based on authentication events.<br/>
+user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
+by the auth provider based on authentication events.<br/>
         </td>
         <td>false</td>
       </tr><tr>

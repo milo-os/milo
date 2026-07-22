@@ -73,6 +73,10 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 
 	before := project.DeepCopy()
 
+	if !project.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
 	logger.Info("reconciling project suspension status", "project", project.Name)
 
 	// List ProjectSuspensions targeting this project
