@@ -261,7 +261,7 @@ func newSuspendedForbiddenError(attrs admission.Attributes, projectID string, s 
 	}
 
 	msg := fmt.Sprintf(
-		"project %q is suspended (%s) and cannot accept new writes while suspended",
+		"project %q is suspended (%s) and cannot accept new updates while suspended",
 		projectID, reasonList,
 	)
 
