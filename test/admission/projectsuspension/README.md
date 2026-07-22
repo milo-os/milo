@@ -6,6 +6,7 @@ This test verifies:
 - We can create and update resources in an active project.
 - When a project gets suspended, read and delete operations are still allowed.
 - When a project is suspended, create and update operations are rejected with a 403.
+- When a project is unsuspended, create and update operations are allowed again.
 
 
 ## Steps
@@ -22,6 +23,9 @@ This test verifies:
 | 8 | [verify-create-denied](#step-verify-create-denied) | 0 | 1 | 0 | 0 | 0 |
 | 9 | [verify-update-denied](#step-verify-update-denied) | 0 | 1 | 0 | 0 | 0 |
 | 10 | [verify-finalizer-removal-allowed](#step-verify-finalizer-removal-allowed) | 0 | 5 | 0 | 0 | 0 |
+| 11 | [unsuspend-project](#step-unsuspend-project) | 0 | 3 | 0 | 0 | 0 |
+| 12 | [verify-create-allowed-after-reinstatement](#step-verify-create-allowed-after-reinstatement) | 0 | 2 | 0 | 0 | 0 |
+| 13 | [verify-update-allowed-after-reinstatement](#step-verify-update-allowed-after-reinstatement) | 0 | 2 | 0 | 0 | 0 |
 
 ### Step: `setup-organization`
 

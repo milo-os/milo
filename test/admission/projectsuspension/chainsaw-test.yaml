@@ -10,6 +10,7 @@ spec:
     - We can create and update resources in an active project.
     - When a project gets suspended, read and delete operations are still allowed.
     - When a project is suspended, create and update operations are rejected with a 403.
+    - When a project is unsuspended, create and update operations are allowed again.
 
   clusters:
     main:
@@ -235,4 +236,60 @@ spec:
             timeout: 30s
             content: |
               kubectl --kubeconfig kubeconfig-project wait --for=delete ns/test-ns-finalizer --timeout=10s
+
+    - name: unsuspend-project
+      description: Remove suspension from the project and wait for Suspended=False
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: admission-suspension-1
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: admission-suspension-project
+            timeout: 30s
+            for:
+              condition:
+                name: Suspended
+                value: 'False'
+        - sleep:
+            duration: 1s
+
+    - name: verify-create-allowed-after-reinstatement
+      description: Verify that creating a resource is allowed again after unsuspending
+      cluster: project
+      try:
+        - apply:
+            file: 07-reinstated-ns.yaml
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-reinstated
+
+    - name: verify-update-allowed-after-reinstatement
+      description: Verify that updating a resource is allowed again after unsuspending
+      cluster: project
+      try:
+        - patch:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-update
+                labels:
+                  key: updated-after-reinstatement
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-update
+                labels:
+                  key: updated-after-reinstatement
+
 
