@@ -1,0 +1,68 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: organization-fast-deletion
+spec:
+  description: |
+    Regression test: deleting an Organization immediately after creating it
+    must still garbage-collect its namespace.
+
+    The organization-scoped namespace has to be owned by the Organization
+    from the instant it's created, not only once a later reconcile patches
+    the reference in. Otherwise a fast create-then-delete -- with no time
+    for that reconcile to ever run -- permanently orphans the namespace and
+    everything created inside it (OrganizationMemberships, PolicyBindings).
+
+  clusters:
+    org:
+      kubeconfig: kubeconfig-org
+
+  steps:
+    - name: setup
+      cluster: org
+      description: Remove any leftover state from earlier runs.
+      try:
+        - description: Remove any leftover organization from earlier runs
+          continueOnError: true
+          delete:
+            timeout: 60s
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              name: fast-deletion
+        - description: Ensure previous namespace is cleaned up
+          continueOnError: true
+          delete:
+            timeout: 120s
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: organization-fast-deletion
+
+    - name: create-and-immediately-delete
+      cluster: org
+      description: |
+        Create the Organization, confirm its namespace is already owned by
+        it, then delete the Organization with no intervening wait and
+        confirm the namespace is garbage-collected anyway.
+      try:
+        - description: Create test organization
+          apply:
+            file: 01-organization.yaml
+        - description: Namespace must be owned by the Organization from the moment it's created
+          assert:
+            file: assertions/assert-namespace-owned.yaml
+        - description: Delete the organization immediately, with no wait for any reconcile
+          delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              name: fast-deletion
+        - description: Namespace must be removed by the owner reference alone, without depending on reconcile timing
+          wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-fast-deletion
+            timeout: 60s
+            for:
+              deletion: {}

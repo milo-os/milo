@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: fast-deletion
+  labels:
+    test.miloapis.com/scenario: "organization-fast-deletion"
+  annotations:
+    kubernetes.io/description: "Organization for validating immediate-deletion namespace cleanup"
+    kubernetes.io/display-name: "Fast Deletion Test Organization"
+spec:
+  type: Standard
