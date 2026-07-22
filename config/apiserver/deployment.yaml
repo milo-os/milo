@@ -75,6 +75,11 @@ spec:
           - --serviceaccountkeys-provider-ca-file=$(SERVICEACCOUNTKEYS_PROVIDER_CA_FILE)
           - --serviceaccountkeys-provider-client-cert=$(SERVICEACCOUNTKEYS_PROVIDER_CLIENT_CERT_FILE)
           - --serviceaccountkeys-provider-client-key=$(SERVICEACCOUNTKEYS_PROVIDER_CLIENT_KEY_FILE)
+          # Passkeys provider configuration (requires Passkeys feature gate)
+          - --passkeys-provider-url=$(PASSKEYS_PROVIDER_URL)
+          - --passkeys-provider-ca-file=$(PASSKEYS_PROVIDER_CA_FILE)
+          - --passkeys-provider-client-cert=$(PASSKEYS_PROVIDER_CLIENT_CERT_FILE)
+          - --passkeys-provider-client-key=$(PASSKEYS_PROVIDER_CLIENT_KEY_FILE)
           # Events proxy provider configuration (requires EventsProxy feature gate)
           - --events-provider-url=$(EVENTS_PROVIDER_URL)
           - --events-provider-ca-file=$(EVENTS_PROVIDER_CA_FILE)
@@ -176,6 +181,15 @@ spec:
           - name: SERVICEACCOUNTKEYS_PROVIDER_CLIENT_CERT_FILE
             value: ""
           - name: SERVICEACCOUNTKEYS_PROVIDER_CLIENT_KEY_FILE
+            value: ""
+          # Passkeys provider configuration (requires --feature-gates=Passkeys=true)
+          - name: PASSKEYS_PROVIDER_URL
+            value: ""
+          - name: PASSKEYS_PROVIDER_CA_FILE
+            value: ""
+          - name: PASSKEYS_PROVIDER_CLIENT_CERT_FILE
+            value: ""
+          - name: PASSKEYS_PROVIDER_CLIENT_KEY_FILE
             value: ""
           # Events proxy provider configuration (requires --feature-gates=EventsProxy=true)
           - name: EVENTS_PROVIDER_URL

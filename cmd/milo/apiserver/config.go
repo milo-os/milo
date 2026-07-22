@@ -48,6 +48,7 @@ import (
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
+	passkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
@@ -83,6 +84,7 @@ type ExtraConfig struct {
 	SessionsProvider           SessionsProviderConfig
 	UserIdentitiesProvider     UserIdentitiesProviderConfig
 	ServiceAccountKeysProvider ServiceAccountKeysProviderConfig
+	PasskeysProvider           PasskeysProviderConfig
 	EventsProvider             EventsProviderConfig
 }
 
@@ -121,6 +123,17 @@ type EventsProviderConfig struct {
 
 // ServiceAccountKeysProviderConfig groups configuration for the serviceaccountkeys backend provider
 type ServiceAccountKeysProviderConfig struct {
+	URL            string
+	CAFile         string
+	ClientCertFile string
+	ClientKeyFile  string
+	TimeoutSeconds int
+	Retries        int
+	ForwardExtras  []string
+}
+
+// PasskeysProviderConfig groups configuration for the passkeys backend provider
+type PasskeysProviderConfig struct {
 	URL            string
 	CAFile         string
 	ClientCertFile string
@@ -243,6 +256,25 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 		provider.ServiceAccountKeys = backend
 	}
 
+	if utilfeature.DefaultFeatureGate.Enabled(features.Passkeys) {
+		allow := make(map[string]struct{}, len(c.ExtraConfig.PasskeysProvider.ForwardExtras))
+		for _, k := range c.ExtraConfig.PasskeysProvider.ForwardExtras {
+			allow[k] = struct{}{}
+		}
+		cfg := passkeysbackend.Config{
+			BaseConfig:     c.ControlPlane.Generic.LoopbackClientConfig,
+			ProviderURL:    c.ExtraConfig.PasskeysProvider.URL,
+			CAFile:         c.ExtraConfig.PasskeysProvider.CAFile,
+			ClientCertFile: c.ExtraConfig.PasskeysProvider.ClientCertFile,
+			ClientKeyFile:  c.ExtraConfig.PasskeysProvider.ClientKeyFile,
+			Timeout:        time.Duration(c.ExtraConfig.PasskeysProvider.TimeoutSeconds) * time.Second,
+			Retries:        c.ExtraConfig.PasskeysProvider.Retries,
+			ExtrasAllow:    allow,
+		}
+		backend, _ := passkeysbackend.NewDynamicProvider(cfg)
+		provider.Passkeys = backend
+	}
+
 	return provider
 }
 
@@ -322,6 +354,10 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		)
 		registry.RegisterStatic(
 			schema.GroupResource{Group: "identity.miloapis.com", Resource: "useridentities"},
+			discoveryctx.ContextUser,
+		)
+		registry.RegisterStatic(
+			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeys"},
 			discoveryctx.ContextUser,
 		)
 	}

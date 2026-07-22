@@ -32,6 +32,14 @@ const (
 	// alpha: v0.1.0
 	EventsProxy featuregate.Feature = "EventsProxy"
 
+	// Passkeys enables the identity.miloapis.com/v1alpha1 Passkey virtual API
+	// that proxies to an external identity provider for listing WebAuthn
+	// passkey credentials (read-only).
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.32.0
+	Passkeys featuregate.Feature = "Passkeys"
+
 	// Sessions enables the identity.miloapis.com/v1alpha1 Session virtual API
 	// that proxies to an external identity provider for session management.
 	//
@@ -94,6 +102,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		PreRelease: featuregate.Alpha,
 	},
 	EventsProxy: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	Passkeys: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},

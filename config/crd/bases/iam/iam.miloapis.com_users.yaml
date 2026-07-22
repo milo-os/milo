@@ -152,13 +152,17 @@ spec:
                 - enum:
                   - github
                   - google
+                  - passkey
+                  - email
                 - enum:
                   - github
                   - google
+                  - passkey
+                  - email
                 description: |-
                   LastLoginProvider records the identity provider that was most recently used by the
-                  user to log in (e.g., "github" or "google"). This field is set by the auth provider
-                  based on authentication events.
+                  user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
+                  by the auth provider based on authentication events.
                 type: string
               registrationApproval:
                 description: |-
