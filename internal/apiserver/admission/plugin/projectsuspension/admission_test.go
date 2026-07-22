@@ -429,3 +429,33 @@ func TestInformerCache_RealtimeUpdatesNoRequestGetCalls(t *testing.T) {
 	// 3. Verify real-time cache update: project is no longer suspended.
 	waitForSuspensionState(t, p, ctx, "proj-1", false)
 }
+
+func TestInformerCache_TerminatingProjectAndFinalizerRemoval(t *testing.T) {
+	proj := newUnstructuredProject("proj-terminating", true, resourcemanagerv1alpha1.ReasonFraud)
+	p, client := newTestPlugin(t, proj)
+
+	ctx := milorequest.WithProject(context.Background(), "proj-terminating")
+
+	// 1. Verify project is initially cached as suspended.
+	waitForSuspensionState(t, p, ctx, "proj-terminating", true)
+
+	// 2. Simulate setting a deletionTimestamp and finalizer on the suspended project (terminating state).
+	terminatingProj := proj.DeepCopy()
+	terminatingProj.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	terminatingProj.SetFinalizers([]string{"example.com/finalizer"})
+	terminatingProj.SetResourceVersion("1001")
+	if _, err := client.Resource(projectGVR).Update(context.Background(), terminatingProj, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("failed to update terminating project: %v", err)
+	}
+
+	// While still suspended, it remains cached as suspended during termination updates.
+	waitForSuspensionState(t, p, ctx, "proj-terminating", true)
+
+	// 3. Simulate finalizer removal leading to actual Delete event.
+	if err := client.Resource(projectGVR).Delete(context.Background(), "proj-terminating", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("failed to delete project: %v", err)
+	}
+
+	// 4. Verify Delete event flows through reflector.Delete and evicts the project from cache.
+	waitForSuspensionState(t, p, ctx, "proj-terminating", false)
+}
