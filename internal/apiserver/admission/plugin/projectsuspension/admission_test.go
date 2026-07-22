@@ -45,7 +45,7 @@ func newTestPlugin(t *testing.T, objects ...runtime.Object) (*Plugin, *fake.Fake
 	t.Cleanup(p.Close)
 
 	for i := 0; i < 100; i++ {
-		if len(p.suspensionCache.informer.GetStore().List()) >= len(objects) || p.suspensionCache.HasSynced() {
+		if p.suspensionCache.HasSynced() {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -345,12 +345,35 @@ func TestGetSuspensionState_ProjectNotFound_FailsOpen(t *testing.T) {
 	}
 }
 
+// TestGetSuspensionState_NonNotFoundError_FailsOpen exercises the live-Get
+// fallback path specifically: once the cache has synced a definitive
+// answer for a project, it never calls Get again for that project, so a
+// broken Get reactor alone doesn't reach the fallback. To reach it, List
+// must also be broken so the reflector never completes its initial sync —
+// only then does every check take the live-Get fallback, which is what
+// this test asserts fails open.
 func TestGetSuspensionState_NonNotFoundError_FailsOpen(t *testing.T) {
-	p, client := newTestPlugin(t, newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud))
-
+	scheme := runtime.NewScheme()
+	if err := resourcemanagerv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add scheme: %v", err)
+	}
+	client := fake.NewSimpleDynamicClient(scheme)
+	client.PrependReactor("list", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(errNonNotFound)
+	})
 	client.PrependReactor("get", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewInternalError(errNonNotFound)
 	})
+
+	p, err := NewPlugin()
+	if err != nil {
+		t.Fatalf("NewPlugin() error = %v", err)
+	}
+	p.SetDynamicClient(client)
+	if err := p.ValidateInitialization(); err != nil {
+		t.Fatalf("ValidateInitialization() error = %v", err)
+	}
+	t.Cleanup(p.Close)
 
 	ctx := milorequest.WithProject(context.Background(), "proj-1")
 	_, attrs := newAttrs(ctx, admission.Create, nil, namespaceGVR)
@@ -384,8 +407,41 @@ func TestValidate_AccessReviewExempt(t *testing.T) {
 	}
 }
 
+// waitForSuspensionState polls getSuspensionState until it matches wantSuspended
+// or the timeout elapses, since watch-event delivery through the fake dynamic
+// client is asynchronous with respect to the calling goroutine.
+func waitForSuspensionState(t *testing.T, p *Plugin, ctx context.Context, projectID string, wantSuspended bool) *suspensionState {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		state, err := p.getSuspensionState(ctx, projectID)
+		if err != nil {
+			t.Fatalf("getSuspensionState() error = %v", err)
+		}
+		suspended := state != nil && state.Suspended
+		if suspended == wantSuspended {
+			return state
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for suspended=%v, last state=%+v", wantSuspended, state)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestInformerCache_RealtimeUpdatesNoRequestGetCalls(t *testing.T) {
-	p, client := newTestPlugin(t)
+	p, client := newTestPlugin(t, newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud))
+
+	ctx := milorequest.WithProject(context.Background(), "proj-1")
+
+	// Warm-up: newTestPlugin only waits for the informer's own store to
+	// sync, which can race ahead of our suspended-projects map being
+	// populated (event-handler dispatch is asynchronous — see
+	// GetSuspensionState's doc comment). A live Get during this narrow
+	// cold-start window is expected and is not what this test asserts
+	// against; only install the call-counting reactor once the cache is
+	// fully warm, so we measure steady-state behavior.
+	waitForSuspensionState(t, p, ctx, "proj-1", true)
 
 	var getCalls int
 	client.PrependReactor("get", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -393,40 +449,27 @@ func TestInformerCache_RealtimeUpdatesNoRequestGetCalls(t *testing.T) {
 		return false, nil, nil
 	})
 
-	// 1. Add suspended project to informer store
-	proj := newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud)
-	if err := p.suspensionCache.informer.GetStore().Add(proj); err != nil {
-		t.Fatalf("failed to add project to store: %v", err)
-	}
-
-	ctx := milorequest.WithProject(context.Background(), "proj-1")
-
-	// 2. Initial check: project is suspended in cache, zero live GET calls made
-	state, err := p.getSuspensionState(ctx, "proj-1")
-	if err != nil {
-		t.Fatalf("getSuspensionState() error = %v", err)
-	}
-	if state == nil || !state.Suspended {
-		t.Fatalf("expected project proj-1 to be suspended in cache, got state=%+v", state)
+	// 1. Steady-state check: project is suspended in cache, zero live GET calls made.
+	state := waitForSuspensionState(t, p, ctx, "proj-1", true)
+	if !strings.Contains(uniqueSortedReasons(state.Suspensions)[0], "Fraud") {
+		t.Errorf("expected suspension reason to contain %q, got %+v", "Fraud", state.Suspensions)
 	}
 	if getCalls != 0 {
 		t.Errorf("getCalls = %d, want 0 (informer cache should serve from memory)", getCalls)
 	}
 
-	// 3. Unsuspend project in informer store
+	// 2. Unsuspend the project via the fake dynamic client, so a real watch
+	// event flows through the informer's event handlers into the cache map
+	// (rather than poking the map directly, which would not exercise the
+	// AddFunc/UpdateFunc wiring at all).
 	activeProj := newUnstructuredProject("proj-1", false)
-	if err := p.suspensionCache.informer.GetStore().Update(activeProj); err != nil {
-		t.Fatalf("failed to update project in store: %v", err)
+	activeProj.SetResourceVersion("999")
+	if _, err := client.Resource(projectGVR).Update(context.Background(), activeProj, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("failed to update project via fake client: %v", err)
 	}
 
-	// 4. Verify real-time cache update: project is no longer suspended
-	state, err = p.getSuspensionState(ctx, "proj-1")
-	if err != nil {
-		t.Fatalf("getSuspensionState() error = %v", err)
-	}
-	if state != nil && state.Suspended {
-		t.Fatalf("expected project proj-1 to be unsuspended in cache after update, got state=%+v", state)
-	}
+	// 3. Verify real-time cache update: project is no longer suspended.
+	waitForSuspensionState(t, p, ctx, "proj-1", false)
 	if getCalls != 0 {
 		t.Errorf("getCalls = %d, want 0 after unsuspension update", getCalls)
 	}
