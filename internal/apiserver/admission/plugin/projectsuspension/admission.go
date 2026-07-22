@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	utilcache "k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/initializer"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -41,16 +39,6 @@ import (
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	milorequest "go.miloapis.com/milo/pkg/request"
 )
-
-// defaultCacheTTL is the freshness window for cached suspension state.
-// Long enough to absorb request bursts, short enough that reinstatement
-// (Suspended flips to False) is picked up well within an interactive retry
-// window (NFR2).
-const defaultCacheTTL = 2 * time.Second
-
-// defaultCacheSize is generous relative to the expected number of
-// concurrently-active projects.
-const defaultCacheSize = 1024
 
 // Plugin denies Create/Update requests targeting a suspended project's
 // virtual control plane. It resolves the project from request context
@@ -64,9 +52,8 @@ type Plugin struct {
 	// root-scoped Project object, so no project-scoped client is needed.
 	dynamicClient dynamic.Interface
 
-	// cache holds *suspensionState keyed by projectID, TTL cacheTTL.
-	cache    *utilcache.LRUExpireCache
-	cacheTTL time.Duration
+	// suspensionCache maintains an in-memory, informer-backed cache of suspended projects.
+	suspensionCache *ProjectSuspensionCache
 
 	logger logr.Logger
 }
@@ -106,22 +93,34 @@ type suspensionState struct {
 // allowed during suspension so customers can clean up/offboard).
 func NewPlugin() (*Plugin, error) {
 	return &Plugin{
-		Handler:  admission.NewHandler(admission.Create, admission.Update),
-		cache:    utilcache.NewLRUExpireCache(defaultCacheSize),
-		cacheTTL: defaultCacheTTL,
-		logger:   klog.NewKlogr().WithName("project-suspension-enforcement"),
+		Handler: admission.NewHandler(admission.Create, admission.Update),
+		logger:  klog.NewKlogr().WithName("project-suspension-enforcement"),
 	}, nil
 }
 
 // SetDynamicClient implements initializer.WantsDynamicClient.
 func (p *Plugin) SetDynamicClient(c dynamic.Interface) {
 	p.dynamicClient = c
+	if c != nil && p.suspensionCache == nil {
+		p.suspensionCache = NewProjectSuspensionCache(c, p.logger)
+		p.suspensionCache.Start()
+	}
+}
+
+// Close stops the underlying project suspension informer cache.
+func (p *Plugin) Close() {
+	if p.suspensionCache != nil {
+		p.suspensionCache.Stop()
+	}
 }
 
 // ValidateInitialization implements admission.InitializationValidator.
 func (p *Plugin) ValidateInitialization() error {
 	if p.dynamicClient == nil {
 		return fmt.Errorf("%s: missing dynamic client", PluginName)
+	}
+	if p.suspensionCache == nil {
+		return fmt.Errorf("%s: missing suspension cache", PluginName)
 	}
 	return nil
 }
@@ -157,33 +156,12 @@ func (p *Plugin) Validate(ctx context.Context, attrs admission.Attributes, _ adm
 }
 
 // getSuspensionState resolves the suspension state of the project
-// identified by projectID, consulting the in-memory cache before falling
-// back to a live Get against the root apiserver.
+// identified by projectID, consulting the in-memory informer cache.
 func (p *Plugin) getSuspensionState(ctx context.Context, projectID string) (*suspensionState, error) {
-	if v, ok := p.cache.Get(projectID); ok {
-		s, _ := v.(*suspensionState)
-		return s, nil
+	if p.suspensionCache != nil {
+		return p.suspensionCache.GetSuspensionState(ctx, projectID)
 	}
-
-	obj, err := p.dynamicClient.Resource(projectGVR).Get(ctx, projectID, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		// A project that doesn't exist can't be "suspended"; some other
-		// layer (RBAC, routing) will reject the request anyway.
-		p.cache.Add(projectID, (*suspensionState)(nil), p.cacheTTL)
-		return nil, nil
-	case err != nil:
-		// Fail open: suspension enforcement is a policy safety net, not a
-		// security boundary. Don't let an unrelated infrastructure error
-		// (root apiserver reachability) block all writes to the project.
-		p.logger.V(2).Info("failed to get project for suspension check, failing open",
-			"projectID", projectID, "error", err)
-		return nil, nil
-	}
-
-	state := parseSuspensionState(obj)
-	p.cache.Add(projectID, state, p.cacheTTL)
-	return state, nil
+	return nil, nil
 }
 
 // parseSuspensionState extracts the Suspended condition and any active

@@ -42,6 +42,15 @@ func newTestPlugin(t *testing.T, objects ...runtime.Object) (*Plugin, *fake.Fake
 		t.Fatalf("ValidateInitialization() error = %v", err)
 	}
 
+	t.Cleanup(p.Close)
+
+	for i := 0; i < 100; i++ {
+		if len(p.suspensionCache.informer.GetStore().List()) >= len(objects) || p.suspensionCache.HasSynced() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	return p, client
 }
 
@@ -76,7 +85,7 @@ func newUnstructuredProject(name string, suspended bool, reasons ...resourcemana
 		}
 	}
 
-	return &unstructured.Unstructured{
+	u := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "resourcemanager.miloapis.com/v1alpha1",
 			"kind":       "Project",
@@ -86,6 +95,12 @@ func newUnstructuredProject(name string, suspended bool, reasons ...resourcemana
 			"status": status,
 		},
 	}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "resourcemanager.miloapis.com",
+		Version: "v1alpha1",
+		Kind:    "Project",
+	})
+	return u
 }
 
 func newAttrs(ctx context.Context, op admission.Operation, userInfo user.Info, resource schema.GroupVersionResource) (context.Context, admission.Attributes) {
@@ -369,35 +384,51 @@ func TestValidate_AccessReviewExempt(t *testing.T) {
 	}
 }
 
-func TestGetSuspensionState_CacheHitAvoidsSecondGetWithinTTL(t *testing.T) {
-	p, client := newTestPlugin(t, newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud))
-	p.cacheTTL = 20 * time.Millisecond
+func TestInformerCache_RealtimeUpdatesNoRequestGetCalls(t *testing.T) {
+	p, client := newTestPlugin(t)
 
 	var getCalls int
 	client.PrependReactor("get", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		getCalls++
-		return false, nil, nil // let default reactor chain handle it
+		return false, nil, nil
 	})
+
+	// 1. Add suspended project to informer store
+	proj := newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud)
+	if err := p.suspensionCache.informer.GetStore().Add(proj); err != nil {
+		t.Fatalf("failed to add project to store: %v", err)
+	}
 
 	ctx := milorequest.WithProject(context.Background(), "proj-1")
 
-	if _, err := p.getSuspensionState(ctx, "proj-1"); err != nil {
+	// 2. Initial check: project is suspended in cache, zero live GET calls made
+	state, err := p.getSuspensionState(ctx, "proj-1")
+	if err != nil {
 		t.Fatalf("getSuspensionState() error = %v", err)
 	}
-	if _, err := p.getSuspensionState(ctx, "proj-1"); err != nil {
-		t.Fatalf("getSuspensionState() error = %v", err)
+	if state == nil || !state.Suspended {
+		t.Fatalf("expected project proj-1 to be suspended in cache, got state=%+v", state)
 	}
-	if getCalls != 1 {
-		t.Errorf("getCalls = %d, want 1 (second call should hit cache)", getCalls)
+	if getCalls != 0 {
+		t.Errorf("getCalls = %d, want 0 (informer cache should serve from memory)", getCalls)
 	}
 
-	time.Sleep(p.cacheTTL + 20*time.Millisecond)
+	// 3. Unsuspend project in informer store
+	activeProj := newUnstructuredProject("proj-1", false)
+	if err := p.suspensionCache.informer.GetStore().Update(activeProj); err != nil {
+		t.Fatalf("failed to update project in store: %v", err)
+	}
 
-	if _, err := p.getSuspensionState(ctx, "proj-1"); err != nil {
+	// 4. Verify real-time cache update: project is no longer suspended
+	state, err = p.getSuspensionState(ctx, "proj-1")
+	if err != nil {
 		t.Fatalf("getSuspensionState() error = %v", err)
 	}
-	if getCalls != 2 {
-		t.Errorf("getCalls = %d, want 2 (call after TTL expiry should hit client again)", getCalls)
+	if state != nil && state.Suspended {
+		t.Fatalf("expected project proj-1 to be unsuspended in cache after update, got state=%+v", state)
+	}
+	if getCalls != 0 {
+		t.Errorf("getCalls = %d, want 0 after unsuspension update", getCalls)
 	}
 }
 
