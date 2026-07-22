@@ -35,6 +35,8 @@ spec:
       try:
         - apply:
             file: 01-test-organization.yaml
+        - apply:
+            file: 07-test-user-rbac.yaml
         - wait:
             apiVersion: v1
             kind: Namespace
