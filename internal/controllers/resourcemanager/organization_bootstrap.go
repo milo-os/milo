@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -33,6 +34,17 @@ func EnsureOrganizationNamespace(ctx context.Context, c client.Client, org *reso
 				"resourcemanager.miloapis.com/type":         "organization",
 			},
 		},
+	}
+
+	// Owning the namespace by the Organization lets Kubernetes garbage-collect
+	// it -- and everything created inside it, e.g. OrganizationMemberships and
+	// PolicyBindings -- the moment the Organization is deleted. This has to be
+	// set here, synchronously with namespace creation: a later reconcile that
+	// patches the reference in after the fact can lose the race against a fast
+	// create-then-delete (e.g. e2e test churn deleting the Organization within
+	// seconds), permanently orphaning the namespace and everything in it.
+	if err := controllerutil.SetControllerReference(org, namespace, c.Scheme()); err != nil {
+		return fmt.Errorf("setting organization owner reference on namespace: %w", err)
 	}
 
 	if err := c.Create(ctx, namespace); err != nil {
