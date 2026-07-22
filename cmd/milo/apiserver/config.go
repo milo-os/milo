@@ -46,6 +46,7 @@ import (
 	svmrest "k8s.io/kubernetes/pkg/registry/storagemigration/rest"
 
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
@@ -420,6 +421,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 	// Add readiness check for quota validator to ensure cache is synced before serving traffic
 	kubeAPIs.Generic.AddReadyzChecks(admissionquota.ReadinessCheck())
+
+	// Add readiness check for project suspension cache to ensure it's synced before serving traffic
+	kubeAPIs.Generic.AddReadyzChecks(projectsuspension.ReadinessCheck())
 
 	// Add post-start hook to bootstrap CRDs from embedded filesystem
 	// This installs all CRDs EXCEPT infrastructure.miloapis.com group, which should remain in the infrastructure cluster

@@ -334,52 +334,22 @@ func TestValidate_NoProjectInContext_NoOpNoClientCall(t *testing.T) {
 	}
 }
 
-func TestGetSuspensionState_ProjectNotFound_FailsOpen(t *testing.T) {
+// TestGetSuspensionState_UnknownProject_Allows covers a project absent
+// from the cache — whether because it doesn't exist, or because it hasn't
+// been observed yet. There is no live API fallback (see GetSuspensionState
+// in cache.go): the apiserver's /readyz check (ReadinessCheck in
+// register.go) is what guarantees the cache is synced before real traffic
+// arrives, not a per-request escape hatch here. So absence from the cache
+// always means "allow" — there is no separate lookup-error path to test
+// anymore.
+func TestGetSuspensionState_UnknownProject_Allows(t *testing.T) {
 	p, _ := newTestPlugin(t) // no projects registered
 
 	ctx := milorequest.WithProject(context.Background(), "missing-project")
 	_, attrs := newAttrs(ctx, admission.Create, nil, namespaceGVR)
 
 	if err := p.Validate(ctx, attrs, nil); err != nil {
-		t.Errorf("Validate() error = %v, want nil (fail open on 404)", err)
-	}
-}
-
-// TestGetSuspensionState_NonNotFoundError_FailsOpen exercises the live-Get
-// fallback path specifically: once the cache has synced a definitive
-// answer for a project, it never calls Get again for that project, so a
-// broken Get reactor alone doesn't reach the fallback. To reach it, List
-// must also be broken so the reflector never completes its initial sync —
-// only then does every check take the live-Get fallback, which is what
-// this test asserts fails open.
-func TestGetSuspensionState_NonNotFoundError_FailsOpen(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := resourcemanagerv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add scheme: %v", err)
-	}
-	client := fake.NewSimpleDynamicClient(scheme)
-	client.PrependReactor("list", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewInternalError(errNonNotFound)
-	})
-	client.PrependReactor("get", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewInternalError(errNonNotFound)
-	})
-
-	p, err := NewPlugin()
-	if err != nil {
-		t.Fatalf("NewPlugin() error = %v", err)
-	}
-	p.SetDynamicClient(client)
-	if err := p.ValidateInitialization(); err != nil {
-		t.Fatalf("ValidateInitialization() error = %v", err)
-	}
-	t.Cleanup(p.Close)
-
-	ctx := milorequest.WithProject(context.Background(), "proj-1")
-	_, attrs := newAttrs(ctx, admission.Create, nil, namespaceGVR)
-
-	if err := p.Validate(ctx, attrs, nil); err != nil {
-		t.Errorf("Validate() error = %v, want nil (fail open on non-404 error)", err)
+		t.Errorf("Validate() error = %v, want nil for a project absent from the cache", err)
 	}
 }
 
@@ -414,10 +384,7 @@ func waitForSuspensionState(t *testing.T, p *Plugin, ctx context.Context, projec
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
-		state, err := p.getSuspensionState(ctx, projectID)
-		if err != nil {
-			t.Fatalf("getSuspensionState() error = %v", err)
-		}
+		state := p.getSuspensionState(ctx, projectID)
 		suspended := state != nil && state.Suspended
 		if suspended == wantSuspended {
 			return state
@@ -434,34 +401,25 @@ func TestInformerCache_RealtimeUpdatesNoRequestGetCalls(t *testing.T) {
 
 	ctx := milorequest.WithProject(context.Background(), "proj-1")
 
-	// Warm-up: newTestPlugin only waits for the informer's own store to
-	// sync, which can race ahead of our suspended-projects map being
-	// populated (event-handler dispatch is asynchronous — see
-	// GetSuspensionState's doc comment). A live Get during this narrow
-	// cold-start window is expected and is not what this test asserts
-	// against; only install the call-counting reactor once the cache is
-	// fully warm, so we measure steady-state behavior.
-	waitForSuspensionState(t, p, ctx, "proj-1", true)
-
-	var getCalls int
+	// GetSuspensionState has no live API fallback at all (see its doc
+	// comment) — this reactor is a structural regression guard: it fails
+	// the test immediately if that ever changes, rather than merely
+	// counting calls.
 	client.PrependReactor("get", "projects", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		getCalls++
+		t.Fatalf("GetSuspensionState must never call the API server directly")
 		return false, nil, nil
 	})
 
-	// 1. Steady-state check: project is suspended in cache, zero live GET calls made.
+	// 1. Steady-state check: project is suspended in cache.
 	state := waitForSuspensionState(t, p, ctx, "proj-1", true)
 	if !strings.Contains(uniqueSortedReasons(state.Suspensions)[0], "Fraud") {
 		t.Errorf("expected suspension reason to contain %q, got %+v", "Fraud", state.Suspensions)
 	}
-	if getCalls != 0 {
-		t.Errorf("getCalls = %d, want 0 (informer cache should serve from memory)", getCalls)
-	}
 
 	// 2. Unsuspend the project via the fake dynamic client, so a real watch
-	// event flows through the informer's event handlers into the cache map
-	// (rather than poking the map directly, which would not exercise the
-	// AddFunc/UpdateFunc wiring at all).
+	// event flows through the reflector's Update path into the cache map
+	// (rather than poking the map directly, which would not exercise that
+	// wiring at all).
 	activeProj := newUnstructuredProject("proj-1", false)
 	activeProj.SetResourceVersion("999")
 	if _, err := client.Resource(projectGVR).Update(context.Background(), activeProj, metav1.UpdateOptions{}); err != nil {
@@ -470,13 +428,4 @@ func TestInformerCache_RealtimeUpdatesNoRequestGetCalls(t *testing.T) {
 
 	// 3. Verify real-time cache update: project is no longer suspended.
 	waitForSuspensionState(t, p, ctx, "proj-1", false)
-	if getCalls != 0 {
-		t.Errorf("getCalls = %d, want 0 after unsuspension update", getCalls)
-	}
 }
-
-var errNonNotFound = &testError{"transient lookup failure"}
-
-type testError struct{ msg string }
-
-func (e *testError) Error() string { return e.msg }

@@ -139,15 +139,7 @@ func (p *Plugin) Validate(ctx context.Context, attrs admission.Attributes, _ adm
 		return nil
 	}
 
-	state, err := p.getSuspensionState(ctx, projectID)
-	if err != nil {
-		// getSuspensionState already fails open internally on lookup
-		// errors other than NotFound; this is a defensive backstop.
-		p.logger.V(2).Info("failed to resolve project suspension state, failing open",
-			"projectID", projectID, "error", err)
-		return nil
-	}
-
+	state := p.getSuspensionState(ctx, projectID)
 	if state == nil || !state.Suspended {
 		return nil
 	}
@@ -157,11 +149,11 @@ func (p *Plugin) Validate(ctx context.Context, attrs admission.Attributes, _ adm
 
 // getSuspensionState resolves the suspension state of the project
 // identified by projectID, consulting the in-memory informer cache.
-func (p *Plugin) getSuspensionState(ctx context.Context, projectID string) (*suspensionState, error) {
+func (p *Plugin) getSuspensionState(ctx context.Context, projectID string) *suspensionState {
 	if p.suspensionCache != nil {
 		return p.suspensionCache.GetSuspensionState(ctx, projectID)
 	}
-	return nil, nil
+	return nil
 }
 
 // parseSuspensionState extracts the Suspended condition and any active

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -190,30 +189,7 @@ func (c *ProjectSuspensionCache) Stop() {
 }
 
 // GetSuspensionState returns the suspension state for the given projectID.
-// The common case is a lock-guarded map lookup with no parsing involved.
-func (c *ProjectSuspensionCache) GetSuspensionState(ctx context.Context, projectID string) (*suspensionState, error) {
-	if state, ok := c.store.lookup(projectID); ok {
-		return state, nil
-	}
-
-	if c.store.hasSynced() {
-		// Store is synced and projectID has no entry -> project is not
-		// suspended (or doesn't exist).
-		return nil, nil
-	}
-
-	// Defensive fallback during initial boot before the reflector's first
-	// List completes.
-	c.logger.V(2).Info("Reflector not yet synced; executing live fallback Get", "projectID", projectID)
-	obj, err := c.dynamicClient.Resource(projectGVR).Get(ctx, projectID, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		return nil, nil
-	case err != nil:
-		c.logger.V(2).Info("failed to get project for suspension check, failing open",
-			"projectID", projectID, "error", err)
-		return nil, nil
-	}
-
-	return parseSuspensionState(obj), nil
+func (c *ProjectSuspensionCache) GetSuspensionState(_ context.Context, projectID string) *suspensionState {
+	state, _ := c.store.lookup(projectID)
+	return state
 }
