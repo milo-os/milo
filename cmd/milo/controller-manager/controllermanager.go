@@ -667,7 +667,12 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			mcMgr, err := mcmanager.New(ctrlConfig, provider, mcmanager.Options{
+			// provider is passed through WithoutAutoStart/EngageAlways instead of
+			// directly to mcmanager.New so cluster engagement runs on every
+			// controller-manager replica, not only the elected leader -- see the
+			// TODO in pkg/multicluster-runtime/milo/nonleader.go
+			// (datum-cloud/compute#117).
+			mcMgr, err := mcmanager.New(ctrlConfig, miloprovider.WithoutAutoStart(provider), mcmanager.Options{
 				Scheme: Scheme,
 				Logger: logger.WithName("multicluster"),
 				Metrics: metricsserver.Options{
@@ -676,6 +681,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			})
 			if err != nil {
 				logger.Error(err, "Error creating multicluster manager")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			if err := miloprovider.EngageAlways(mcMgr, provider); err != nil {
+				logger.Error(err, "Error wiring multicluster quota provider engagement")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
