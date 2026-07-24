@@ -118,12 +118,11 @@ rules:
   - iam.miloapis.com
   resources:
   - platformaccesses
+  - roles
+  - serviceaccounts
   verbs:
-  - create
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - iam.miloapis.com
@@ -133,15 +132,6 @@ rules:
   - get
   - list
   - update
-  - watch
-- apiGroups:
-  - iam.miloapis.com
-  resources:
-  - roles
-  - serviceaccounts
-  verbs:
-  - get
-  - list
   - watch
 - apiGroups:
   - iam.miloapis.com
