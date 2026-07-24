@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 	crd "go.miloapis.com/milo/config/crd"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
+	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 	projectstorage "go.miloapis.com/milo/internal/apiserver/storage/project"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -72,6 +74,10 @@ var (
 	serviceAccountKeysProviderCAFile     string
 	serviceAccountKeysProviderClientCert string
 	serviceAccountKeysProviderClientKey  string
+	passkeysProviderURL                  string
+	passkeysProviderCAFile               string
+	passkeysProviderClientCert           string
+	passkeysProviderClientKey            string
 	eventsProviderURL                    string
 	eventsProviderCAFile                 string
 	eventsProviderClientCert             string
@@ -79,6 +85,7 @@ var (
 	eventsProviderTimeoutSeconds         int
 	eventsProviderRetries                int
 	eventsForwardExtras                  []string
+	sharedETCDClientPoolSize             int
 )
 
 // NewCommand creates a *cobra.Command object with default parameters
@@ -192,6 +199,10 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&serviceAccountKeysProviderCAFile, "serviceaccountkeys-provider-ca-file", "", "Path to CA file to validate serviceaccountkeys provider TLS")
 	fs.StringVar(&serviceAccountKeysProviderClientCert, "serviceaccountkeys-provider-client-cert", "", "Client certificate for mTLS to serviceaccountkeys provider")
 	fs.StringVar(&serviceAccountKeysProviderClientKey, "serviceaccountkeys-provider-client-key", "", "Client private key for mTLS to serviceaccountkeys provider")
+	fs.StringVar(&passkeysProviderURL, "passkeys-provider-url", "", "Direct provider base URL for passkeys (e.g., https://zitadel-apiserver:8443)")
+	fs.StringVar(&passkeysProviderCAFile, "passkeys-provider-ca-file", "", "Path to CA file to validate passkeys provider TLS")
+	fs.StringVar(&passkeysProviderClientCert, "passkeys-provider-client-cert", "", "Client certificate for mTLS to passkeys provider")
+	fs.StringVar(&passkeysProviderClientKey, "passkeys-provider-client-key", "", "Client private key for mTLS to passkeys provider")
 	fs.StringVar(&eventsProviderURL, "events-provider-url", "", "Activity API server URL for events storage (e.g., https://activity-apiserver.activity-system.svc:443)")
 	fs.StringVar(&eventsProviderCAFile, "events-provider-ca-file", "", "Path to CA file to validate Activity provider TLS")
 	fs.StringVar(&eventsProviderClientCert, "events-provider-client-cert", "", "Client certificate for mTLS to Activity provider")
@@ -199,6 +210,7 @@ func NewCommand() *cobra.Command {
 	fs.IntVar(&eventsProviderTimeoutSeconds, "events-provider-timeout", 30, "Activity provider request timeout in seconds")
 	fs.IntVar(&eventsProviderRetries, "events-provider-retries", 3, "Activity provider request retries")
 	fs.StringSliceVar(&eventsForwardExtras, "events-forward-extras", []string{"iam.miloapis.com/parent-api-group", "iam.miloapis.com/parent-type", "iam.miloapis.com/parent-name"}, "User extras keys to forward to Activity for events")
+	fs.IntVar(&sharedETCDClientPoolSize, "shared-etcd-client-pool-size", 32, "Number of etcd client connections opened per transport and round-robined across all project control plane watch caches. Higher values spread watch progress traffic across more gRPC streams at the cost of more connections. Minimum 1.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
@@ -214,6 +226,7 @@ func NewOptions() *options.Options {
 	}
 
 	admissionquota.Register(s.Admission.GenericAdmission.Plugins)
+	projectsuspension.Register(s.Admission.GenericAdmission.Plugins)
 
 	s.Admission.GenericAdmission.RecommendedPluginOrder = GetMiloOrderedPlugins()
 
@@ -239,6 +252,9 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	klog.Infof("Version: %+v", version.Get())
 
 	klog.InfoS("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
+
+	etcdshared.SetSharedClientPoolSize(sharedETCDClientPoolSize)
+	klog.InfoS("Shared etcd client pool configured", "size", sharedETCDClientPoolSize)
 
 	config, err := NewConfig(opts)
 	if err != nil {
@@ -268,6 +284,14 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	config.ExtraConfig.ServiceAccountKeysProvider.TimeoutSeconds = providerTimeoutSeconds
 	config.ExtraConfig.ServiceAccountKeysProvider.Retries = providerRetries
 	config.ExtraConfig.ServiceAccountKeysProvider.ForwardExtras = forwardExtras
+
+	config.ExtraConfig.PasskeysProvider.URL = passkeysProviderURL
+	config.ExtraConfig.PasskeysProvider.CAFile = passkeysProviderCAFile
+	config.ExtraConfig.PasskeysProvider.ClientCertFile = passkeysProviderClientCert
+	config.ExtraConfig.PasskeysProvider.ClientKeyFile = passkeysProviderClientKey
+	config.ExtraConfig.PasskeysProvider.TimeoutSeconds = providerTimeoutSeconds
+	config.ExtraConfig.PasskeysProvider.Retries = providerRetries
+	config.ExtraConfig.PasskeysProvider.ForwardExtras = forwardExtras
 
 	config.ExtraConfig.EventsProvider.URL = eventsProviderURL
 	config.ExtraConfig.EventsProvider.CAFile = eventsProviderCAFile

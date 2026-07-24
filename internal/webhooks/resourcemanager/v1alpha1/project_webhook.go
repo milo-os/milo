@@ -229,6 +229,12 @@ func (v *ProjectValidator) createOwnerPolicyBinding(ctx context.Context, project
 			// TODO: Will need to re-consider this when the folder type can be
 			//       introduced as a parent. Maybe we have an Owner field in the spec?
 			Namespace: fmt.Sprintf("organization-%s", project.Spec.OwnerRef.Name),
+			Labels: map[string]string{
+				// Lets the subject-binding reaper controller find this binding
+				// when foundUser is deleted; the OwnerReference below only
+				// covers cleanup when the Project itself is deleted.
+				v1alpha1.SubjectUserNameLabel: foundUser.Name,
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: v1alpha1.GroupVersion.String(),

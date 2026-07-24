@@ -2,6 +2,7 @@ package app
 
 import (
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	"k8s.io/apimachinery/pkg/util/sets"
 	validatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/validating"
 	mutatingwebhook "k8s.io/apiserver/pkg/admission/plugin/webhook/mutating"
@@ -22,7 +23,11 @@ func GetMiloOrderedPlugins() []string {
 	for _, plugin := range options.AllOrderedPlugins {
 		if plugin == "ValidatingAdmissionPolicy" {
 			// Insert our custom validating plugins here, before ValidatingAdmissionPolicy
-			// This ensures they run before the generic webhook validators
+			// This ensures they run before the generic webhook validators.
+			// ProjectSuspensionEnforcement runs before ResourceQuotaEnforcement
+			// so a denied-for-suspension request never triggers ResourceClaim
+			// creation.
+			plugins = append(plugins, projectsuspension.PluginName)
 			plugins = append(plugins, admissionquota.PluginName)
 		}
 		plugins = append(plugins, plugin)
@@ -33,7 +38,8 @@ func GetMiloOrderedPlugins() []string {
 
 // MiloAdmissionPlugins lists all Milo-specific admission plugins
 var MiloAdmissionPlugins = sets.New[string](
-	admissionquota.PluginName, // ResourceQuotaEnforcement
+	admissionquota.PluginName,    // ResourceQuotaEnforcement
+	projectsuspension.PluginName, // ProjectSuspensionEnforcement
 	// Add future Milo admission plugins here
 )
 

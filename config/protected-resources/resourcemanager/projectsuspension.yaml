@@ -1,0 +1,19 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: resourcemanager.miloapis.com-projectsuspension
+spec:
+  serviceRef:
+    name: "resourcemanager.miloapis.com"
+  kind: ProjectSuspension
+  plural: projectsuspensions
+  singular: projectsuspension
+  permissions:
+    - list
+    - get
+    - create
+    - update
+    - delete
+    - patch
+    - watch
+

@@ -104,6 +104,26 @@ func (r *OrganizationMembershipController) Reconcile(ctx context.Context, req ct
 	if err := r.Client.Get(ctx, organizationKey, &organization); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("referenced organization not found", "organization", organizationMembership.Spec.OrganizationRef.Name)
+
+			// Two-pass self-delete: if we already set OrganizationNotFound on a
+			// previous reconcile, delete the membership now so it does not linger
+			// after the owning Organization is gone. The second reconcile is
+			// triggered by the status condition update below, which re-enqueues
+			// the membership. This mirrors the UserNotFound self-delete below;
+			// without it, memberships (and the PolicyBindings they own) are
+			// orphaned forever once their Organization is deleted, since nothing
+			// else garbage collects them.
+			existingCondition := apimeta.FindStatusCondition(organizationMembership.Status.Conditions, OrganizationMembershipReady)
+			if existingCondition != nil && existingCondition.Reason == OrganizationNotFoundReason {
+				logger.Info("deleting OrganizationMembership because referenced organization no longer exists",
+					"membership", organizationMembership.Name,
+					"organization", organizationMembership.Spec.OrganizationRef.Name)
+				if err := r.Client.Delete(ctx, &organizationMembership); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, fmt.Errorf("failed to self-delete organization membership: %w", err)
+				}
+				return ctrl.Result{}, nil
+			}
+
 			readyCondition.Status = metav1.ConditionFalse
 			readyCondition.Reason = OrganizationNotFoundReason
 			readyCondition.Message = fmt.Sprintf("Organization '%s' does not exist. Please ensure the organization name is correct and the organization has been created.", organizationMembership.Spec.OrganizationRef.Name)
@@ -178,9 +198,14 @@ func (r *OrganizationMembershipController) Reconcile(ctx context.Context, req ct
 	organizationMembership.Status.ObservedGeneration = organizationMembership.Generation
 
 	// Update organization status information
+	contactEmail := ""
+	if organization.Spec.ContactInfo != nil {
+		contactEmail = organization.Spec.ContactInfo.Email
+	}
 	organizationMembership.Status.Organization = resourcemanagerv1alpha.OrganizationMembershipOrganizationStatus{
-		Type:        organization.Spec.Type,
-		DisplayName: organization.Annotations["kubernetes.io/display-name"],
+		Type:         organization.Spec.Type,
+		DisplayName:  organization.Annotations["kubernetes.io/display-name"],
+		ContactEmail: contactEmail,
 	}
 
 	// Update user status information

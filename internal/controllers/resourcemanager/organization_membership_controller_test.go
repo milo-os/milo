@@ -4,13 +4,16 @@ import (
 	"context"
 	"testing"
 
+	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -19,6 +22,7 @@ func getTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	_ = iamv1alpha1.AddToScheme(scheme)
 	_ = resourcemanagerv1alpha1.AddToScheme(scheme)
+	_ = billingv1alpha1.AddToScheme(scheme)
 	return scheme
 }
 
@@ -34,7 +38,10 @@ func TestOrganizationMembershipController_ReconcileRoles(t *testing.T) {
 			UID:  types.UID("org-uid-123"),
 		},
 		Spec: resourcemanagerv1alpha1.OrganizationSpec{
-			Type: "Enterprise",
+			ContactInfo: &resourcemanagerv1alpha1.OrganizationContactInfo{
+				Email: "owner@example.com",
+				Name:  "Owner",
+			},
 		},
 	}
 
@@ -333,5 +340,135 @@ func TestOrganizationMembershipController_GetRoleKey(t *testing.T) {
 				t.Errorf("Expected role key '%s', got '%s'", tt.expected, key)
 			}
 		})
+	}
+}
+
+// TestOrganizationMembershipController_Reconcile_OrganizationNotFound_SelfDeletes verifies
+// the two-pass self-delete: the first reconcile against a membership whose Organization no
+// longer exists only records the failure, and the membership self-deletes on the reconcile
+// that finds the same reason already recorded from last time.
+func TestOrganizationMembershipController_Reconcile_OrganizationNotFound_SelfDeletes(t *testing.T) {
+	ctx := context.TODO()
+	scheme := getTestScheme()
+
+	user := &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-user",
+			UID:  types.UID("user-uid"),
+		},
+		Spec: iamv1alpha1.UserSpec{
+			Email: "test@example.com",
+		},
+	}
+
+	// No Organization object is created, simulating one that has been deleted.
+	membership := &resourcemanagerv1alpha1.OrganizationMembership{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-membership",
+			Namespace: "organization-missing-org",
+			UID:       types.UID("membership-uid"),
+		},
+		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{
+				Name: "missing-org",
+			},
+			UserRef: resourcemanagerv1alpha1.MemberReference{
+				Name: "test-user",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(user, membership).
+		WithStatusSubresource(membership).
+		Build()
+
+	controller := &OrganizationMembershipController{Client: c}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: membership.Name, Namespace: membership.Namespace}}
+
+	// First reconcile: organization not found. Should only record the condition -
+	// the membership must still exist afterwards.
+	if _, err := controller.Reconcile(ctx, req); err != nil {
+		t.Fatalf("first reconcile failed: %v", err)
+	}
+
+	var got resourcemanagerv1alpha1.OrganizationMembership
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatalf("expected membership to still exist after first reconcile: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(got.Status.Conditions, OrganizationMembershipReady)
+	if cond == nil || cond.Reason != OrganizationNotFoundReason {
+		t.Fatalf("expected Ready condition reason %q after first reconcile, got %+v", OrganizationNotFoundReason, cond)
+	}
+
+	// Second reconcile: the same reason is already recorded from last time, so the
+	// membership should self-delete.
+	if _, err := controller.Reconcile(ctx, req); err != nil {
+		t.Fatalf("second reconcile failed: %v", err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, &got); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected membership to be deleted after second reconcile, got err=%v", err)
+	}
+}
+
+// TestOrganizationMembershipController_Reconcile_UserNotFound_SelfDeletes covers the
+// pre-existing UserNotFound self-delete path, which had no test coverage prior to this
+// change. Same two-pass shape as the OrganizationNotFound case above.
+func TestOrganizationMembershipController_Reconcile_UserNotFound_SelfDeletes(t *testing.T) {
+	ctx := context.TODO()
+	scheme := getTestScheme()
+
+	organization := &resourcemanagerv1alpha1.Organization{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-org",
+			UID:  types.UID("org-uid"),
+		},
+	}
+
+	// No User object is created, simulating one that has been deleted.
+	membership := &resourcemanagerv1alpha1.OrganizationMembership{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-membership",
+			Namespace: "organization-test-org",
+			UID:       types.UID("membership-uid"),
+		},
+		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{
+				Name: "test-org",
+			},
+			UserRef: resourcemanagerv1alpha1.MemberReference{
+				Name: "missing-user",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(organization, membership).
+		WithStatusSubresource(membership).
+		Build()
+
+	controller := &OrganizationMembershipController{Client: c}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: membership.Name, Namespace: membership.Namespace}}
+
+	if _, err := controller.Reconcile(ctx, req); err != nil {
+		t.Fatalf("first reconcile failed: %v", err)
+	}
+
+	var got resourcemanagerv1alpha1.OrganizationMembership
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatalf("expected membership to still exist after first reconcile: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(got.Status.Conditions, OrganizationMembershipReady)
+	if cond == nil || cond.Reason != UserNotFoundReason {
+		t.Fatalf("expected Ready condition reason %q after first reconcile, got %+v", UserNotFoundReason, cond)
+	}
+
+	if _, err := controller.Reconcile(ctx, req); err != nil {
+		t.Fatalf("second reconcile failed: %v", err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, &got); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected membership to be deleted after second reconcile, got err=%v", err)
 	}
 }

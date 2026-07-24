@@ -1,0 +1,13 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-suspension-lifecycle-project
+status:
+  suspensions:
+  - reason: Billing
+    reinstateAuthority: Operator
+  - reason: Compliance
+    reinstateAuthority: Operator
+  (conditions[?type == 'Suspended']):
+  - status: "True"
+    reason: Suspended

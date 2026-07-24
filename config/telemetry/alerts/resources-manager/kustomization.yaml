@@ -3,3 +3,4 @@ kind: Component
 
 resources:
   - projects.yaml
+  - organization-memberships.yaml

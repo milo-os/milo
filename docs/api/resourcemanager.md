@@ -14,6 +14,8 @@ Resource Types:
 
 - [Project](#project)
 
+- [ProjectSuspension](#projectsuspension)
+
 
 
 
@@ -604,6 +606,13 @@ This information is populated by the controller from the referenced organization
         </tr>
     </thead>
     <tbody><tr>
+        <td><b>contactEmail</b></td>
+        <td>string</td>
+        <td>
+          ContactEmail is the primary contact email cached from the organization.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>displayName</b></td>
         <td>string</td>
         <td>
@@ -614,7 +623,10 @@ This information is populated by the controller from the referenced organization
         <td><b>type</b></td>
         <td>string</td>
         <td>
-          Type is the type of the organization in the membership.<br/>
+          Type is the legacy organization type cached from the organization.
+
+Deprecated: This field reflects organization.spec.type, which is deprecated
+when the UnifiedOrganizations feature gate is enabled.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -712,7 +724,7 @@ Organization is the Schema for the Organizations API
         <td>
           OrganizationSpec defines the desired state of Organization<br/>
         </td>
-        <td>true</td>
+        <td>false</td>
       </tr><tr>
         <td><b><a href="#organizationstatus">status</a></b></td>
         <td>object</td>
@@ -741,15 +753,137 @@ OrganizationSpec defines the desired state of Organization
         </tr>
     </thead>
     <tbody><tr>
+        <td><b><a href="#organizationspeccontactinfo">contactInfo</a></b></td>
+        <td>object</td>
+        <td>
+          ContactInfo describes who the organization is and how to reach them.
+Email and name are required for onboarding to complete.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>type</b></td>
         <td>enum</td>
         <td>
-          The type of organization.<br/>
+          Type distinguishes personal and standard organizations in legacy mode.
+
+Deprecated: This field is ignored when the UnifiedOrganizations feature
+gate is enabled. Use unified organizations without a type distinction.<br/>
           <br/>
             <i>Validations</i>:<li>type(oldSelf) == null_type || self == oldSelf: organization type is immutable</li>
             <i>Enum</i>: Personal, Standard<br/>
         </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Organization.spec.contactInfo
+<sup><sup>[↩ Parent](#organizationspec)</sup></sup>
+
+
+
+ContactInfo describes who the organization is and how to reach them.
+Email and name are required for onboarding to complete.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>email</b></td>
+        <td>string</td>
+        <td>
+          Email is the primary contact email for the organization.<br/>
+        </td>
         <td>true</td>
+      </tr><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the display name of the primary contact.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#organizationspeccontactinfoaddress">address</a></b></td>
+        <td>object</td>
+        <td>
+          Address is the optional postal address for the organization.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>businessName</b></td>
+        <td>string</td>
+        <td>
+          BusinessName is the optional legal entity or company name.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Organization.spec.contactInfo.address
+<sup><sup>[↩ Parent](#organizationspeccontactinfo)</sup></sup>
+
+
+
+Address is the optional postal address for the organization.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>country</b></td>
+        <td>string</td>
+        <td>
+          Country is the ISO 3166-1 alpha-2 country code (e.g. "GB", "US").<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>city</b></td>
+        <td>string</td>
+        <td>
+          City is the locality.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>line1</b></td>
+        <td>string</td>
+        <td>
+          Line1 is the first line of the street address.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>line2</b></td>
+        <td>string</td>
+        <td>
+          Line2 is the second line of the street address.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>postalCode</b></td>
+        <td>string</td>
+        <td>
+          PostalCode is the post or zip code.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>region</b></td>
+        <td>string</td>
+        <td>
+          Region is the state, province, or county.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -775,9 +909,9 @@ OrganizationStatus defines the observed state of Organization
         <td>[]object</td>
         <td>
           Conditions represents the observations of an organization's current state.
-Known condition types are: "Ready"<br/>
+Known condition types are: "Ready", "OnboardingComplete"<br/>
           <br/>
-            <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
+            <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready] map[lastTransitionTime:1970-01-01T00:00:00Z message:Organization contact information is incomplete reason:ContactInfoIncomplete status:False type:OnboardingComplete]]<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -1014,6 +1148,13 @@ Known condition types are: "Ready"<br/>
             <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b><a href="#projectstatussuspensionsindex">suspensions</a></b></td>
+        <td>[]object</td>
+        <td>
+          Suspensions lists the active/all suspensions currently affecting the project.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -1089,6 +1230,227 @@ with respect to the current state of the instance.<br/>
           <br/>
             <i>Format</i>: int64<br/>
             <i>Minimum</i>: 0<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Project.status.suspensions[index]
+<sup><sup>[↩ Parent](#projectstatus)</sup></sup>
+
+
+
+ProjectSuspensionInfo contains the details of a suspension affecting the project.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>reason</b></td>
+        <td>enum</td>
+        <td>
+          Reason is the category of suspension.<br/>
+          <br/>
+            <i>Enum</i>: Fraud, Abuse, Billing, Compliance, Administrative<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reinstateAuthority</b></td>
+        <td>enum</td>
+        <td>
+          ReinstateAuthority defines who can lift this suspension.<br/>
+          <br/>
+            <i>Enum</i>: Operator, Consumer<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>suspendedAt</b></td>
+        <td>string</td>
+        <td>
+          SuspendedAt is the timestamp when the suspension was created.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+## ProjectSuspension
+<sup><sup>[↩ Parent](#resourcemanagermiloapiscomv1alpha1 )</sup></sup>
+
+
+
+
+
+
+ProjectSuspension represents the intent/record of a project suspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+      <td><b>apiVersion</b></td>
+      <td>string</td>
+      <td>resourcemanager.miloapis.com/v1alpha1</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b>kind</b></td>
+      <td>string</td>
+      <td>ProjectSuspension</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">metadata</a></b></td>
+      <td>object</td>
+      <td>Refer to the Kubernetes API documentation for the fields of the `metadata` field.</td>
+      <td>true</td>
+      </tr><tr>
+        <td><b><a href="#projectsuspensionspec">spec</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectSuspensionSpec defines the desired state of ProjectSuspension.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#projectsuspensionstatus">status</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectSuspensionStatus defines the observed state of ProjectSuspension.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProjectSuspension.spec
+<sup><sup>[↩ Parent](#projectsuspension)</sup></sup>
+
+
+
+ProjectSuspensionSpec defines the desired state of ProjectSuspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#projectsuspensionspecprojectref">projectRef</a></b></td>
+        <td>object</td>
+        <td>
+          ProjectRef is a reference to the project that is suspended.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: projectRef is immutable</li>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reason</b></td>
+        <td>enum</td>
+        <td>
+          Reason is the category of suspension.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: reason is immutable</li>
+            <i>Enum</i>: Fraud, Abuse, Billing, Compliance, Administrative<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reinstateAuthority</b></td>
+        <td>enum</td>
+        <td>
+          ReinstateAuthority defines who can lift this suspension.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: reinstateAuthority is immutable</li>
+            <i>Enum</i>: Operator, Consumer<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>requestedBy</b></td>
+        <td>string</td>
+        <td>
+          RequestedBy identifies the operator or automated system that requested the suspension.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: requestedBy is immutable</li>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>description</b></td>
+        <td>string</td>
+        <td>
+          Description provides human-readable context or notes about the suspension.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProjectSuspension.spec.projectRef
+<sup><sup>[↩ Parent](#projectsuspensionspec)</sup></sup>
+
+
+
+ProjectRef is a reference to the project that is suspended.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is the name of resource being referenced<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### ProjectSuspension.status
+<sup><sup>[↩ Parent](#projectsuspension)</sup></sup>
+
+
+
+ProjectSuspensionStatus defines the observed state of ProjectSuspension.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>phase</b></td>
+        <td>enum</td>
+        <td>
+          Phase is the current status of the suspension.<br/>
+          <br/>
+            <i>Enum</i>: Active, Lifted<br/>
         </td>
         <td>false</td>
       </tr></tbody>

@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: resourcemanager-projectsuspensions-editor
+  annotations:
+    kubernetes.io/display-name: Project Suspension Editor
+    kubernetes.io/description: Create, update, and delete project suspensions
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: resourcemanager-projectsuspensions-reader
+  includedPermissions:
+    - resourcemanager.miloapis.com/projectsuspensions.create
+    - resourcemanager.miloapis.com/projectsuspensions.update
+    - resourcemanager.miloapis.com/projectsuspensions.patch
+    - resourcemanager.miloapis.com/projectsuspensions.delete

@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: ProjectSuspension
+metadata:
+  name: active-suspension
+spec:
+  projectRef:
+    name: test-suspension-project
+  reason: Abuse
+  reinstateAuthority: Operator
+  requestedBy: operator-admin
+  description: "Test suspension for abuse"

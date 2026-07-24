@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: ProjectSuspension
+metadata:
+  name: invalid-suspension
+spec:
+  projectRef:
+    name: non-existent-project
+  reason: Abuse
+  reinstateAuthority: Operator
+  requestedBy: operator-admin
+  description: "Suspension for non-existent project"

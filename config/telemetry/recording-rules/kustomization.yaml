@@ -3,3 +3,6 @@ kind: Component
 
 components:
   - ./quota
+  - ./bootstrap
+  - ./iam
+  - ./resourcemanager

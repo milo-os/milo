@@ -12,12 +12,31 @@ type ProjectSpec struct {
 	OwnerRef OwnerReference `json:"ownerRef"`
 }
 
+// ProjectSuspensionInfo contains the details of a suspension affecting the project.
+type ProjectSuspensionInfo struct {
+	// Reason is the category of suspension.
+	// +kubebuilder:validation:Required
+	Reason ProjectSuspensionReason `json:"reason"`
+
+	// SuspendedAt is the timestamp when the suspension was created.
+	// +kubebuilder:validation:Required
+	SuspendedAt metav1.Time `json:"suspendedAt"`
+
+	// ReinstateAuthority defines who can lift this suspension.
+	// +kubebuilder:validation:Required
+	ReinstateAuthority ProjectSuspensionReinstateAuthority `json:"reinstateAuthority"`
+}
+
 // ProjectStatus defines the observed state of Project.
 type ProjectStatus struct {
 	// Represents the observations of a project's current state.
 	// Known condition types are: "Ready"
 	// +kubebuilder:default={{type: "Ready", status: "Unknown", reason: "Unknown", message: "Waiting for control plane to reconcile", lastTransitionTime: "1970-01-01T00:00:00Z"}}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Suspensions lists the active/all suspensions currently affecting the project.
+	// +kubebuilder:validation:Optional
+	Suspensions []ProjectSuspensionInfo `json:"suspensions,omitempty"`
 }
 
 const (
@@ -28,11 +47,29 @@ const (
 	// ProjectResourceCleanup indicates that project resources are being deleted
 	// as part of project teardown.
 	ProjectResourceCleanup = "ResourceCleanup"
+
+	// ProjectSuspended indicates whether the project is suspended.
+	ProjectSuspended = "Suspended"
 )
+
+// ProjectSuspendedCause is the metav1.StatusCause Type set on the
+// Details.Causes of the 403 Forbidden response returned by the
+// ProjectSuspensionEnforcement admission plugin when a write is denied
+// because the request's target project is suspended. API clients match on
+// this value (via apierrors.StatusError.ErrStatus.Details.Causes) to
+// distinguish suspension-caused denials from other admission failures
+// (quota, RBAC, NamespaceLifecycle's NamespaceTerminatingCause).
+const ProjectSuspendedCause metav1.CauseType = "ProjectSuspended"
 
 const (
 	// ProjectReadyReason indicates that the project is ready for use.
 	ProjectReadyReason = "Ready"
+
+	// ProjectSuspendedReason indicates that the project is suspended.
+	ProjectSuspendedReason = "Suspended"
+
+	// ProjectActiveReason indicates that the project is active.
+	ProjectActiveReason = "Active"
 
 	// ProjectProvisioningReason indicates that the project is provisioning.
 	ProjectProvisioningReason = "Provisioning"

@@ -32,6 +32,14 @@ const (
 	// alpha: v0.1.0
 	EventsProxy featuregate.Feature = "EventsProxy"
 
+	// Passkeys enables the identity.miloapis.com/v1alpha1 Passkey virtual API
+	// that proxies to an external identity provider for listing WebAuthn
+	// passkey credentials (read-only).
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.32.0
+	Passkeys featuregate.Feature = "Passkeys"
+
 	// Sessions enables the identity.miloapis.com/v1alpha1 Session virtual API
 	// that proxies to an external identity provider for session management.
 	//
@@ -65,6 +73,21 @@ const (
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0
 	ServiceAccountKeys featuregate.Feature = "ServiceAccountKeys"
+
+	// UnifiedOrganizations enables unified organization behavior: system-assigned org
+	// names (generateName org- prefix), onboarding reconciliation, and deprecated
+	// spec.type is ignored/stripped. When disabled, legacy Personal/Standard types
+	// and user-chosen organization names are supported.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	UnifiedOrganizations featuregate.Feature = "UnifiedOrganizations"
+
+	// ProjectSuspension enables project suspension and lifecycle controls.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	ProjectSuspension featuregate.Feature = "ProjectSuspension"
 )
 
 func init() {
@@ -82,6 +105,14 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
+	Passkeys: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	ProjectSuspension: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
 	ServiceAccountKeys: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
@@ -89,6 +120,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	Sessions: {
 		Default:    true,
 		PreRelease: featuregate.GA,
+	},
+	UnifiedOrganizations: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
 	},
 	UserIdentities: {
 		Default:    true,

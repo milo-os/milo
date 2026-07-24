@@ -1,0 +1,295 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: projectsuspension-admission
+spec:
+  description: |
+    Tests the ProjectSuspensionEnforcement admission plugin.
+
+    This test verifies:
+    - We can create and update resources in an active project.
+    - When a project gets suspended, read and delete operations are still allowed.
+    - When a project is suspended, create and update operations are rejected with a 403.
+    - When a project is unsuspended, create and update operations are allowed again.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+    project:
+      kubeconfig: kubeconfig-project
+
+  steps:
+    - name: setup-organization
+      description: Create Organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - apply:
+            file: 05-test-user-rbac.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-admission-suspension-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create Project in organization context
+      cluster: org
+      try:
+        - apply:
+            file: 02-test-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: admission-suspension-project
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: create-resources-before-suspension
+      description: Verify that we can create resources in the project
+      cluster: project
+      try:
+        - apply:
+            file: 04-namespaces.yaml
+        - apply:
+            file: 06-finalizer-ns.yaml
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-delete
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-update
+
+    - name: update-resource-before-suspension
+      description: Verify that we can update resources in the project
+      cluster: project
+      try:
+        - patch:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-update
+                labels:
+                  key: updated1
+
+    - name: suspend-project
+      description: Add suspension to the project
+      cluster: main
+      try:
+        - apply:
+            file: 03-projectsuspension.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: admission-suspension-project
+            timeout: 30s
+            for:
+              condition:
+                name: Suspended
+                value: 'True'
+        - sleep:
+            duration: 3s
+
+    - name: verify-read-allowed
+      description: Verify that we can read resources while suspended
+      cluster: project
+      try:
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-delete
+
+    - name: verify-delete-allowed
+      description: Verify that we can delete resources while suspended
+      cluster: project
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: test-ns-to-delete
+
+    - name: verify-create-denied
+      description: Verify that creating a resource is denied with 403 ProjectSuspended
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/resourcemanager.miloapis.com/v1alpha1/projects/admission-suspension-project/control-plane"
+              BODY='{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"test-ns-new"}}'
+              HTTP_CODE=$(curl -sk -o /tmp/create-denied-resp.json -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer test-user-token" \
+                -H "Content-Type: application/json" \
+                -d "${BODY}" \
+                "${BASE}/api/v1/namespaces")
+              
+              if [ "${HTTP_CODE}" != "403" ]; then
+                echo "FAIL: expected 403 Forbidden while project is suspended, got ${HTTP_CODE}"
+                cat /tmp/create-denied-resp.json
+                exit 1
+              fi
+              
+              CAUSE_TYPES=$(jq -r '.details.causes[]?.reason' /tmp/create-denied-resp.json)
+              if ! echo "${CAUSE_TYPES}" | grep -qx "ProjectSuspended"; then
+                echo "FAIL: ProjectSuspended cause not found in Details.Causes"
+                cat /tmp/create-denied-resp.json
+                exit 1
+              fi
+
+    - name: verify-update-denied
+      description: Verify that updating a resource is denied with 403 ProjectSuspended
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/resourcemanager.miloapis.com/v1alpha1/projects/admission-suspension-project/control-plane"
+              HTTP_CODE=$(curl -sk -o /tmp/update-denied-resp.json -w '%{http_code}' \
+                -X PATCH \
+                -H "Authorization: Bearer test-user-token" \
+                -H "Content-Type: application/strategic-merge-patch+json" \
+                -d '{"metadata":{"labels":{"key":"updated2"}}}' \
+                "${BASE}/api/v1/namespaces/test-ns-to-update")
+              
+              if [ "${HTTP_CODE}" != "403" ]; then
+                echo "FAIL: expected 403 Forbidden while project is suspended, got ${HTTP_CODE}"
+                cat /tmp/update-denied-resp.json
+                exit 1
+              fi
+              
+              CAUSE_TYPES=$(jq -r '.details.causes[]?.reason' /tmp/update-denied-resp.json)
+              if ! echo "${CAUSE_TYPES}" | grep -qx "ProjectSuspended"; then
+                echo "FAIL: ProjectSuspended cause not found in Details.Causes"
+                cat /tmp/update-denied-resp.json
+                exit 1
+              fi
+
+    - name: verify-finalizer-removal-allowed
+      description: |
+        Verify that removing a finalizer (the plain Update that lets a
+        graceful delete complete) is allowed while the project is suspended.
+        The finalizer-removal PATCH below runs as the non-privileged
+        test-user (via curl + test-user-token), not test-admin/system:masters
+        (kubeconfig-project) — the plugin already exempts system:masters
+        unconditionally, so doing this step with the admin kubeconfig would
+        pass regardless of whether the isAlreadyTerminating exemption exists
+        at all. Using test-user is what actually exercises that code path.
+      try:
+        # Start deletion in the background (will block on finalizer). Delete
+        # is never routed to the plugin's Validate, so identity doesn't
+        # matter here.
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-project delete ns test-ns-finalizer --wait=false
+        # Give it a second to apply deletion timestamp
+        - sleep:
+            duration: 1s
+        # Verify it has a deletionTimestamp (by ensuring it still exists but is terminating)
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-project get ns test-ns-finalizer -o json | jq -e '.metadata.deletionTimestamp != null'
+        # Patch to remove the finalizer as the non-privileged test-user (this
+        # is the update that would be blocked without the
+        # isAlreadyTerminating exemption).
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/resourcemanager.miloapis.com/v1alpha1/projects/admission-suspension-project/control-plane"
+              HTTP_CODE=$(curl -sk -o /tmp/finalizer-removal-resp.json -w '%{http_code}' \
+                -X PATCH \
+                -H "Authorization: Bearer test-user-token" \
+                -H "Content-Type: application/merge-patch+json" \
+                -d '{"metadata":{"finalizers":[]}}' \
+                "${BASE}/api/v1/namespaces/test-ns-finalizer")
+
+              if [ "${HTTP_CODE}" != "200" ]; then
+                echo "FAIL: expected 200 OK removing finalizer while suspended (as non-privileged test-user), got ${HTTP_CODE}"
+                cat /tmp/finalizer-removal-resp.json
+                exit 1
+              fi
+        # Assert it is fully deleted
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-project wait --for=delete ns/test-ns-finalizer --timeout=10s
+
+    - name: unsuspend-project
+      description: Remove suspension from the project and wait for Suspended=False
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: admission-suspension-1
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: admission-suspension-project
+            timeout: 30s
+            for:
+              condition:
+                name: Suspended
+                value: 'False'
+        - sleep:
+            duration: 1s
+
+    - name: verify-create-allowed-after-reinstatement
+      description: Verify that creating a resource is allowed again after unsuspending
+      cluster: project
+      try:
+        - apply:
+            file: 07-reinstated-ns.yaml
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-reinstated
+
+    - name: verify-update-allowed-after-reinstatement
+      description: Verify that updating a resource is allowed again after unsuspending
+      cluster: project
+      try:
+        - patch:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-update
+                labels:
+                  key: updated-after-reinstatement
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: test-ns-to-update
+                labels:
+                  key: updated-after-reinstatement
+
+
