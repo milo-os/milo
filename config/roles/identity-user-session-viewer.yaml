@@ -4,7 +4,7 @@ metadata:
   name: identity-user-session-viewer
   annotations:
     kubernetes.io/display-name: Identity User-Session Viewer
-    kubernetes.io/description: "Allows viewing user sessions and user identities."
+    kubernetes.io/description: "Allows viewing user sessions, user identities, and passkeys."
 spec:
   launchStage: Beta
   includedPermissions:
@@ -12,3 +12,5 @@ spec:
   - identity.miloapis.com/sessions.get
   - identity.miloapis.com/useridentities.list
   - identity.miloapis.com/useridentities.get
+  - identity.miloapis.com/passkeys.list
+  - identity.miloapis.com/passkeys.get
