@@ -20,6 +20,7 @@ import (
 	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -29,6 +30,7 @@ import (
 	notesv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notes/v1alpha1"
 	notificationv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/notification/v1alpha1"
 	resourcemanagerv1alpha1webhook "go.miloapis.com/milo/internal/webhooks/resourcemanager/v1alpha1"
+	miloprovider "go.miloapis.com/milo/pkg/multicluster-runtime/milo"
 	milowebhook "go.miloapis.com/milo/pkg/webhook"
 )
 
@@ -198,9 +200,56 @@ func startCoreControlPlaneWebhooks(
 		return fmt.Errorf("building webhook manager: %w", err)
 	}
 
-	if err := registerCoreControlPlaneWebhooksWithoutNotes(webhookMgr); err != nil {
+	// Note webhooks need a multicluster manager to resolve project control
+	// plane clients (e.g. to look up a Note's subject when it lives in a
+	// project cluster). Build one here, scoped to the webhook manager, so it
+	// runs on every replica alongside the rest of the core webhooks instead
+	// of only on the leader.
+	provider, err := miloprovider.New(webhookMgr, miloprovider.Options{
+		ClusterOptions: []cluster.Option{
+			func(o *cluster.Options) {
+				o.Scheme = Scheme
+			},
+		},
+		ProjectRestConfig: ctrlConfig,
+	})
+	if err != nil {
+		return fmt.Errorf("creating multicluster provider for webhooks: %w", err)
+	}
+
+	mcMgr, err := mcmanager.New(ctrlConfig, miloprovider.WithoutAutoStart(provider), mcmanager.Options{
+		Scheme: Scheme,
+		Logger: logger.WithName("multicluster-webhooks"),
+		Metrics: metricsserver.Options{
+			BindAddress: "0",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating multicluster manager for webhooks: %w", err)
+	}
+
+	if err := miloprovider.EngageAlways(mcMgr, provider); err != nil {
+		return fmt.Errorf("wiring multicluster webhook provider engagement: %w", err)
+	}
+
+	// Engage local cluster before starting to prevent race conditions with
+	// informer initialization. Local cluster ("") hosts Notes attached to
+	// resources in the core control plane itself.
+	if err := mcMgr.Engage(ctx, "", mcMgr.GetLocalManager()); err != nil {
+		return fmt.Errorf("engaging local cluster for webhooks: %w", err)
+	}
+
+	if err := registerCoreControlPlaneWebhooks(webhookMgr, mcMgr); err != nil {
 		return err
 	}
+
+	go func() {
+		logger.Info("Starting webhook multicluster manager")
+		if err := mcMgr.Start(ctx); err != nil {
+			logger.Error(err, "Webhook multicluster manager failed; shutting down controller-manager")
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+		}
+	}()
 
 	go func() {
 		if err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
