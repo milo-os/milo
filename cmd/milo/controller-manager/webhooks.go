@@ -212,6 +212,11 @@ func startCoreControlPlaneWebhooks(
 			},
 		},
 		ProjectRestConfig: ctrlConfig,
+		// Distinct from the quota system's provider (controllermanager.go),
+		// which also runs in this process and registers its own
+		// projectcontrolplane controller under the default name.
+		// controller-runtime's controller names are global to the process.
+		ControllerName: "webhooks-projectcontrolplane",
 	})
 	if err != nil {
 		return fmt.Errorf("creating multicluster provider for webhooks: %w", err)
