@@ -39,7 +39,6 @@ spec:
               kind: Namespace
               name: organization-owner-protection
         - description: Wait for organization namespace to be fully removed
-          continueOnError: true
           wait:
             apiVersion: v1
             kind: Namespace
