@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"go.miloapis.com/milo/pkg/features"
@@ -70,6 +71,23 @@ func TestOrganizationMutator_Default(t *testing.T) {
 		if org.Spec.Type != resourcemanagerv1alpha1.OrganizationTypeStandard {
 			t.Fatalf("type = %q, want Standard", org.Spec.Type)
 		}
+		assertHasOrganizationNamespaceFinalizer(t, org)
+	})
+
+	t.Run("sets the namespace finalizer regardless of the feature gate", func(t *testing.T) {
+		withFeatureGate(t, false)
+		org := &resourcemanagerv1alpha1.Organization{
+			ObjectMeta: metav1.ObjectMeta{Name: "acme-corp"},
+		}
+		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
+			Username: "user@example.com",
+			Groups:   []string{"system:authenticated"},
+		})
+
+		if err := mutator.Default(ctx, org); err != nil {
+			t.Fatalf("Default() error = %v", err)
+		}
+		assertHasOrganizationNamespaceFinalizer(t, org)
 	})
 
 	t.Run("unified mode strips type and defaults generateName", func(t *testing.T) {
@@ -97,7 +115,23 @@ func TestOrganizationMutator_Default(t *testing.T) {
 		if org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation] != "uid-123" {
 			t.Fatalf("creator annotation = %q, want uid-123", org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation])
 		}
+		assertHasOrganizationNamespaceFinalizer(t, org)
 	})
+}
+
+// assertHasOrganizationNamespaceFinalizer fails the test unless org carries
+// the finalizer that gates its deletion on its namespace's owner reference
+// being confirmed. It must be set synchronously here, at admission, since a
+// finalizer added only by the controller's first reconcile would miss an
+// Organization deleted before that reconcile ever runs.
+func assertHasOrganizationNamespaceFinalizer(t *testing.T, org *resourcemanagerv1alpha1.Organization) {
+	t.Helper()
+	for _, f := range org.Finalizers {
+		if f == resourcemanagercontroller.OrganizationNamespaceFinalizer {
+			return
+		}
+	}
+	t.Fatalf("finalizers = %#v, want %q", org.Finalizers, resourcemanagercontroller.OrganizationNamespaceFinalizer)
 }
 
 func TestOrganizationValidator_ValidateCreate(t *testing.T) {

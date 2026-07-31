@@ -3,11 +3,19 @@
 Regression test: deleting an Organization immediately after creating it
 must still garbage-collect its namespace.
 
-The organization-scoped namespace has to be owned by the Organization
-from the instant it's created, not only once a later reconcile patches
-the reference in. Otherwise a fast create-then-delete -- with no time
-for that reconcile to ever run -- permanently orphans the namespace and
-everything created inside it (OrganizationMemberships, PolicyBindings).
+The namespace's owner reference to the Organization is set by
+OrganizationController.Reconcile once the Organization is committed and
+watchable -- not synchronously at namespace-creation time, since a
+namespace created with an owner reference to an Organization that hasn't
+been persisted yet (as happens if this is done from the Organization's
+own validating admission webhook) can be seen as orphaned by the garbage
+collector and deleted before the Organization creation call even
+returns. An organizationNamespaceFinalizer on the Organization closes the
+fast create-then-delete window instead: deletion can't complete until
+Reconcile has confirmed the namespace owns a valid reference back to it,
+so cascading cleanup (OrganizationMemberships, PolicyBindings, and the
+namespace itself) always happens once the Organization is actually
+removed.
 
 
 ## Steps
@@ -15,7 +23,7 @@ everything created inside it (OrganizationMemberships, PolicyBindings).
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup](#step-setup) | 0 | 2 | 0 | 0 | 0 |
-| 2 | [create-and-immediately-delete](#step-create-and-immediately-delete) | 0 | 4 | 0 | 0 | 0 |
+| 2 | [create-and-immediately-delete](#step-create-and-immediately-delete) | 0 | 3 | 0 | 0 | 0 |
 
 ### Step: `setup`
 
@@ -30,9 +38,9 @@ Remove any leftover state from earlier runs.
 
 ### Step: `create-and-immediately-delete`
 
-Create the Organization, confirm its namespace is already owned by
-it, then delete the Organization with no intervening wait and
-confirm the namespace is garbage-collected anyway.
+Create the Organization, then delete it immediately with no wait for
+any reconcile, and confirm the namespace is garbage-collected anyway
+once the finalizer releases.
 
 
 #### Try
@@ -40,9 +48,8 @@ confirm the namespace is garbage-collected anyway.
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | Create test organization |
-| 2 | `assert` | 0 | 0 | Namespace must be owned by the Organization from the moment it's created |
-| 3 | `delete` | 0 | 0 | Delete the organization immediately, with no wait for any reconcile |
-| 4 | `wait` | 0 | 0 | Namespace must be removed by the owner reference alone, without depending on reconcile timing |
+| 2 | `delete` | 0 | 0 | Delete the organization immediately, with no wait for any reconcile |
+| 3 | `wait` | 0 | 0 | Namespace must still be removed, via the namespace finalizer gating deletion until its owner reference is confirmed |
 
 ---
 

@@ -57,7 +57,9 @@ func TestOrganizationController_reconcileOrganizationOwnerBootstrap(t *testing.T
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "organization-org-abc123"}, &namespace); err != nil {
 		t.Fatalf("expected organization namespace to be created: %v", err)
 	}
-	assertOwnedByOrganization(t, namespace.OwnerReferences, org)
+	if len(namespace.OwnerReferences) != 0 {
+		t.Fatalf("owner references = %#v, want none set synchronously; OrganizationController.Reconcile sets this", namespace.OwnerReferences)
+	}
 
 	var membership resourcemanagerv1alpha.OrganizationMembership
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{
@@ -94,7 +96,7 @@ func TestEnsureOrganizationNamespace(t *testing.T) {
 		},
 	}
 
-	t.Run("sets the organization as controller owner of a new namespace", func(t *testing.T) {
+	t.Run("creates a new namespace without an owner reference", func(t *testing.T) {
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(org).Build()
 
 		if err := EnsureOrganizationNamespace(context.Background(), fakeClient, org); err != nil {
@@ -105,7 +107,9 @@ func TestEnsureOrganizationNamespace(t *testing.T) {
 		if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "organization-org-abc123"}, &namespace); err != nil {
 			t.Fatalf("expected organization namespace to be created: %v", err)
 		}
-		assertOwnedByOrganization(t, namespace.OwnerReferences, org)
+		if len(namespace.OwnerReferences) != 0 {
+			t.Fatalf("owner references = %#v, want none set synchronously; OrganizationController.Reconcile sets this", namespace.OwnerReferences)
+		}
 	})
 
 	t.Run("is a no-op when the namespace already exists", func(t *testing.T) {

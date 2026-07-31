@@ -9,7 +9,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -36,17 +35,21 @@ func EnsureOrganizationNamespace(ctx context.Context, c client.Client, org *reso
 		},
 	}
 
-	// Owning the namespace by the Organization lets Kubernetes garbage-collect
-	// it -- and everything created inside it, e.g. OrganizationMemberships and
-	// PolicyBindings -- the moment the Organization is deleted. This has to be
-	// set here, synchronously with namespace creation: a later reconcile that
-	// patches the reference in after the fact can lose the race against a fast
-	// create-then-delete (e.g. e2e test churn deleting the Organization within
-	// seconds), permanently orphaning the namespace and everything in it.
-	if err := controllerutil.SetControllerReference(org, namespace, c.Scheme()); err != nil {
-		return fmt.Errorf("setting organization owner reference on namespace: %w", err)
-	}
-
+	// The owner reference to org is deliberately NOT set here. This is called
+	// synchronously from the Organization's validating admission webhook,
+	// which runs before the Organization itself is persisted (Kubernetes
+	// invokes validating admission before the object is written to the
+	// backing store). A namespace created here with an owner reference to org
+	// would briefly point at an object that doesn't exist yet from any other
+	// reader's perspective -- including the garbage collector, which
+	// independently verifies owners it doesn't recognize and deletes
+	// dependents whose owner appears absent. Under load that GET can land in
+	// the gap before the Organization commits, and GC deletes the namespace
+	// within milliseconds of creating it.
+	//
+	// OrganizationController.Reconcile sets this owner reference once the
+	// Organization is genuinely committed and watchable, and holds a
+	// finalizer on the Organization so deletion can't outrun that step.
 	if err := c.Create(ctx, namespace); err != nil {
 		return fmt.Errorf("creating organization namespace: %w", err)
 	}
