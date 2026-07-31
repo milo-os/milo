@@ -5,14 +5,7 @@ import (
 )
 
 type UserState string
-type RegistrationApprovalState string
 type UserWaitlistEmailSentCondition string
-
-const (
-	RegistrationApprovalStatePending  RegistrationApprovalState = "Pending"
-	RegistrationApprovalStateApproved RegistrationApprovalState = "Approved"
-	RegistrationApprovalStateRejected RegistrationApprovalState = "Rejected"
-)
 
 const (
 	// UserWaitlistPendingEmailSentCondition tracks that the pending waitlist email was sent.
@@ -43,9 +36,9 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="State",type="string",JSONPath=".status.state"
-// +kubebuilder:printcolumn:name="Registration Approval",type="string",JSONPath=".status.registrationApproval"
+// +kubebuilder:printcolumn:name="Platform Access",type="string",JSONPath=".status.platformAccess"
 // +kubebuilder:resource:path=users,scope=Cluster
-// +kubebuilder:selectablefield:JSONPath=".status.registrationApproval"
+// +kubebuilder:selectablefield:JSONPath=".status.platformAccess"
 // +kubebuilder:selectablefield:JSONPath=".spec.email"
 // +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform,User"
 type User struct {
@@ -88,17 +81,10 @@ type UserStatus struct {
 	// +kubebuilder:validation:Enum=Active;Inactive
 	State UserState `json:"state,omitempty"`
 
-	// RegistrationApproval represents the administrator’s decision on the user’s registration request.
-	// States:
-	//   - Pending:  The user is awaiting review by an administrator.
-	//   - Approved: The user registration has been approved.
-	//   - Rejected: The user registration has been rejected.
-	// The User resource is always created regardless of this value, but the
-	// ability for the person to sign into the platform and access resources is
-	// governed by this status: only *Approved* users are granted access, while
-	// *Pending* and *Rejected* users are prevented for interacting with resources.
-	// +kubebuilder:validation:Enum=Pending;Approved;Rejected
-	RegistrationApproval RegistrationApprovalState `json:"registrationApproval,omitempty"`
+	// PlatformAccess represents the user's access state on the platform.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Pending;Approved;Rejected;Suspended
+	PlatformAccess PlatformAccessState `json:"platformAccess,omitempty"`
 
 	// LastLoginProvider records the identity provider that was most recently used by the
 	// user to log in (e.g., "github", "google", "passkey", or "email"). This field is set

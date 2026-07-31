@@ -117,29 +117,10 @@ rules:
 - apiGroups:
   - iam.miloapis.com
   resources:
-  - platformaccessapprovals
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - iam.miloapis.com
-  resources:
   - platformaccesses
+  - roles
+  - serviceaccounts
   verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - iam.miloapis.com
-  resources:
-  - platformaccessrejections
-  verbs:
-  - delete
   - get
   - list
   - watch
@@ -155,17 +136,8 @@ rules:
 - apiGroups:
   - iam.miloapis.com
   resources:
-  - roles
-  - serviceaccounts
-  - userdeactivations
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - iam.miloapis.com
-  resources:
   - userinvitations
+  - users
   verbs:
   - delete
   - get
@@ -177,7 +149,6 @@ rules:
   - iam.miloapis.com
   resources:
   - userpreferences
-  - users
   verbs:
   - get
   - list

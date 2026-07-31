@@ -9,7 +9,6 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,7 +26,7 @@ func getPlatformInvitationTestScheme() *runtime.Scheme {
 	return scheme
 }
 
-func Test_getDeterministicPlatformAccessApprovalName(t *testing.T) {
+func Test_getDeterministicPlatformInvitationResourceName(t *testing.T) {
 	pi := iamv1alpha1.PlatformInvitation{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pi",
@@ -40,44 +39,6 @@ func Test_getDeterministicPlatformAccessApprovalName(t *testing.T) {
 	want := "pi-uid-pi"
 	if name != want {
 		t.Fatalf("unexpected deterministic name, got %s want %s", name, want)
-	}
-}
-
-func Test_createPlatformAccessApproval_Idempotent(t *testing.T) {
-	ctx := context.TODO()
-	scheme := getPlatformInvitationTestScheme()
-
-	pi := &iamv1alpha1.PlatformInvitation{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "pi",
-			UID:  types.UID("pi-uid"),
-		},
-		Spec: iamv1alpha1.PlatformInvitationSpec{Email: "invitee@example.com"},
-	}
-
-	builder := fake.NewClientBuilder().WithScheme(scheme).
-		WithIndex(&iamv1alpha1.PlatformAccessApproval{}, piPlatformAccessApprovalIndexKey, func(obj client.Object) []string {
-			paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-			return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-		})
-	c := builder.Build()
-	pc := &PlatformInvitationController{Client: c}
-
-	// First create
-	if err := pc.createPlatformAccessApproval(ctx, pi); err != nil {
-		t.Fatalf("createPlatformAccessApproval returned error: %v", err)
-	}
-
-	// Verify exists
-	deterministic := getDeterministicPlatformInvitationResourceName(*pi)
-	paa := &iamv1alpha1.PlatformAccessApproval{}
-	if err := c.Get(ctx, types.NamespacedName{Name: deterministic}, paa); err != nil {
-		t.Fatalf("expected PlatformAccessApproval %s to be created: %v", deterministic, err)
-	}
-
-	// Second create should be a no-op
-	if err := pc.createPlatformAccessApproval(ctx, pi); err != nil {
-		t.Fatalf("second createPlatformAccessApproval returned error: %v", err)
 	}
 }
 
@@ -128,11 +89,6 @@ func Test_PlatformInvitationController_Reconcile_Scheduled(t *testing.T) {
 		t.Fatalf("scheduled condition missing or not true: %+v", updated.Status.Conditions)
 	}
 
-	// Ensure no PlatformAccessApproval created yet when scheduled in future
-	paa := &iamv1alpha1.PlatformAccessApproval{}
-	if err := c.Get(ctx, types.NamespacedName{Name: getDeterministicPlatformInvitationResourceName(*pi)}, paa); err == nil {
-		t.Fatalf("PlatformAccessApproval should not be created for future scheduled invitation")
-	}
 }
 
 func Test_PlatformInvitationController_Reconcile_UserExistsSkipsPAA(t *testing.T) {
@@ -159,21 +115,12 @@ func Test_PlatformInvitationController_Reconcile_UserExistsSkipsPAA(t *testing.T
 		u := obj.(*iamv1alpha1.User)
 		return []string{strings.ToLower(u.Spec.Email)}
 	})
-	builder = builder.WithIndex(&iamv1alpha1.PlatformAccessApproval{}, piPlatformAccessApprovalIndexKey, func(obj client.Object) []string {
-		paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-		return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-	})
 	c := builder.Build()
 
 	pc := &PlatformInvitationController{Client: c}
 
 	if _, err := pc.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pi.Name}}); err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
-	}
-
-	// PAA should NOT exist
-	if err := c.Get(ctx, types.NamespacedName{Name: getDeterministicPlatformInvitationResourceName(*pi)}, &iamv1alpha1.PlatformAccessApproval{}); !errors.IsNotFound(err) {
-		t.Fatalf("expected no PlatformAccessApproval when user exists, got err=%v", err)
 	}
 
 	// Ready condition should be true with appropriate message
@@ -207,10 +154,6 @@ func Test_PlatformInvitationController_Reconcile_NoUserCreatesPAA(t *testing.T) 
 		u := obj.(*iamv1alpha1.User)
 		return []string{strings.ToLower(u.Spec.Email)}
 	})
-	builder = builder.WithIndex(&iamv1alpha1.PlatformAccessApproval{}, piPlatformAccessApprovalIndexKey, func(obj client.Object) []string {
-		paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-		return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-	})
 	c := builder.Build()
 
 	pc := &PlatformInvitationController{Client: c}
@@ -223,12 +166,6 @@ func Test_PlatformInvitationController_Reconcile_NoUserCreatesPAA(t *testing.T) 
 		t.Fatalf("did not expect requeue for immediate invitation, got %v", res.RequeueAfter)
 	}
 
-	// PAA should be created with deterministic name
-	paaName := getDeterministicPlatformInvitationResourceName(*pi)
-	if err := c.Get(ctx, types.NamespacedName{Name: paaName}, &iamv1alpha1.PlatformAccessApproval{}); err != nil {
-		t.Fatalf("expected PlatformAccessApproval %s to be created: %v", paaName, err)
-	}
-
 	// Ready condition should be true with created message
 	updated := &iamv1alpha1.PlatformInvitation{}
 	_ = c.Get(ctx, types.NamespacedName{Name: pi.Name}, updated)
@@ -236,7 +173,7 @@ func Test_PlatformInvitationController_Reconcile_NoUserCreatesPAA(t *testing.T) 
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Fatalf("expected Ready condition true, got: %+v", updated.Status.Conditions)
 	}
-	if !strings.Contains(ready.Message, "Email sent and PlatformAccessApproval created") {
+	if !strings.Contains(ready.Message, "Email sent.") {
 		t.Fatalf("unexpected Ready message: %s", ready.Message)
 	}
 }

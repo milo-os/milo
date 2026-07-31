@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: identity.miloapis.com-passkey
+spec:
+  serviceRef:
+    name: "identity.miloapis.com"
+  kind: Passkey
+  plural: passkeys
+  singular: passkey
+  permissions:
+    - list
+    - get
+  parentResources:
+    - apiGroup: iam.miloapis.com
+      kind: User

@@ -34,8 +34,8 @@ spec:
     - jsonPath: .status.state
       name: State
       type: string
-    - jsonPath: .status.registrationApproval
-      name: Registration Approval
+    - jsonPath: .status.platformAccess
+      name: Platform Access
       type: string
     name: v1alpha1
     schema:
@@ -164,21 +164,20 @@ spec:
                   user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
                   by the auth provider based on authentication events.
                 type: string
-              registrationApproval:
-                description: |-
-                  RegistrationApproval represents the administrator’s decision on the user’s registration request.
-                  States:
-                    - Pending:  The user is awaiting review by an administrator.
-                    - Approved: The user registration has been approved.
-                    - Rejected: The user registration has been rejected.
-                  The User resource is always created regardless of this value, but the
-                  ability for the person to sign into the platform and access resources is
-                  governed by this status: only *Approved* users are granted access, while
-                  *Pending* and *Rejected* users are prevented for interacting with resources.
-                enum:
-                - Pending
-                - Approved
-                - Rejected
+              platformAccess:
+                allOf:
+                - enum:
+                  - Pending
+                  - Approved
+                  - Rejected
+                  - Suspended
+                - enum:
+                  - Pending
+                  - Approved
+                  - Rejected
+                  - Suspended
+                description: PlatformAccess represents the user's access state on
+                  the platform.
                 type: string
               state:
                 default: Active
@@ -198,7 +197,7 @@ spec:
             type: object
         type: object
     selectableFields:
-    - jsonPath: .status.registrationApproval
+    - jsonPath: .status.platformAccess
     - jsonPath: .spec.email
     served: true
     storage: true

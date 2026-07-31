@@ -20,6 +20,8 @@ spec:
   - identity.miloapis.com/sessions.delete
   - identity.miloapis.com/useridentities.list
   - identity.miloapis.com/useridentities.get
+  - identity.miloapis.com/passkeys.list
+  - identity.miloapis.com/passkeys.get
   - iam.miloapis.com/userinvitations.get
   - iam.miloapis.com/userinvitations.list
   - iam.miloapis.com/userinvitations.watch
