@@ -65,6 +65,13 @@ type OrganizationContactInfo struct {
 	// +kubebuilder:validation:MaxLength=256
 	BusinessName string `json:"businessName,omitempty"`
 
+	// Website is the optional website for the organization, e.g.
+	// "example.com" or "https://example.com".
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=256
+	Website string `json:"website,omitempty"`
+
 	// Address is the optional postal address for the organization.
 	//
 	// +kubebuilder:validation:Optional

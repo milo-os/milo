@@ -111,6 +111,12 @@ spec:
                     maxLength: 256
                     minLength: 1
                     type: string
+                  website:
+                    description: |-
+                      Website is the optional website for the organization, e.g.
+                      "example.com" or "https://example.com".
+                    maxLength: 256
+                    type: string
                 required:
                 - email
                 - name
