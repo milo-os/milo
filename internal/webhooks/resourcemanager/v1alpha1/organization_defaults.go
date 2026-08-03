@@ -2,6 +2,8 @@ package v1alpha1
 
 import (
 	"context"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -13,6 +15,29 @@ import (
 
 func unifiedOrganizationsEnabled() bool {
 	return utilfeature.DefaultFeatureGate.Enabled(features.UnifiedOrganizations)
+}
+
+// websiteSchemeRE matches a leading URL scheme (e.g. "https://", "ftp://").
+var websiteSchemeRE = regexp.MustCompile(`(?i)^[a-z][a-z0-9+.-]*://`)
+
+// normalizeWebsite trims whitespace and, if the value has no scheme, adds
+// "https://" so a bare domain like "example.com" can be parsed and validated
+// as a URL.
+func normalizeWebsite(website string) string {
+	website = strings.TrimSpace(website)
+	if website == "" || websiteSchemeRE.MatchString(website) {
+		return website
+	}
+	return "https://" + website
+}
+
+// sanitizeOrganizationContactInfo normalizes free-form contact fields in
+// place before validation runs.
+func sanitizeOrganizationContactInfo(contact *resourcemanagerv1alpha1.OrganizationContactInfo) {
+	if contact == nil {
+		return
+	}
+	contact.Website = normalizeWebsite(contact.Website)
 }
 
 func validateOrganizationContactInfo(contact *resourcemanagerv1alpha1.OrganizationContactInfo, fldPath *field.Path) field.ErrorList {
@@ -32,6 +57,16 @@ func validateOrganizationContactInfo(contact *resourcemanagerv1alpha1.Organizati
 
 	if contact.Address != nil && strings.TrimSpace(contact.Address.Country) == "" {
 		allErrs = append(allErrs, field.Required(fldPath.Child("address", "country"), "country is required when address is set"))
+	}
+
+	// Validate against the normalized form so a bare domain (e.g.
+	// "example.com") is treated the same as "https://example.com", whether
+	// or not the mutating webhook has already normalized it.
+	if website := normalizeWebsite(contact.Website); website != "" {
+		parsed, err := url.ParseRequestURI(website)
+		if err != nil || parsed.Host == "" {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("website"), contact.Website, `must be a valid website, e.g. "example.com" or "https://example.com"`))
+		}
 	}
 
 	return allErrs

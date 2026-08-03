@@ -31,11 +31,12 @@ func withFeatureGate(t *testing.T, enabled bool) {
 	})
 }
 
-func organizationAdmissionContext(t *testing.T, userInfo authenticationv1.UserInfo) context.Context {
+func organizationAdmissionContext(t *testing.T, userInfo authenticationv1.UserInfo, operation admissionv1.Operation) context.Context {
 	t.Helper()
 	req := admission.Request{
 		AdmissionRequest: admissionv1.AdmissionRequest{
-			UserInfo: userInfo,
+			UserInfo:  userInfo,
+			Operation: operation,
 		},
 	}
 	ctx := admission.NewContextWithRequest(context.Background(), req)
@@ -59,7 +60,7 @@ func TestOrganizationMutator_Default(t *testing.T) {
 		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
 			Username: "user@example.com",
 			Groups:   []string{"system:authenticated"},
-		})
+		}, admissionv1.Create)
 
 		if err := mutator.Default(ctx, org); err != nil {
 			t.Fatalf("Default() error = %v", err)
@@ -83,7 +84,7 @@ func TestOrganizationMutator_Default(t *testing.T) {
 			Username: "user@example.com",
 			UID:      "uid-123",
 			Groups:   []string{"system:authenticated"},
-		})
+		}, admissionv1.Create)
 
 		if err := mutator.Default(ctx, org); err != nil {
 			t.Fatalf("Default() error = %v", err)
@@ -96,6 +97,64 @@ func TestOrganizationMutator_Default(t *testing.T) {
 		}
 		if org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation] != "uid-123" {
 			t.Fatalf("creator annotation = %q, want uid-123", org.Annotations[resourcemanagerv1alpha1.OrganizationCreatorUserUIDAnnotation])
+		}
+	})
+
+	t.Run("normalizes bare domain website on create", func(t *testing.T) {
+		withFeatureGate(t, true)
+		org := &resourcemanagerv1alpha1.Organization{
+			Spec: resourcemanagerv1alpha1.OrganizationSpec{
+				ContactInfo: &resourcemanagerv1alpha1.OrganizationContactInfo{
+					Email:   "owner@example.com",
+					Name:    "Owner",
+					Website: "  example.com  ",
+				},
+			},
+		}
+		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
+			Username: "user@example.com",
+			UID:      "uid-123",
+			Groups:   []string{"system:authenticated"},
+		}, admissionv1.Create)
+
+		if err := mutator.Default(ctx, org); err != nil {
+			t.Fatalf("Default() error = %v", err)
+		}
+		if got := org.Spec.ContactInfo.Website; got != "https://example.com" {
+			t.Fatalf("website = %q, want https://example.com", got)
+		}
+	})
+
+	t.Run("normalizes website on update without applying create-only defaults", func(t *testing.T) {
+		withFeatureGate(t, true)
+		org := &resourcemanagerv1alpha1.Organization{
+			ObjectMeta: metav1.ObjectMeta{Name: "acme-corp"},
+			Spec: resourcemanagerv1alpha1.OrganizationSpec{
+				Type: resourcemanagerv1alpha1.OrganizationTypePersonal,
+				ContactInfo: &resourcemanagerv1alpha1.OrganizationContactInfo{
+					Email:   "owner@example.com",
+					Name:    "Owner",
+					Website: "example.com",
+				},
+			},
+		}
+		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
+			Username: "user@example.com",
+			UID:      "uid-123",
+			Groups:   []string{"system:authenticated"},
+		}, admissionv1.Update)
+
+		if err := mutator.Default(ctx, org); err != nil {
+			t.Fatalf("Default() error = %v", err)
+		}
+		if got := org.Spec.ContactInfo.Website; got != "https://example.com" {
+			t.Fatalf("website = %q, want https://example.com", got)
+		}
+		if org.Spec.Type != resourcemanagerv1alpha1.OrganizationTypePersonal {
+			t.Fatalf("type = %q, want unchanged Personal (create-only defaulting must not run on update)", org.Spec.Type)
+		}
+		if org.GenerateName != "" {
+			t.Fatalf("generateName = %q, want empty (create-only defaulting must not run on update)", org.GenerateName)
 		}
 	})
 }
@@ -125,7 +184,7 @@ func TestOrganizationValidator_ValidateCreate(t *testing.T) {
 		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
 			UID:    "uid-123",
 			Groups: []string{"system:authenticated"},
-		})
+		}, admissionv1.Create)
 		dryRun := true
 		ctx = admission.NewContextWithRequest(ctx, admission.Request{
 			AdmissionRequest: admissionv1.AdmissionRequest{
@@ -149,7 +208,7 @@ func TestOrganizationValidator_ValidateCreate(t *testing.T) {
 		}
 		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
 			Groups: []string{"system:authenticated"},
-		})
+		}, admissionv1.Create)
 
 		if _, err := validator.ValidateCreate(ctx, org); err == nil {
 			t.Fatal("ValidateCreate() expected type validation error")
@@ -163,7 +222,7 @@ func TestOrganizationValidator_ValidateCreate(t *testing.T) {
 		}
 		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
 			Groups: []string{"system:authenticated"},
-		})
+		}, admissionv1.Create)
 
 		if _, err := validator.ValidateCreate(ctx, org); err == nil {
 			t.Fatal("ValidateCreate() expected name validation error")
@@ -177,7 +236,7 @@ func TestOrganizationValidator_ValidateCreate(t *testing.T) {
 		}
 		ctx := organizationAdmissionContext(t, authenticationv1.UserInfo{
 			Groups: []string{"system:authenticated"},
-		})
+		}, admissionv1.Create)
 		dryRun := true
 		ctx = admission.NewContextWithRequest(ctx, admission.Request{
 			AdmissionRequest: admissionv1.AdmissionRequest{
