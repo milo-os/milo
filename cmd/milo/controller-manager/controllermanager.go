@@ -506,6 +506,14 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			projectSuspensionCtrl := resourcemanagercontroller.ProjectSuspensionPropagatorController{
+				Client: ctrl.GetClient(),
+			}
+			if err := projectSuspensionCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up project suspension controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			organizationCtrl := resourcemanagercontroller.OrganizationController{
 				Client:             ctrl.GetClient(),
 				OwnerRoleName:      OrganizationOwnerRoleName,
@@ -593,7 +601,12 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			mcMgr, err := mcmanager.New(ctrlConfig, provider, mcmanager.Options{
+			// provider is passed through WithoutAutoStart/EngageAlways instead of
+			// directly to mcmanager.New so cluster engagement runs on every
+			// controller-manager replica, not only the elected leader -- see the
+			// TODO in pkg/multicluster-runtime/milo/nonleader.go
+			// (datum-cloud/compute#117).
+			mcMgr, err := mcmanager.New(ctrlConfig, miloprovider.WithoutAutoStart(provider), mcmanager.Options{
 				Scheme: Scheme,
 				Logger: logger.WithName("multicluster"),
 				Metrics: metricsserver.Options{
@@ -602,6 +615,11 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			})
 			if err != nil {
 				logger.Error(err, "Error creating multicluster manager")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			if err := miloprovider.EngageAlways(mcMgr, provider); err != nil {
+				logger.Error(err, "Error wiring multicluster quota provider engagement")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
@@ -647,14 +665,6 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			if err := userCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up user controller")
-				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-			}
-
-			platformAccessMigrationCtrl := iamcontroller.PlatformAccessMigrationReconciler{
-				Client: ctrl.GetClient(),
-			}
-			if err := platformAccessMigrationCtrl.SetupWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up platform access migration controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 

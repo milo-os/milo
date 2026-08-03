@@ -14,6 +14,9 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Passkey":                 schema_pkg_apis_identity_v1alpha1_Passkey(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyList":             schema_pkg_apis_identity_v1alpha1_PasskeyList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyStatus":           schema_pkg_apis_identity_v1alpha1_PasskeyStatus(ref),
 		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey":       schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref),
 		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyList":   schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref),
 		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec":   schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref),
@@ -24,6 +27,134 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity":            schema_pkg_apis_identity_v1alpha1_UserIdentity(ref),
 		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityList":        schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref),
 		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus":      schema_pkg_apis_identity_v1alpha1_UserIdentityStatus(ref),
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_Passkey(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Passkey represents a WebAuthn passkey credential registered by a user with the external authentication provider (e.g., Zitadel).\n\nThis is a read-only, virtual resource: milo does not persist passkeys and does not accept create/update/delete requests for this kind. Enrollment and removal are performed by auth-ui directly against the authentication provider; this API exists so other Milo-aware surfaces (cloud-portal, staff-support tooling) can list/display a user's enrolled passkeys without embedding a provider-specific client.\n\nmetadata.name is the passkey ID assigned by the authentication provider.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyList is a list of Passkey resources.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Passkey"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Passkey", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyStatus contains the details of a passkey credential. All fields are read-only and populated by the authentication provider.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"userUID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UserUID is the unique identifier of the Milo user who owns this passkey. Used as a field-selector target (status.userUID=<uid>) for cross-user reads by staff-support callers — see the field-selector registration in pkg/apis/identity/scheme.go and the Session/ UserIdentity precedent it mirrors.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"displayName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DisplayName is the human-readable name of the passkey (Zitadel `name`), either user-supplied at enrollment or defaulted from the authenticator AAGUID / user agent by auth-ui.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the current activation state of the passkey, derived from the provider's AuthFactorState.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"userUID", "displayName", "state"},
+			},
+		},
 	}
 }
 

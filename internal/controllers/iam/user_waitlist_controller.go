@@ -176,14 +176,14 @@ func getDeterministicWaitlistEmailName(user *iamv1alpha1.User, condition iamv1al
 	return fmt.Sprintf("%s-%s-%s", string(user.GetUID()), user.GetName(), strings.ToLower(string(condition)))
 }
 
-// getEmailStatusCondition returns the status condition for the email based on the user's registration approval state.
+// getEmailStatusCondition returns the status condition for the email based on the user's platform access state.
 func getEmailStatusCondition(user *iamv1alpha1.User) iamv1alpha1.UserWaitlistEmailSentCondition {
-	switch user.Status.RegistrationApproval {
-	case iamv1alpha1.RegistrationApprovalStatePending:
-		return "" // No email for pending users, as waitilist is disabled
-	case iamv1alpha1.RegistrationApprovalStateApproved:
+	switch user.Status.PlatformAccess {
+	case iamv1alpha1.PlatformAccessStatePending:
+		return "" // No email for pending users, as waitlist is disabled
+	case iamv1alpha1.PlatformAccessStateApproved:
 		return iamv1alpha1.UserWaitlistApprovedEmailSentCondition
-	case iamv1alpha1.RegistrationApprovalStateRejected:
+	case iamv1alpha1.PlatformAccessStateRejected:
 		return iamv1alpha1.UserWaitlistRejectedEmailSentCondition
 	default:
 		return ""
