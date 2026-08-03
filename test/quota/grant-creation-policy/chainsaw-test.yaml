@@ -67,6 +67,30 @@ spec:
         Create an Organization that matches the GrantCreationPolicy selector.
         This should trigger automatic ResourceGrant creation.
       try:
+        - description: Remove any leftover test organization from earlier runs
+          continueOnError: true
+          delete:
+            timeout: 60s
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              name: grant-policy-test-org
+        - description: Ensure previous organization namespace is cleaned up
+          continueOnError: true
+          delete:
+            timeout: 120s
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: organization-grant-policy-test-org
+        - description: Wait for organization namespace to be fully removed
+          wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-grant-policy-test-org
+            timeout: 120s
+            for:
+              deletion: {}
         - apply:
             file: 02-test-organization.yaml
         - wait:
