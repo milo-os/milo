@@ -822,6 +822,14 @@ Email and name are required for onboarding to complete.
           BusinessName is the optional legal entity or company name.<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b>website</b></td>
+        <td>string</td>
+        <td>
+          Website is the optional website for the organization, e.g.
+"example.com" or "https://example.com".<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 

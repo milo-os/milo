@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -36,19 +37,26 @@ func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace stri
 		Complete()
 }
 
-// +kubebuilder:webhook:path=/mutate-resourcemanager-miloapis-com-v1alpha1-organization,mutating=true,failurePolicy=fail,sideEffects=NoneOnDryRun,groups=resourcemanager.miloapis.com,resources=organizations,verbs=create,versions=v1alpha1,name=morganization.datum.net,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
+// +kubebuilder:webhook:path=/mutate-resourcemanager-miloapis-com-v1alpha1-organization,mutating=true,failurePolicy=fail,sideEffects=NoneOnDryRun,groups=resourcemanager.miloapis.com,resources=organizations,verbs=create;update,versions=v1alpha1,name=morganization.datum.net,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
-// OrganizationMutator defaults organization create requests.
+// OrganizationMutator defaults organization create requests and normalizes
+// contact info on create and update.
 type OrganizationMutator struct{}
 
 func (m *OrganizationMutator) Default(ctx context.Context, org *resourcemanagerv1alpha1.Organization) error {
-	if !unifiedOrganizationsEnabled() {
-		return nil
-	}
+	sanitizeOrganizationContactInfo(org.Spec.ContactInfo)
 
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get request from context: %w", err)
+	}
+
+	if req.Operation != admissionv1.Create {
+		return nil
+	}
+
+	if !unifiedOrganizationsEnabled() {
+		return nil
 	}
 
 	if slices.Contains(req.UserInfo.Groups, "system:masters") {

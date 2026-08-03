@@ -233,6 +233,7 @@ webhooks:
     - v1alpha1
     operations:
     - CREATE
+    - UPDATE
     resources:
     - organizations
   sideEffects: NoneOnDryRun
