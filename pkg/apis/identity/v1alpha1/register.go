@@ -33,6 +33,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&SessionList{},
 		&UserIdentity{},
 		&UserIdentityList{},
+		&Passkey{},
+		&PasskeyList{},
 		&ServiceAccountKey{},
 		&ServiceAccountKeyList{},
 	}

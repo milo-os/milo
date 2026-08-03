@@ -1156,6 +1156,13 @@ Known condition types are: "Ready"<br/>
             <i>Default</i>: [map[lastTransitionTime:1970-01-01T00:00:00Z message:Waiting for control plane to reconcile reason:Unknown status:Unknown type:Ready]]<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b><a href="#projectstatussuspensionsindex">suspensions</a></b></td>
+        <td>[]object</td>
+        <td>
+          Suspensions lists the active/all suspensions currently affecting the project.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -1233,6 +1240,53 @@ with respect to the current state of the instance.<br/>
             <i>Minimum</i>: 0<br/>
         </td>
         <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Project.status.suspensions[index]
+<sup><sup>[↩ Parent](#projectstatus)</sup></sup>
+
+
+
+ProjectSuspensionInfo contains the details of a suspension affecting the project.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>reason</b></td>
+        <td>enum</td>
+        <td>
+          Reason is the category of suspension.<br/>
+          <br/>
+            <i>Enum</i>: Fraud, Abuse, Billing, Compliance, Administrative<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reinstateAuthority</b></td>
+        <td>enum</td>
+        <td>
+          ReinstateAuthority defines who can lift this suspension.<br/>
+          <br/>
+            <i>Enum</i>: Operator, Consumer<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>suspendedAt</b></td>
+        <td>string</td>
+        <td>
+          SuspendedAt is the timestamp when the suspension was created.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>true</td>
       </tr></tbody>
 </table>
 
@@ -1322,7 +1376,7 @@ ProjectSuspensionSpec defines the desired state of ProjectSuspension.
           Reason is the category of suspension.<br/>
           <br/>
             <i>Validations</i>:<li>self == oldSelf: reason is immutable</li>
-            <i>Enum</i>: Abuse, Billing, Compliance, Administrative<br/>
+            <i>Enum</i>: Fraud, Abuse, Billing, Compliance, Administrative<br/>
         </td>
         <td>true</td>
       </tr><tr>

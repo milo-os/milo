@@ -1,0 +1,253 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-suspension-lifecycle
+spec:
+  description: |
+    Tests the full lifecycle of project suspension propagation.
+
+    This test verifies:
+    - Adding multiple suspensions updates the project status with all references and reasons.
+    - Setting active suspensions sets the project condition 'Suspended' to True.
+    - Removing suspensions updates the status list accordingly.
+    - When all suspensions are removed, the 'Suspended' condition is set to False (Active).
+    - While a project is suspended, Create requests against its virtual control
+      plane are denied with a 403 Forbidden carrying a ProjectSuspended status
+      cause (ProjectSuspensionEnforcement admission plugin).
+    - While a project is suspended, Delete requests against its virtual
+      control plane are still allowed.
+    - Once the last suspension is lifted, Create requests succeed again
+      (verifies the enforcement plugin's short-TTL cache does not leave the
+      project stuck in a denied state after reinstatement).
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+    project:
+      kubeconfig: kubeconfig-project
+
+  steps:
+    - name: setup-organization
+      description: Create Organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - apply:
+            file: 07-test-user-rbac.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-suspension-lifecycle-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create Project in organization context
+      cluster: org
+      try:
+        - apply:
+            file: 02-test-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-suspension-lifecycle-project
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: seed-namespace-before-suspension
+      description: |
+        Create a Namespace in the project's control plane while the project
+        is still Active. This resource is deleted later, while the project
+        is suspended, to lock in the FR3 decision that Delete requests are
+        allowed during suspension.
+      cluster: project
+      try:
+        - apply:
+            file: 06-seed-namespace.yaml
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: suspension-lifecycle-seed-ns
+
+    - name: add-first-suspension
+      description: Add first suspension and verify project is suspended
+      cluster: main
+      try:
+        - apply:
+            file: 03-suspension1.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspension1.yaml
+
+    - name: verify-create-denied-while-suspended
+      description: |
+        With the project suspended, a Create request against its virtual
+        control plane must be denied by the ProjectSuspensionEnforcement
+        admission plugin with a 403 Forbidden carrying a ProjectSuspended
+        status cause (FR1/FR4). kubectl does not surface the structured
+        Details.Causes of a Forbidden response on write failures (it only
+        prints the human-readable message), so this step talks to the
+        project's control-plane REST endpoint directly with curl to inspect
+        the raw Status object returned by the API server.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/resourcemanager.miloapis.com/v1alpha1/projects/test-suspension-lifecycle-project/control-plane"
+              BODY='{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"suspension-lifecycle-write-check"}}'
+
+              HTTP_CODE=$(curl -sk -o /tmp/create-denied-resp.json -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer test-user-token" \
+                -H "Content-Type: application/json" \
+                -d "${BODY}" \
+                "${BASE}/api/v1/namespaces")
+
+              echo "HTTP status: ${HTTP_CODE}"
+              cat /tmp/create-denied-resp.json
+
+              if [ "${HTTP_CODE}" != "403" ]; then
+                echo "FAIL: expected 403 Forbidden while project is suspended, got ${HTTP_CODE}"
+                exit 1
+              fi
+
+              REASON=$(jq -r '.reason' /tmp/create-denied-resp.json)
+              if [ "${REASON}" != "Forbidden" ]; then
+                echo "FAIL: expected status.reason Forbidden, got ${REASON}"
+                exit 1
+              fi
+
+              CAUSE_TYPES=$(jq -r '.details.causes[]?.reason' /tmp/create-denied-resp.json)
+              echo "Causes: ${CAUSE_TYPES}"
+              echo "${CAUSE_TYPES}" | grep -qx "ProjectSuspended" \
+                || { echo "FAIL: ProjectSuspended cause not found in Details.Causes"; exit 1; }
+
+              echo "PASS: create denied with ProjectSuspended cause while project is suspended"
+
+    - name: verify-delete-allowed-while-suspended
+      description: |
+        Delete requests must still succeed while the project is suspended
+        (FR3 regression test) — the ProjectSuspensionEnforcement plugin is
+        not registered for the Delete operation.
+      cluster: project
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: suspension-lifecycle-seed-ns
+
+    - name: add-second-suspension
+      description: Add second suspension and verify project status lists both
+      cluster: main
+      try:
+        - apply:
+            file: 04-suspension2.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspension2.yaml
+
+    - name: add-third-suspension
+      description: Add third suspension and verify project status lists all three
+      cluster: main
+      try:
+        - apply:
+            file: 05-suspension3.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspension3.yaml
+
+    - name: remove-first-suspension
+      description: Delete first suspension and verify it is removed from project status
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-1
+        - assert:
+            cluster: org
+            file: assertions/assert-after-del1.yaml
+
+    - name: remove-second-suspension
+      description: Delete second suspension and verify it is removed from project status
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-2
+        - assert:
+            cluster: org
+            file: assertions/assert-after-del2.yaml
+
+    - name: remove-third-suspension
+      description: Delete third suspension and verify project returns to Active status
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-3
+        - assert:
+            cluster: org
+            file: assertions/assert-after-del3.yaml
+
+    - name: verify-create-allowed-after-reinstatement
+      description: |
+        Once the last suspension is lifted (project Active again), the same
+        Create that was denied earlier in verify-create-denied-while-suspended
+        must now succeed. This validates NFR2: the plugin's 2-second
+        suspension-state cache does not leave the project stuck in a
+        denied state after reinstatement. Reuses the exact same object name
+        that was previously denied, which also proves it was never actually
+        created while suspended.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/resourcemanager.miloapis.com/v1alpha1/projects/test-suspension-lifecycle-project/control-plane"
+              BODY='{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"suspension-lifecycle-write-check"}}'
+
+              HTTP_CODE=$(curl -sk -o /tmp/create-allowed-resp.json -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer test-user-token" \
+                -H "Content-Type: application/json" \
+                -d "${BODY}" \
+                "${BASE}/api/v1/namespaces")
+
+              echo "HTTP status: ${HTTP_CODE}"
+              cat /tmp/create-allowed-resp.json
+
+              if [ "${HTTP_CODE}" != "201" ]; then
+                echo "FAIL: expected 201 Created after reinstatement, got ${HTTP_CODE}"
+                exit 1
+              fi
+
+              echo "PASS: create succeeded after project reinstatement"
+
+    - name: cleanup-write-check-namespace
+      description: Remove the Namespace created by verify-create-allowed-after-reinstatement.
+      cluster: project
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: suspension-lifecycle-write-check

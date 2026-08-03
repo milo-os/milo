@@ -665,17 +665,6 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 		return []string{strings.ToLower(inv.Spec.Email)}
 	})
 
-	// Field indexes required by grantAccessApproval logic
-	builder = builder.
-		WithIndex(&iamv1alpha1.PlatformAccessRejection{}, uiPlatformAccessRejectionKey, func(obj client.Object) []string {
-			par := obj.(*iamv1alpha1.PlatformAccessRejection)
-			return []string{par.Spec.UserRef.Name}
-		}).
-		WithIndex(&iamv1alpha1.PlatformAccessApproval{}, uiPlatformAccessApprovalKey, func(obj client.Object) []string {
-			paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-			return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-		})
-
 	c := builder.Build()
 
 	uic := &UserInvitationController{
@@ -816,14 +805,6 @@ func TestUserInvitationController_Reconcile_UserCreatedLater(t *testing.T) {
 		inv := obj.(*iamv1alpha1.UserInvitation)
 		return []string{strings.ToLower(inv.Spec.Email)}
 	})
-	builder = builder.WithIndex(&iamv1alpha1.PlatformAccessRejection{}, uiPlatformAccessRejectionKey, func(obj client.Object) []string {
-		par := obj.(*iamv1alpha1.PlatformAccessRejection)
-		return []string{par.Spec.UserRef.Name}
-	}).
-		WithIndex(&iamv1alpha1.PlatformAccessApproval{}, uiPlatformAccessApprovalKey, func(obj client.Object) []string {
-			paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-			return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-		})
 	c := builder.Build()
 
 	uic := &UserInvitationController{Client: c, SystemNamespace: "milo-system", uiRelatedRoles: []iamv1alpha1.RoleReference{invitationRoleRef}}
@@ -1004,113 +985,6 @@ func TestUserInvitationController_createInvitationEmail(t *testing.T) {
 	}
 	if len(emailList.Items) != 1 {
 		t.Errorf("expected 1 Email after idempotent call, got %d", len(emailList.Items))
-	}
-}
-
-// TestUserInvitationController_grantAccessApproval verifies grantAccessApproval logic around existing
-// PlatformAccessApproval / PlatformAccessRejection resources.
-func TestUserInvitationController_grantAccessApproval(t *testing.T) {
-	ctx := context.TODO()
-	scheme := getTestScheme()
-
-	email := "invitee@example.com"
-
-	baseUI := &iamv1alpha1.UserInvitation{
-		ObjectMeta: metav1.ObjectMeta{Name: "inv", Namespace: "default", UID: types.UID("ui-uid")},
-		Spec:       iamv1alpha1.UserInvitationSpec{Email: email, OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "org"}},
-	}
-
-	user := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "invitee"}, Spec: iamv1alpha1.UserSpec{Email: email}}
-
-	makeApproval := func(refEmail string) *iamv1alpha1.PlatformAccessApproval {
-		return &iamv1alpha1.PlatformAccessApproval{
-			ObjectMeta: metav1.ObjectMeta{Name: "existing-approval"},
-			Spec:       iamv1alpha1.PlatformAccessApprovalSpec{SubjectRef: iamv1alpha1.SubjectReference{Email: refEmail}},
-		}
-	}
-
-	makeApprovalForUser := func(u *iamv1alpha1.User) *iamv1alpha1.PlatformAccessApproval {
-		return &iamv1alpha1.PlatformAccessApproval{
-			ObjectMeta: metav1.ObjectMeta{Name: "existing-approval-user"},
-			Spec:       iamv1alpha1.PlatformAccessApprovalSpec{SubjectRef: iamv1alpha1.SubjectReference{UserRef: &iamv1alpha1.UserReference{Name: u.Name}}},
-		}
-	}
-
-	makeRejection := func(u *iamv1alpha1.User) *iamv1alpha1.PlatformAccessRejection {
-		return &iamv1alpha1.PlatformAccessRejection{
-			ObjectMeta: metav1.ObjectMeta{Name: "reject"},
-			Spec:       iamv1alpha1.PlatformAccessRejectionSpec{UserRef: iamv1alpha1.UserReference{Name: u.Name}, Reason: "some"},
-		}
-	}
-
-	cases := []struct {
-		name            string
-		preObjects      []client.Object
-		expectCreate    bool
-		expectRejection bool // whether a rejection is pre-created and should be deleted
-	}{
-		{name: "create when none exist", preObjects: []client.Object{user, baseUI}, expectCreate: true},
-		{name: "approval exists by email", preObjects: []client.Object{user, baseUI, makeApproval(strings.ToLower(email))}, expectCreate: false},
-		{name: "approval exists by email uppercase variant", preObjects: []client.Object{user, baseUI, makeApproval(strings.ToUpper(email))}, expectCreate: false},
-		{name: "approval exists by user ref", preObjects: []client.Object{user, baseUI, makeApprovalForUser(user)}, expectCreate: false},
-		{name: "approvals exist by email and user", preObjects: []client.Object{user, baseUI, makeApproval(strings.ToLower(email)), makeApprovalForUser(user)}, expectCreate: false},
-		{name: "no user resource present", preObjects: []client.Object{baseUI}, expectCreate: true},
-		{name: "rejection deleted and approval created", preObjects: []client.Object{user, baseUI, makeRejection(user)}, expectCreate: true, expectRejection: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithScheme(scheme)
-			if len(tc.preObjects) > 0 {
-				builder = builder.WithObjects(tc.preObjects...)
-			}
-
-			// Field indexes required by grantAccessApproval
-			builder = builder.
-				WithIndex(&iamv1alpha1.PlatformAccessRejection{}, uiPlatformAccessRejectionKey, func(obj client.Object) []string {
-					par := obj.(*iamv1alpha1.PlatformAccessRejection)
-					return []string{par.Spec.UserRef.Name}
-				}).
-				WithIndex(&iamv1alpha1.PlatformAccessApproval{}, uiPlatformAccessApprovalKey, func(obj client.Object) []string {
-					paa := obj.(*iamv1alpha1.PlatformAccessApproval)
-					return []string{buildPlatformAccessApprovalIndexKey(&paa.Spec.SubjectRef)}
-				})
-
-			c := builder.Build()
-
-			uic := &UserInvitationController{Client: c}
-
-			// Fetch pointers used in invocation
-			var uObj *iamv1alpha1.User
-			if err := c.Get(ctx, types.NamespacedName{Name: user.Name}, &iamv1alpha1.User{}); err == nil {
-				uObj = user
-			}
-
-			if err := uic.grantAccessApproval(ctx, uObj, baseUI); err != nil {
-				t.Fatalf("grantAccessApproval returned error: %v", err)
-			}
-
-			// Verify expectations
-			approval := &iamv1alpha1.PlatformAccessApproval{}
-			err := c.Get(ctx, types.NamespacedName{Name: getDeterministicResourceName("platform-access-approval", *baseUI)}, approval)
-			if tc.expectCreate {
-				if err != nil {
-					t.Fatalf("expected PlatformAccessApproval created: %v", err)
-				}
-			} else {
-				if err == nil {
-					t.Fatalf("did not expect new PlatformAccessApproval, but one was found")
-				}
-			}
-
-			if tc.expectRejection {
-				// Rejection should have been deleted
-				rej := &iamv1alpha1.PlatformAccessRejection{}
-				if err := c.Get(ctx, types.NamespacedName{Name: "reject"}, rej); err == nil {
-					t.Fatalf("PlatformAccessRejection should have been deleted")
-				}
-			}
-		})
 	}
 }
 

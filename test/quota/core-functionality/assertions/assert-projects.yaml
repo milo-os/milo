@@ -3,24 +3,21 @@ kind: Project
 metadata:
   name: test-project-1
 status:
-  conditions:
-  - type: Ready
-    status: "True"
+  (conditions[?type == 'Ready']):
+  - status: "True"
 ---
 apiVersion: resourcemanager.miloapis.com/v1alpha1
 kind: Project
 metadata:
   name: test-project-2
 status:
-  conditions:
-  - type: Ready
-    status: "True"
+  (conditions[?type == 'Ready']):
+  - status: "True"
 ---
 apiVersion: resourcemanager.miloapis.com/v1alpha1
 kind: Project
 metadata:
   name: test-project-3
 status:
-  conditions:
-  - type: Ready
-    status: "True"
+  (conditions[?type == 'Ready']):
+  - status: "True"

@@ -3568,25 +3568,15 @@ populated by the auth provider or any service that provides a user avatar URL.<b
         <td>string</td>
         <td>
           LastLoginProvider records the identity provider that was most recently used by the
-user to log in (e.g., "github" or "google"). This field is set by the auth provider
-based on authentication events.<br/>
+user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
+by the auth provider based on authentication events.<br/>
         </td>
         <td>false</td>
       </tr><tr>
-        <td><b>registrationApproval</b></td>
-        <td>enum</td>
+        <td><b>platformAccess</b></td>
+        <td>string</td>
         <td>
-          RegistrationApproval represents the administrator’s decision on the user’s registration request.
-States:
-  - Pending:  The user is awaiting review by an administrator.
-  - Approved: The user registration has been approved.
-  - Rejected: The user registration has been rejected.
-The User resource is always created regardless of this value, but the
-ability for the person to sign into the platform and access resources is
-governed by this status: only *Approved* users are granted access, while
-*Pending* and *Rejected* users are prevented for interacting with resources.<br/>
-          <br/>
-            <i>Enum</i>: Pending, Approved, Rejected<br/>
+          PlatformAccess represents the user's access state on the platform.<br/>
         </td>
         <td>false</td>
       </tr><tr>

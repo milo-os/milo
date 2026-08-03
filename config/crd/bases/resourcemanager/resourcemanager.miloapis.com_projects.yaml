@@ -135,6 +135,39 @@ spec:
                   - type
                   type: object
                 type: array
+              suspensions:
+                description: Suspensions lists the active/all suspensions currently
+                  affecting the project.
+                items:
+                  description: ProjectSuspensionInfo contains the details of a suspension
+                    affecting the project.
+                  properties:
+                    reason:
+                      description: Reason is the category of suspension.
+                      enum:
+                      - Fraud
+                      - Abuse
+                      - Billing
+                      - Compliance
+                      - Administrative
+                      type: string
+                    reinstateAuthority:
+                      description: ReinstateAuthority defines who can lift this suspension.
+                      enum:
+                      - Operator
+                      - Consumer
+                      type: string
+                    suspendedAt:
+                      description: SuspendedAt is the timestamp when the suspension
+                        was created.
+                      format: date-time
+                      type: string
+                  required:
+                  - reason
+                  - reinstateAuthority
+                  - suspendedAt
+                  type: object
+                type: array
             type: object
         required:
         - spec
