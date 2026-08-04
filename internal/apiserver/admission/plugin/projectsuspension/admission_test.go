@@ -365,15 +365,31 @@ func TestValidate_SystemMastersExempt(t *testing.T) {
 	}
 }
 
+// TestValidate_AccessReviewExempt covers every authorization.k8s.io review
+// resource, including selfsubjectaccessreviews — clients (e.g. cloud-portal)
+// create one of these to decide whether to even attempt a read (a "can I
+// view this?" check before rendering a detail page). Denying the review
+// itself while suspended made read access look revoked, even though reads
+// are always supposed to be allowed regardless of suspension; this is a
+// regression test for that bug.
 func TestValidate_AccessReviewExempt(t *testing.T) {
-	p, _ := newTestPlugin(t, newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud))
+	for _, resource := range []string{
+		"subjectaccessreviews",
+		"localsubjectaccessreviews",
+		"selfsubjectaccessreviews",
+		"selfsubjectrulesreviews",
+	} {
+		t.Run(resource, func(t *testing.T) {
+			p, _ := newTestPlugin(t, newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonFraud))
 
-	ctx := milorequest.WithProject(context.Background(), "proj-1")
-	sarGVR := schema.GroupVersionResource{Group: "authorization.k8s.io", Version: "v1", Resource: "localsubjectaccessreviews"}
-	_, attrs := newAttrs(ctx, admission.Create, nil, sarGVR)
+			ctx := milorequest.WithProject(context.Background(), "proj-1")
+			sarGVR := schema.GroupVersionResource{Group: "authorization.k8s.io", Version: "v1", Resource: resource}
+			_, attrs := newAttrs(ctx, admission.Create, nil, sarGVR)
 
-	if err := p.Validate(ctx, attrs, nil); err != nil {
-		t.Errorf("Validate() error = %v, want nil for access review requests even when suspended", err)
+			if err := p.Validate(ctx, attrs, nil); err != nil {
+				t.Errorf("Validate() error = %v, want nil for %s even when suspended", err, resource)
+			}
+		})
 	}
 }
 

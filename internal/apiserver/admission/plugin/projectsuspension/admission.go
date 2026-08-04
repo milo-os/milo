@@ -73,11 +73,18 @@ var (
 
 // accessReviewResources lists the resources that must never be blocked by
 // this plugin, regardless of project suspension state, so authorization
-// checks never depend on suspension. Mirrors the same allow-list pattern
-// used by internal/apiserver/admission/plugin/namespace/lifecycle.
+// checks never depend on suspension. Notably includes
+// selfsubjectaccessreviews: clients (e.g. cloud-portal) create one of
+// these to decide whether to even attempt a read (a UI "can I view this?"
+// check before rendering a detail page) — denying the review itself, not
+// just a write, would make suspension look like it revoked read access
+// entirely, which it must never do (reads are always allowed; see the
+// package doc comment).
 var accessReviewResources = map[schema.GroupResource]bool{
 	{Group: "authorization.k8s.io", Resource: "subjectaccessreviews"}:      true,
 	{Group: "authorization.k8s.io", Resource: "localsubjectaccessreviews"}: true,
+	{Group: "authorization.k8s.io", Resource: "selfsubjectaccessreviews"}:  true,
+	{Group: "authorization.k8s.io", Resource: "selfsubjectrulesreviews"}:   true,
 }
 
 // suspensionState is the cached result of resolving a project's suspension
