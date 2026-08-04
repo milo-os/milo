@@ -1,0 +1,64 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: resourcemanager-projectsuspensions
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: resourcemanager-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: resourcemanager.projectsuspensions
+      rules:
+        - alert: ProjectSuspensionNotReady
+          expr: |
+            milo_projectsuspensions_info{phase!="Lifted"} == 1
+            and on(project) label_replace(
+              milo_projects_status_condition{type="Suspended"} == 0,
+              "project", "$1", "resource_name", "(.*)"
+            )
+          for: 5m
+          labels:
+            severity: warning
+            category: readiness
+            team: platform
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-suspension-not-ready.md"
+            summary: "Project suspension {{ $labels.resource_name }} is not ready"
+            description: |
+              An active ProjectSuspension has been declared for project {{ $labels.project }}, but the project status condition 'Suspended' has remained False for over 5 minutes.
+              
+              Project: {{ $labels.project }}
+              Suspension name: {{ $labels.resource_name }}
+              Reason: {{ $labels.reason }}
+              
+              Actions needed:
+              1. Check controller logs for propagation errors: kubectl logs -n milo-system -l app.kubernetes.io/component=controller-manager
+              2. Inspect the project condition status: kubectl get project {{ $labels.project }} -o yaml
+
+        - alert: ProjectReinstatementFailed
+          expr: |
+            milo_projects_status_condition{type="Suspended"} == 1
+            unless on(resource_name) label_replace(
+              milo_projectsuspensions_info{phase!="Lifted"} == 1,
+              "resource_name", "$1", "project", "(.*)"
+            )
+          for: 5m
+          labels:
+            severity: warning
+            category: readiness
+            team: platform
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-reinstatement-failed.md"
+            summary: "Project {{ $labels.resource_name }} failed to reinstate"
+            description: |
+              Project {{ $labels.resource_name }} is marked as Suspended, but there are no active ProjectSuspension resources targeting it.
+              The project is stuck in the suspended state and has failed to return to Active.
+              
+              Project: {{ $labels.resource_name }}
+              
+              Actions needed:
+              1. Check controller logs for propagation/reinstatement errors: kubectl logs -n milo-system -l app.kubernetes.io/component=controller-manager
+              2. Verify target project status conditions manually: kubectl get project {{ $labels.resource_name }} -o yaml
+

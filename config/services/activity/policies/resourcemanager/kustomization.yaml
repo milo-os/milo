@@ -7,3 +7,4 @@ resources:
   - organization-policy.yaml
   - project-policy.yaml
   - organizationmembership-policy.yaml
+  - projectsuspension-policy.yaml
