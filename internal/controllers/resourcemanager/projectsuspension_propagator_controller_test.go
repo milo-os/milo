@@ -10,7 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -48,7 +47,7 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			WithStatusSubresource(&resourcemanagerv1alpha1.Project{}).
 			Build()
 
-		r := &ProjectSuspensionPropagatorController{Client: c, EventRecorder: record.NewFakeRecorder(100)}
+		r := &ProjectSuspensionPropagatorController{Client: c, EventEmitter: newFakeEventEmitter(100)}
 
 		req := ctrl.Request{
 			NamespacedName: types.NamespacedName{
@@ -90,8 +89,8 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			}).
 			Build()
 
-		fakeRecorder := record.NewFakeRecorder(100)
-		r := &ProjectSuspensionPropagatorController{Client: c, EventRecorder: fakeRecorder}
+		fakeRecorder := newFakeEventEmitter(100)
+		r := &ProjectSuspensionPropagatorController{Client: c, EventEmitter: fakeRecorder}
 
 		req := ctrl.Request{
 			NamespacedName: types.NamespacedName{
@@ -185,8 +184,8 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			}).
 			Build()
 
-		fakeRecorder := record.NewFakeRecorder(100)
-		r := &ProjectSuspensionPropagatorController{Client: c, EventRecorder: fakeRecorder}
+		fakeRecorder := newFakeEventEmitter(100)
+		r := &ProjectSuspensionPropagatorController{Client: c, EventEmitter: fakeRecorder}
 
 		req := ctrl.Request{
 			NamespacedName: types.NamespacedName{
@@ -225,11 +224,20 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			t.Errorf("expected Suspended condition reason %v, got %v", resourcemanagerv1alpha1.ProjectSuspendedReason, cond.Reason)
 		}
 
-		// Verify event was emitted
+		// Verify event was emitted, carrying suspension categories (Abuse,
+		// Billing) but never the underlying ProjectSuspension resource
+		// names ("suspension-a", "suspension-b") — those are internal admin
+		// detail that must not reach consumer-facing activity feeds.
 		select {
 		case ev := <-fakeRecorder.Events:
 			if !strings.Contains(ev, "Suspended") {
 				t.Errorf("expected Suspended event, got: %s", ev)
+			}
+			if !strings.Contains(ev, "Abuse") || !strings.Contains(ev, "Billing") {
+				t.Errorf("expected event to carry both suspension categories, got: %s", ev)
+			}
+			if strings.Contains(ev, "suspension-a") || strings.Contains(ev, "suspension-b") {
+				t.Errorf("event must never contain ProjectSuspension resource names, got: %s", ev)
 			}
 		default:
 			t.Error("expected event to be emitted, but got none")
@@ -280,8 +288,8 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			}).
 			Build()
 
-		fakeRecorder := record.NewFakeRecorder(100)
-		r := &ProjectSuspensionPropagatorController{Client: c, EventRecorder: fakeRecorder}
+		fakeRecorder := newFakeEventEmitter(100)
+		r := &ProjectSuspensionPropagatorController{Client: c, EventEmitter: fakeRecorder}
 
 		req := ctrl.Request{
 			NamespacedName: types.NamespacedName{
@@ -299,11 +307,11 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			t.Fatalf("failed to get project: %v", err)
 		}
 
-		if len(updatedProject.Status.Suspensions) != 1 ||
-			updatedProject.Status.Suspensions[0].Reason != resourcemanagerv1alpha1.ReasonAbuse ||
-			updatedProject.Status.Suspensions[0].ReinstateAuthority != resourcemanagerv1alpha1.AuthorityOperator ||
-			updatedProject.Status.Suspensions[0].SuspendedAt.IsZero() {
-			t.Errorf("unexpected suspensions: %+v", updatedProject.Status.Suspensions)
+		// status.Suspensions only ever holds active suspensions (see
+		// ProjectSuspensionInfo's doc comment) — a Lifted ProjectSuspension
+		// must not appear here even though it still exists as a resource.
+		if len(updatedProject.Status.Suspensions) != 0 {
+			t.Errorf("expected 0 suspensions (Lifted suspensions are excluded), got %+v", updatedProject.Status.Suspensions)
 		}
 
 		cond := apimeta.FindStatusCondition(updatedProject.Status.Conditions, resourcemanagerv1alpha1.ProjectSuspended)
@@ -327,4 +335,148 @@ func TestProjectSuspensionController_Reconcile(t *testing.T) {
 			t.Error("expected event to be emitted, but got none")
 		}
 	})
+
+	t.Run("mix of active and lifted suspensions", func(t *testing.T) {
+		ctx := context.Background()
+		project := &resourcemanagerv1alpha1.Project{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-project",
+			},
+		}
+		activeSuspension := &resourcemanagerv1alpha1.ProjectSuspension{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "suspension-active",
+				CreationTimestamp: metav1.Now(),
+			},
+			Spec: resourcemanagerv1alpha1.ProjectSuspensionSpec{
+				ProjectRef: resourcemanagerv1alpha1.ProjectReference{
+					Name: "test-project",
+				},
+				Reason:             resourcemanagerv1alpha1.ReasonAbuse,
+				ReinstateAuthority: resourcemanagerv1alpha1.AuthorityOperator,
+			},
+			Status: resourcemanagerv1alpha1.ProjectSuspensionStatus{
+				Phase: resourcemanagerv1alpha1.PhaseActive,
+			},
+		}
+		liftedSuspension := &resourcemanagerv1alpha1.ProjectSuspension{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "suspension-lifted",
+				CreationTimestamp: metav1.Now(),
+			},
+			Spec: resourcemanagerv1alpha1.ProjectSuspensionSpec{
+				ProjectRef: resourcemanagerv1alpha1.ProjectReference{
+					Name: "test-project",
+				},
+				Reason:             resourcemanagerv1alpha1.ReasonBilling,
+				ReinstateAuthority: resourcemanagerv1alpha1.AuthorityOperator,
+			},
+			Status: resourcemanagerv1alpha1.ProjectSuspensionStatus{
+				Phase: resourcemanagerv1alpha1.PhaseLifted,
+			},
+		}
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(project, activeSuspension, liftedSuspension).
+			WithStatusSubresource(&resourcemanagerv1alpha1.Project{}).
+			WithIndex(&resourcemanagerv1alpha1.ProjectSuspension{}, projectRefNameIndex, func(rawObj client.Object) []string {
+				obj := rawObj.(*resourcemanagerv1alpha1.ProjectSuspension)
+				return []string{obj.Spec.ProjectRef.Name}
+			}).
+			Build()
+
+		fakeRecorder := newFakeEventEmitter(100)
+		r := &ProjectSuspensionPropagatorController{Client: c, EventEmitter: fakeRecorder}
+
+		req := ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name: "test-project",
+			},
+		}
+
+		_, err := r.Reconcile(ctx, req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var updatedProject resourcemanagerv1alpha1.Project
+		if err := c.Get(ctx, client.ObjectKey{Name: "test-project"}, &updatedProject); err != nil {
+			t.Fatalf("failed to get project: %v", err)
+		}
+
+		// Only the active suspension should appear in status.Suspensions;
+		// the lifted one must be excluded.
+		if len(updatedProject.Status.Suspensions) != 1 ||
+			updatedProject.Status.Suspensions[0].Reason != resourcemanagerv1alpha1.ReasonAbuse {
+			t.Errorf("expected only the active (Abuse) suspension, got %+v", updatedProject.Status.Suspensions)
+		}
+
+		// Verify Suspended event was emitted, carrying only the active
+		// suspension's category and never the ProjectSuspension resource
+		// names ("suspension-active", "suspension-lifted").
+		select {
+		case ev := <-fakeRecorder.Events:
+			if !strings.Contains(ev, "Suspended") {
+				t.Errorf("expected Suspended event, got: %s", ev)
+			}
+			if !strings.Contains(ev, "Abuse") {
+				t.Errorf("expected event to carry the suspension category, got: %s", ev)
+			}
+			if strings.Contains(ev, "Billing") {
+				t.Errorf("expected the lifted suspension's category to be excluded, got: %s", ev)
+			}
+			if strings.Contains(ev, "suspension-active") || strings.Contains(ev, "suspension-lifted") {
+				t.Errorf("event must never contain ProjectSuspension resource names, got: %s", ev)
+			}
+		default:
+			t.Error("expected event to be emitted, but got none")
+		}
+	})
+}
+
+// fakeEventEmitter records emitted Project lifecycle events for assertions.
+// Events are rendered "<reason> <note>" so tests can assert on either part
+// with a single substring check.
+type fakeEventEmitter struct {
+	Events chan string
+	err    error
+	calls  int
+}
+
+func newFakeEventEmitter(buffer int) *fakeEventEmitter {
+	return &fakeEventEmitter{Events: make(chan string, buffer)}
+}
+
+func (f *fakeEventEmitter) Emit(_ context.Context, project *resourcemanagerv1alpha1.Project, reason, note string) error {
+	f.calls++
+	if f.err != nil {
+		return f.err
+	}
+	f.Events <- fmt.Sprintf("%s %s", reason, note)
+	return nil
+}
+
+// Ensure the fake satisfies the interface the controller depends on.
+var _ projectEventEmitter = (*fakeEventEmitter)(nil)
+
+func TestRecordTransition_ContinuesWhenEmitFails(t *testing.T) {
+	// A failed event must not fail the reconcile. By the time recordTransition
+	// runs, the status patch has already succeeded, so returning an error here
+	// would only cause a pointless re-reconcile — the emit is logged instead.
+	emitter := newFakeEventEmitter(1)
+	emitter.err = fmt.Errorf("activity backend unavailable")
+
+	project := &resourcemanagerv1alpha1.Project{
+		ObjectMeta: metav1.ObjectMeta{Name: "project-123"},
+	}
+
+	recordTransition(context.Background(), emitter, project, false, true, []string{"Abuse"}, metav1.Time{})
+
+	if emitter.calls != 1 {
+		t.Errorf("expected one emit attempt, got %d", emitter.calls)
+	}
+	if len(emitter.Events) != 0 {
+		t.Error("failed emit must not enqueue an event")
+	}
 }

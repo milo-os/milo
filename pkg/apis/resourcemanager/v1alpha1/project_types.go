@@ -12,7 +12,14 @@ type ProjectSpec struct {
 	OwnerRef OwnerReference `json:"ownerRef"`
 }
 
-// ProjectSuspensionInfo contains the details of a suspension affecting the project.
+// ProjectSuspensionInfo contains the details of a suspension affecting the
+// project.
+//
+// Contract: only ProjectSuspensions in an active phase (status.phase ==
+// "Active", or unset/not-yet-reconciled) are represented here. A
+// ProjectSuspension that has moved past Active (e.g. "Lifted") is excluded.
+// Consumers must not assume every entry in status.suspensions still applies
+// enforcement/visibility beyond that active-only guarantee.
 type ProjectSuspensionInfo struct {
 	// Reason is the category of suspension.
 	// +kubebuilder:validation:Required
@@ -34,7 +41,8 @@ type ProjectStatus struct {
 	// +kubebuilder:default={{type: "Ready", status: "Unknown", reason: "Unknown", message: "Waiting for control plane to reconcile", lastTransitionTime: "1970-01-01T00:00:00Z"}}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Suspensions lists the active/all suspensions currently affecting the project.
+	// Suspensions lists the active suspensions currently affecting the
+	// project. See ProjectSuspensionInfo for the active-only contract.
 	// +kubebuilder:validation:Optional
 	Suspensions []ProjectSuspensionInfo `json:"suspensions,omitempty"`
 }

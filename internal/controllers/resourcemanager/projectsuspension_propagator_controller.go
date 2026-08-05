@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -26,16 +25,39 @@ import (
 // ProjectSuspensionPropagatorController reconciles a Project object's suspension status
 // by aggregating the ProjectSuspension resources that target it.
 type ProjectSuspensionPropagatorController struct {
-	Client        client.Client
-	EventRecorder record.EventRecorder
+	Client client.Client
+
+	// EventEmitter creates the consumer-facing Suspended/Reinstated events.
+	// It impersonates the project's parent context so the events proxy can
+	// scope-tag them; see ProjectEventEmitter for why the manager's shared
+	// EventRecorder cannot. Defaulted in SetupWithManager.
+	EventEmitter projectEventEmitter
 }
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects,verbs=get;list;watch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projectsuspensions,verbs=get;list;watch
 
+// Consumer-facing Suspended/Reinstated events are created through a client
+// that impersonates the controller's own service account plus the target
+// project's parent context, so the events proxy can scope-tag them
+// (see ProjectEventEmitter). That needs impersonate on the service account
+// itself — a username of the form system:serviceaccount:<ns>:<name> is
+// authorized against the serviceaccounts resource, not users — and on each
+// parent-context extra key, which are checked individually as
+// userextras/<key> subresources.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=impersonate
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=userextras/iam.miloapis.com/parent-type,verbs=impersonate
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=userextras/iam.miloapis.com/parent-name,verbs=impersonate
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create
+
 const projectRefNameIndex = "spec.projectRef.name"
 const controllerOwnerName = "project-suspension-controller"
+
+// defaultImpersonateUser is the principal the event emitter asserts when none
+// is configured. The controller-manager must hold `impersonate` on it, plus on
+// userextras/iam.miloapis.com/parent-type and .../parent-name.
+const defaultImpersonateUser = "system:serviceaccount:milo-system:milo-controller-manager"
 
 // getProjectSuspendedStatus returns true if the project is suspended, false otherwise.
 func getProjectSuspendedStatus(project *resourcemanagerv1alpha.Project) bool {
@@ -87,21 +109,32 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 		return ctrl.Result{}, fmt.Errorf("failed to list project suspensions: %w", err)
 	}
 
-	// Filter suspensions related to this project
+	// Filter suspensions related to this project. status.Suspensions only
+	// ever holds active suspensions (see ProjectSuspensionInfo's doc
+	// comment) — a ProjectSuspension whose phase has moved past Active
+	// (e.g. Lifted) is excluded, mirroring the activeSuspensionNames/
+	// activeReasons filtering below.
 	var suspensions []resourcemanagerv1alpha.ProjectSuspensionInfo
-	var activeSuspensionNames []string
 	var activeReasons []string
+	seenReasons := make(map[string]bool)
 
 	for _, ps := range suspensionList.Items {
+		// Active means the phase is explicitly Active, or still unset because
+		// the suspension hasn't been reconciled yet. Any other phase (today
+		// only Lifted) is treated as inactive.
+		if ps.Status.Phase != resourcemanagerv1alpha.PhaseActive && ps.Status.Phase != "" {
+			continue
+		}
+
 		suspensions = append(suspensions, resourcemanagerv1alpha.ProjectSuspensionInfo{
 			Reason:             ps.Spec.Reason,
 			SuspendedAt:        ps.CreationTimestamp,
 			ReinstateAuthority: ps.Spec.ReinstateAuthority,
 		})
-		// Phase is active if it's explicitly Active, or not set to Lifted.
-		if ps.Status.Phase == resourcemanagerv1alpha.PhaseActive || ps.Status.Phase == "" {
-			activeSuspensionNames = append(activeSuspensionNames, ps.Name)
-			activeReasons = append(activeReasons, string(ps.Spec.Reason))
+		reason := string(ps.Spec.Reason)
+		if !seenReasons[reason] {
+			seenReasons[reason] = true
+			activeReasons = append(activeReasons, reason)
 		}
 	}
 
@@ -115,19 +148,26 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 		}
 		return suspensions[i].SuspendedAt.Before(&suspensions[j].SuspendedAt)
 	})
-	sort.Strings(activeSuspensionNames)
+	sort.Strings(activeReasons)
 
 	project.Status.Suspensions = suspensions
 
-	// Update the Suspended condition
-	isSuspended := len(activeSuspensionNames) > 0
+	// Update the Suspended condition.
+	//
+	// The message names only the suspension reason categories (e.g. "Abuse"),
+	// never the ProjectSuspension resource names. Project.status is read by
+	// project members, so this message is a tenant-facing surface and carries
+	// the same redaction requirement as the Suspended event emitted by
+	// recordTransition — resource names, requestedBy and description are
+	// internal admin detail.
+	isSuspended := len(suspensions) > 0
 	var cond metav1.Condition
 	if isSuspended {
 		cond = metav1.Condition{
 			Type:               resourcemanagerv1alpha.ProjectSuspended,
 			Status:             metav1.ConditionTrue,
 			Reason:             resourcemanagerv1alpha.ProjectSuspendedReason,
-			Message:            fmt.Sprintf("Project is suspended due to active suspensions: %s", strings.Join(activeSuspensionNames, ", ")),
+			Message:            fmt.Sprintf("Project is suspended (category: %s)", strings.Join(activeReasons, ", ")),
 			ObservedGeneration: project.Generation,
 		}
 	} else {
@@ -157,7 +197,7 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 		if !wasSuspended && isSuspendedNow {
 			latestTime = getLatestActiveSuspensionTime(suspensionList.Items, project.Name)
 		}
-		recordTransition(r.EventRecorder, &project, wasSuspended, isSuspendedNow, activeSuspensionNames, latestTime)
+		recordTransition(ctx, r.EventEmitter, &project, wasSuspended, isSuspendedNow, activeReasons, latestTime)
 	}
 
 	return ctrl.Result{}, nil
@@ -165,7 +205,13 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ProjectSuspensionPropagatorController) SetupWithManager(mgr ctrl.Manager) error {
-	r.EventRecorder = mgr.GetEventRecorderFor("project-suspension-controller")
+	if r.EventEmitter == nil {
+		// Events are emitted through an impersonating client rather than
+		// mgr.GetEventRecorderFor: the recorder is backed by a single
+		// broadcaster over one static identity, but scope requires per-Project
+		// parent context on the request.
+		r.EventEmitter = NewProjectEventEmitter(mgr.GetConfig(), defaultImpersonateUser, controllerOwnerName)
+	}
 
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &resourcemanagerv1alpha.ProjectSuspension{}, projectRefNameIndex, func(rawObj client.Object) []string {
 		obj := rawObj.(*resourcemanagerv1alpha.ProjectSuspension)

@@ -1152,7 +1152,8 @@ Known condition types are: "Ready"<br/>
         <td><b><a href="#projectstatussuspensionsindex">suspensions</a></b></td>
         <td>[]object</td>
         <td>
-          Suspensions lists the active/all suspensions currently affecting the project.<br/>
+          Suspensions lists the active suspensions currently affecting the
+project. See ProjectSuspensionInfo for the active-only contract.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1241,7 +1242,14 @@ with respect to the current state of the instance.<br/>
 
 
 
-ProjectSuspensionInfo contains the details of a suspension affecting the project.
+ProjectSuspensionInfo contains the details of a suspension affecting the
+project.
+
+Contract: only ProjectSuspensions in an active phase (status.phase ==
+"Active", or unset/not-yet-reconciled) are represented here. A
+ProjectSuspension that has moved past Active (e.g. "Lifted") is excluded.
+Consumers must not assume every entry in status.suspensions still applies
+enforcement/visibility beyond that active-only guarantee.
 
 <table>
     <thead>

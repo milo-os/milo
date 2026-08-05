@@ -17,6 +17,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - impersonate
+- apiGroups:
   - '*'
   resources:
   - '*'
@@ -39,6 +45,13 @@ rules:
   verbs:
   - patch
   - update
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - userextras/iam.miloapis.com/parent-name
+  - userextras/iam.miloapis.com/parent-type
+  verbs:
+  - impersonate
 - apiGroups:
   - authorization.k8s.io
   resources:
@@ -65,6 +78,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
