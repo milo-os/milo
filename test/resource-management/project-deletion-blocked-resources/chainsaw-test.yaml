@@ -24,26 +24,103 @@ spec:
 
   # The projects are deleted by the test itself, which takes their control
   # planes with them, so chainsaw cannot clean up the resources it created
-  # inside them. The organization is removed by the last step.
+  # inside them. Everything this test creates is removed by its first and last
+  # steps instead, and the first step also clears anything a failed earlier run
+  # left behind so the test can be re-run.
   skipDelete: true
 
   clusters:
     main:
       kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
     project-default:
       kubeconfig: kubeconfig-project-default
     project-namespace:
       kubeconfig: kubeconfig-project-namespace
 
+  # A failed run leaves projects held in Terminating by the finalizers this
+  # test sets. Release them so the next run starts clean.
+  catch:
+    - script:
+        timeout: 60s
+        content: |
+          kubectl --kubeconfig kubeconfig-project-default -n default patch configmap held-resource \
+            --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+          kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
+            --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+          exit 0
+
   steps:
-    - name: create-projects
-      description: Create the organization and both projects, and wait for them to be ready
+    - name: clear-previous-run
+      description: |
+        Release and delete anything a previous run left behind. A project stuck
+        in Terminating cannot be re-created, so a rerun would otherwise never
+        get a ready project.
+      try:
+        - script:
+            timeout: 180s
+            content: |
+              kubectl --kubeconfig kubeconfig-project-default -n default patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+              kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+
+              for project in test-blocked-default-project test-blocked-namespace-project; do
+                kubectl --kubeconfig kubeconfig-main delete project "${project}" --wait=false >/dev/null 2>&1
+              done
+
+              for attempt in $(seq 1 60); do
+                remaining=$(kubectl --kubeconfig kubeconfig-main get projects -o name 2>/dev/null \
+                  | grep -c 'test-blocked-\(default\|namespace\)-project')
+                if [ "${remaining}" = "0" ]; then
+                  echo "no leftover projects from a previous run"
+                  exit 0
+                fi
+                sleep 2
+              done
+
+              echo "WARN: leftover projects are still present after 120s"
+              kubectl --kubeconfig kubeconfig-main get projects 2>&1 || true
+              exit 0
+
+    - name: setup-organization
+      description: Create Organization, User, and OrganizationMembership for the test projects
       cluster: main
       try:
         - apply:
             file: 01-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-blocked-resources-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
         - apply:
-            file: 02-test-projects.yaml
+            file: 02-test-user.yaml
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: User
+            name: user-blocked-resources
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+        - apply:
+            file: 03-organization-membership.yaml
+
+    - name: create-projects
+      description: |
+        Create both projects in the organization context, which is where
+        Project creation carries the parent information it requires.
+      cluster: org
+      try:
+        - apply:
+            file: 04-test-projects.yaml
         - wait:
             apiVersion: resourcemanager.miloapis.com/v1alpha1
             kind: Project
@@ -68,14 +145,14 @@ spec:
       cluster: project-default
       try:
         - apply:
-            file: 03-held-resource-in-default.yaml
+            file: 05-held-resource-in-default.yaml
 
     - name: seed-held-resource-in-namespace
       description: Create a project namespace holding a finalizer-held resource
       cluster: project-namespace
       try:
         - apply:
-            file: 04-held-resource-in-namespace.yaml
+            file: 06-held-resource-in-namespace.yaml
         - wait:
             apiVersion: v1
             kind: Namespace
@@ -95,14 +172,14 @@ spec:
             timeout: 30s
             content: |
               set -e
-              kubectl --kubeconfig kubeconfig-main delete project test-blocked-default-project --wait=false
-              kubectl --kubeconfig kubeconfig-main delete project test-blocked-namespace-project --wait=false
+              kubectl --kubeconfig kubeconfig-org-template delete project test-blocked-default-project --wait=false
+              kubectl --kubeconfig kubeconfig-org-template delete project test-blocked-namespace-project --wait=false
 
     - name: verify-projects-wait-for-their-resources
       description: |
         Give cleanup time to run, then verify neither project has been removed,
         and that each names what is holding it.
-      cluster: main
+      cluster: org
       try:
         - sleep:
             duration: 45s
@@ -143,7 +220,7 @@ spec:
 
     - name: verify-projects-delete-promptly
       description: With nothing left holding them, both projects finish deleting
-      cluster: main
+      cluster: org
       try:
         - wait:
             apiVersion: resourcemanager.miloapis.com/v1alpha1
@@ -161,7 +238,7 @@ spec:
               deletion: {}
 
     - name: cleanup-organization
-      description: Remove the organization the test created
+      description: Remove the organization and user the test created
       cluster: main
       try:
         - delete:
@@ -169,3 +246,8 @@ spec:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
               kind: Organization
               name: test-blocked-resources-org
+        - delete:
+            ref:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: User
+              name: user-blocked-resources

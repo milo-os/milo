@@ -23,29 +23,59 @@ This test verifies, for the two places project resources live:
 
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
-| 1 | [create-projects](#step-create-projects) | 0 | 4 | 0 | 0 | 0 |
-| 2 | [seed-held-resource-in-default](#step-seed-held-resource-in-default) | 0 | 1 | 0 | 0 | 0 |
-| 3 | [seed-held-resource-in-namespace](#step-seed-held-resource-in-namespace) | 0 | 2 | 0 | 0 | 0 |
-| 4 | [delete-projects](#step-delete-projects) | 0 | 1 | 0 | 0 | 0 |
-| 5 | [verify-projects-wait-for-their-resources](#step-verify-projects-wait-for-their-resources) | 0 | 3 | 0 | 0 | 0 |
-| 6 | [verify-held-resource-in-default-survives](#step-verify-held-resource-in-default-survives) | 0 | 1 | 0 | 0 | 0 |
-| 7 | [verify-namespace-outlives-its-contents](#step-verify-namespace-outlives-its-contents) | 0 | 2 | 0 | 0 | 0 |
-| 8 | [release-finalizers](#step-release-finalizers) | 0 | 1 | 0 | 0 | 0 |
-| 9 | [verify-projects-delete-promptly](#step-verify-projects-delete-promptly) | 0 | 2 | 0 | 0 | 0 |
-| 10 | [cleanup-organization](#step-cleanup-organization) | 0 | 1 | 0 | 0 | 0 |
+| 1 | [clear-previous-run](#step-clear-previous-run) | 0 | 1 | 1 | 0 | 0 |
+| 2 | [setup-organization](#step-setup-organization) | 0 | 5 | 1 | 0 | 0 |
+| 3 | [create-projects](#step-create-projects) | 0 | 3 | 1 | 0 | 0 |
+| 4 | [seed-held-resource-in-default](#step-seed-held-resource-in-default) | 0 | 1 | 1 | 0 | 0 |
+| 5 | [seed-held-resource-in-namespace](#step-seed-held-resource-in-namespace) | 0 | 2 | 1 | 0 | 0 |
+| 6 | [delete-projects](#step-delete-projects) | 0 | 1 | 1 | 0 | 0 |
+| 7 | [verify-projects-wait-for-their-resources](#step-verify-projects-wait-for-their-resources) | 0 | 3 | 1 | 0 | 0 |
+| 8 | [verify-held-resource-in-default-survives](#step-verify-held-resource-in-default-survives) | 0 | 1 | 1 | 0 | 0 |
+| 9 | [verify-namespace-outlives-its-contents](#step-verify-namespace-outlives-its-contents) | 0 | 2 | 1 | 0 | 0 |
+| 10 | [release-finalizers](#step-release-finalizers) | 0 | 1 | 1 | 0 | 0 |
+| 11 | [verify-projects-delete-promptly](#step-verify-projects-delete-promptly) | 0 | 2 | 1 | 0 | 0 |
+| 12 | [cleanup-organization](#step-cleanup-organization) | 0 | 2 | 1 | 0 | 0 |
 
-### Step: `create-projects`
+### Step: `clear-previous-run`
 
-Create the organization and both projects, and wait for them to be ready
+Release and delete anything a previous run left behind. A project stuck
+in Terminating cannot be re-created, so a rerun would otherwise never
+get a ready project.
+
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `script` | 0 | 0 | *No description* |
+
+### Step: `setup-organization`
+
+Create Organization, User, and OrganizationMembership for the test projects
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
-| 2 | `apply` | 0 | 0 | *No description* |
-| 3 | `wait` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
+| 3 | `apply` | 0 | 0 | *No description* |
 | 4 | `wait` | 0 | 0 | *No description* |
+| 5 | `apply` | 0 | 0 | *No description* |
+
+### Step: `create-projects`
+
+Create both projects in the organization context, which is where
+Project creation carries the parent information it requires.
+
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
+| 3 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `seed-held-resource-in-default`
 
@@ -140,13 +170,14 @@ With nothing left holding them, both projects finish deleting
 
 ### Step: `cleanup-organization`
 
-Remove the organization the test created
+Remove the organization and user the test created
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `delete` | 0 | 0 | *No description* |
+| 2 | `delete` | 0 | 0 | *No description* |
 
 ---
 
