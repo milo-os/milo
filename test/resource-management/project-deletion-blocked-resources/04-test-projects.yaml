@@ -1,0 +1,21 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-blocked-default-project
+  labels:
+    test.miloapis.com/scenario: "project-deletion-blocked-resources"
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-blocked-resources-org
+---
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-blocked-namespace-project
+  labels:
+    test.miloapis.com/scenario: "project-deletion-blocked-resources"
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-blocked-resources-org

@@ -35,6 +35,26 @@ var (
 		[]string{"target_state"}, // "suspended", "reinstated"
 	)
 
+	deletionPendingSeconds = metrics.NewGaugeVec(
+		&metrics.GaugeOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_deletion_pending_seconds",
+			Help:           "Seconds a deleted project has been waiting for its resources to drain. Absent once the project is gone.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"project"},
+	)
+
+	deletionBlockingResources = metrics.NewGaugeVec(
+		&metrics.GaugeOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_deletion_blocking_resources",
+			Help:           "Number of resources still holding a deleted project's control plane open.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"project"},
+	)
+
 	pauseFailedTotal = metrics.NewCounter(
 		&metrics.CounterOpts{
 			Subsystem:      "milo_resourcemanager",
@@ -52,6 +72,23 @@ func init() {
 	legacyregistry.MustRegister(activeSuspensionsTotal)
 	legacyregistry.MustRegister(transitionDurationSeconds)
 	legacyregistry.MustRegister(pauseFailedTotal)
+	legacyregistry.MustRegister(deletionPendingSeconds)
+	legacyregistry.MustRegister(deletionBlockingResources)
+}
+
+// recordProjectDeletionProgress publishes how long a deleted project has been
+// waiting for its resources to drain, so a project that is never going to
+// finish on its own can be alerted on.
+func recordProjectDeletionProgress(projectName string, waiting time.Duration, blockers int) {
+	deletionPendingSeconds.WithLabelValues(projectName).Set(waiting.Seconds())
+	deletionBlockingResources.WithLabelValues(projectName).Set(float64(blockers))
+}
+
+// clearProjectDeletionProgress drops the deletion series for a project that has
+// finished draining.
+func clearProjectDeletionProgress(projectName string) {
+	deletionPendingSeconds.DeleteLabelValues(projectName)
+	deletionBlockingResources.DeleteLabelValues(projectName)
 }
 
 func reportActiveSuspensions(projectName string, reasons []string) {

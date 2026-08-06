@@ -1,0 +1,253 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-deletion-blocked-resources
+spec:
+  description: |
+    Tests that deleting a Project does not strand resources that are still
+    being finalized in its control plane.
+
+    Consumers put finalizers on the resources they create for a project, and
+    resolve their own state through the project's namespaces. A project that
+    finishes deleting while those resources are still held leaves them with a
+    finalizer that can never run, and a namespace removed ahead of its contents
+    breaks the guarantee that a namespace outlives what lives in it.
+
+    This test verifies, for the two places project resources live:
+    - A resource held by a finalizer in the "default" namespace, which the API
+      server does not allow to be deleted, keeps the project in Terminating.
+    - A resource held by a finalizer in a project namespace keeps both the
+      namespace and the project alive, so the namespace outlives its contents.
+    - The ResourceCleanup condition names the blocking resource and the
+      finalizer holding it, so the component responsible is identifiable.
+    - Once the finalizers are released, both projects delete promptly.
+
+  # The projects are deleted by the test itself, which takes their control
+  # planes with them, so chainsaw cannot clean up the resources it created
+  # inside them. Everything this test creates is removed by its first and last
+  # steps instead, and the first step also clears anything a failed earlier run
+  # left behind so the test can be re-run.
+  skipDelete: true
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+    project-default:
+      kubeconfig: kubeconfig-project-default
+    project-namespace:
+      kubeconfig: kubeconfig-project-namespace
+
+  # A failed run leaves projects held in Terminating by the finalizers this
+  # test sets. Release them so the next run starts clean.
+  catch:
+    - script:
+        timeout: 60s
+        content: |
+          kubectl --kubeconfig kubeconfig-project-default -n default patch configmap held-resource \
+            --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+          kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
+            --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+          exit 0
+
+  steps:
+    - name: clear-previous-run
+      description: |
+        Release and delete anything a previous run left behind. A project stuck
+        in Terminating cannot be re-created, so a rerun would otherwise never
+        get a ready project.
+      try:
+        - script:
+            timeout: 180s
+            content: |
+              kubectl --kubeconfig kubeconfig-project-default -n default patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+              kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
+
+              for project in test-blocked-default-project test-blocked-namespace-project; do
+                kubectl --kubeconfig kubeconfig-main delete project "${project}" --wait=false >/dev/null 2>&1
+              done
+
+              for attempt in $(seq 1 60); do
+                remaining=$(kubectl --kubeconfig kubeconfig-main get projects -o name 2>/dev/null \
+                  | grep -c 'test-blocked-\(default\|namespace\)-project')
+                if [ "${remaining}" = "0" ]; then
+                  echo "no leftover projects from a previous run"
+                  exit 0
+                fi
+                sleep 2
+              done
+
+              echo "WARN: leftover projects are still present after 120s"
+              kubectl --kubeconfig kubeconfig-main get projects 2>&1 || true
+              exit 0
+
+    - name: setup-organization
+      description: Create Organization, User, and OrganizationMembership for the test projects
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-blocked-resources-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+        - apply:
+            file: 02-test-user.yaml
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: User
+            name: user-blocked-resources
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+        - apply:
+            file: 03-organization-membership.yaml
+
+    - name: create-projects
+      description: |
+        Create both projects in the organization context, which is where
+        Project creation carries the parent information it requires.
+      cluster: org
+      try:
+        - apply:
+            file: 04-test-projects.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-default-project
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-namespace-project
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: seed-held-resource-in-default
+      description: Create a finalizer-held resource in the project's default namespace
+      cluster: project-default
+      try:
+        - apply:
+            file: 05-held-resource-in-default.yaml
+
+    - name: seed-held-resource-in-namespace
+      description: Create a project namespace holding a finalizer-held resource
+      cluster: project-namespace
+      try:
+        - apply:
+            file: 06-held-resource-in-namespace.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: blocked-ns
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: delete-projects
+      description: |
+        Delete both projects without waiting. Neither can finish while its
+        resources are held, so the delete call must not block the test.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              kubectl --kubeconfig kubeconfig-org-template delete project test-blocked-default-project --wait=false
+              kubectl --kubeconfig kubeconfig-org-template delete project test-blocked-namespace-project --wait=false
+
+    - name: verify-projects-wait-for-their-resources
+      description: |
+        Give cleanup time to run, then verify neither project has been removed,
+        and that each names what is holding it.
+      cluster: org
+      try:
+        - sleep:
+            duration: 45s
+        - assert:
+            file: assertions/assert-blocked-default.yaml
+        - assert:
+            file: assertions/assert-blocked-namespace.yaml
+
+    - name: verify-held-resource-in-default-survives
+      description: The held resource is still there, in a control plane that still answers
+      cluster: project-default
+      try:
+        - assert:
+            file: assertions/assert-held-resource-in-default.yaml
+
+    - name: verify-namespace-outlives-its-contents
+      description: |
+        The namespace is terminating, but must not be removed while the
+        resource inside it still exists.
+      cluster: project-namespace
+      try:
+        - assert:
+            file: assertions/assert-namespace-outlives-contents.yaml
+        - assert:
+            file: assertions/assert-held-resource-in-namespace.yaml
+
+    - name: release-finalizers
+      description: Release the consumer finalizers, as a working consumer would
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              kubectl --kubeconfig kubeconfig-project-default -n default patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}'
+              kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}'
+
+    - name: verify-projects-delete-promptly
+      description: With nothing left holding them, both projects finish deleting
+      cluster: org
+      try:
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-default-project
+            timeout: 120s
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-namespace-project
+            timeout: 120s
+            for:
+              deletion: {}
+
+    - name: cleanup-organization
+      description: Remove the organization and user the test created
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              name: test-blocked-resources-org
+        - delete:
+            ref:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: User
+              name: user-blocked-resources
