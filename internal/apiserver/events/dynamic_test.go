@@ -78,6 +78,34 @@ func TestInjectScopeAnnotations_PlatformScope(t *testing.T) {
 	assert.Empty(t, event.Annotations)
 }
 
+func TestInjectScopeAnnotations_InvolvedObjectNeverSetsScope(t *testing.T) {
+	// The involved object is client-supplied and must never influence scope.
+	// Here it names a different Project than the request's parent context;
+	// the request context has to win.
+	ctx := contextWithUser(&authuser.DefaultInfo{
+		Name: "alice",
+		Extra: map[string][]string{
+			ExtraKeyParentType: {"Project"},
+			ExtraKeyParentName: {"project-alice"},
+		},
+	})
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-event"},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: "resourcemanager.miloapis.com/v1alpha1",
+			Kind:       "Project",
+			Name:       "project-other",
+		},
+	}
+
+	err := injectScopeAnnotations(ctx, event)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Project", event.Annotations[ScopeTypeAnnotation])
+	assert.Equal(t, "project-alice", event.Annotations[ScopeNameAnnotation],
+		"scope must come from the request context, never the involved object")
+}
+
 func TestInjectScopeAnnotations_PreservesExistingAnnotations(t *testing.T) {
 	// Existing annotations should be preserved, scope annotations added
 	ctx := contextWithUser(&authuser.DefaultInfo{
@@ -136,6 +164,33 @@ func TestInjectScopeAnnotations_PartialScope(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, event.Annotations)
+}
+
+func TestInjectScopeAnnotations_IncompleteContextIgnoresInvolvedObject(t *testing.T) {
+	// A request without complete parent context leaves the event unannotated;
+	// the involved object must not be used to complete it, even when it names
+	// a perfectly valid Project.
+	ctx := contextWithUser(&authuser.DefaultInfo{
+		Name: "mallory",
+		Extra: map[string][]string{
+			ExtraKeyParentType: {"Project"},
+			// Missing ExtraKeyParentName
+		},
+	})
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-event"},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: "resourcemanager.miloapis.com/v1alpha1",
+			Kind:       "Project",
+			Name:       "victim-project",
+		},
+	}
+
+	err := injectScopeAnnotations(ctx, event)
+
+	require.NoError(t, err)
+	assert.Empty(t, event.Annotations,
+		"incomplete parent context must not be completed from the client-supplied involved object")
 }
 
 func TestInjectScopeAnnotations_OverwritesScope(t *testing.T) {

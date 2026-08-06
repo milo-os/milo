@@ -118,6 +118,21 @@ func TestREST_Create_InjectsScopeAnnotations(t *testing.T) {
 			},
 			wantNoScopeInjection: true,
 		},
+		{
+			name: "controller service account without parent context is left unscoped",
+			user: &authuser.DefaultInfo{
+				Name: "system:serviceaccount:milo-system:project-suspension-controller",
+			},
+			event: &corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{Name: "project-suspended.jkl"},
+				InvolvedObject: corev1.ObjectReference{
+					APIVersion: "resourcemanager.miloapis.com/v1alpha1",
+					Kind:       "Project",
+					Name:       "project-999",
+				},
+				Reason: "Suspended",
+			},
+		},
 	}
 
 	for _, tt := range tests {

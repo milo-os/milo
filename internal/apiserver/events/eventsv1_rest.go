@@ -273,7 +273,12 @@ func (r *EventsV1REST) ConvertToTable(ctx context.Context, object runtime.Object
 	return table, nil
 }
 
-// injectEventsV1ScopeAnnotations adds scope annotations to an events.k8s.io/v1 Event
+// injectEventsV1ScopeAnnotations adds scope annotations to an events.k8s.io/v1 Event.
+//
+// See injectScopeAnnotations (scope.go) for the shared rules: scope comes only
+// from the request's parent-type/parent-name context, never from the event body
+// (the Regarding object included), and a request without full parent context
+// leaves the event unannotated.
 func injectEventsV1ScopeAnnotations(ctx context.Context, event *eventsv1.Event) error {
 	userInfo, ok := apirequest.UserFrom(ctx)
 	if !ok {
@@ -285,7 +290,6 @@ func injectEventsV1ScopeAnnotations(ctx context.Context, event *eventsv1.Event) 
 	parentType := getFirstExtra(extras, ExtraKeyParentType)
 	parentName := getFirstExtra(extras, ExtraKeyParentName)
 
-	// Events without scope context are normal (e.g., system components, platform-level operations)
 	if parentType == "" || parentName == "" {
 		return nil
 	}

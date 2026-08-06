@@ -7,6 +7,8 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/klog/v2"
+
+	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 )
 
 const (
@@ -25,9 +27,10 @@ const (
 	ScopeTypeProject      = "Project"
 	ScopeTypeUser         = "User"
 
-	// User extra keys (from iam.miloapis.com/v1alpha1/doc.go)
-	ParentTypeExtraKey = "iam.miloapis.com/parent-type"
-	ParentNameExtraKey = "iam.miloapis.com/parent-name"
+	// User extra keys, aliased to iam.miloapis.com/v1alpha1 so there is a
+	// single source of truth for the wire values.
+	ParentTypeExtraKey = iamv1alpha1.ParentKindExtraKey
+	ParentNameExtraKey = iamv1alpha1.ParentNameExtraKey
 )
 
 // AuditScopeAnnotationDecorator adds platform scope annotations to audit events
