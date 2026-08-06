@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: project-namespace-init-test
+  labels:
+    test.miloapis.com/scenario: "project-namespace-init"
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-project-namespace-init-org
