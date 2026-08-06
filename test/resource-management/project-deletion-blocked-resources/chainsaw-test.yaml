@@ -1,0 +1,171 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-deletion-blocked-resources
+spec:
+  description: |
+    Tests that deleting a Project does not strand resources that are still
+    being finalized in its control plane.
+
+    Consumers put finalizers on the resources they create for a project, and
+    resolve their own state through the project's namespaces. A project that
+    finishes deleting while those resources are still held leaves them with a
+    finalizer that can never run, and a namespace removed ahead of its contents
+    breaks the guarantee that a namespace outlives what lives in it.
+
+    This test verifies, for the two places project resources live:
+    - A resource held by a finalizer in the "default" namespace, which the API
+      server does not allow to be deleted, keeps the project in Terminating.
+    - A resource held by a finalizer in a project namespace keeps both the
+      namespace and the project alive, so the namespace outlives its contents.
+    - The ResourceCleanup condition names the blocking resource and the
+      finalizer holding it, so the component responsible is identifiable.
+    - Once the finalizers are released, both projects delete promptly.
+
+  # The projects are deleted by the test itself, which takes their control
+  # planes with them, so chainsaw cannot clean up the resources it created
+  # inside them. The organization is removed by the last step.
+  skipDelete: true
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    project-default:
+      kubeconfig: kubeconfig-project-default
+    project-namespace:
+      kubeconfig: kubeconfig-project-namespace
+
+  steps:
+    - name: create-projects
+      description: Create the organization and both projects, and wait for them to be ready
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - apply:
+            file: 02-test-projects.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-default-project
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-namespace-project
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: seed-held-resource-in-default
+      description: Create a finalizer-held resource in the project's default namespace
+      cluster: project-default
+      try:
+        - apply:
+            file: 03-held-resource-in-default.yaml
+
+    - name: seed-held-resource-in-namespace
+      description: Create a project namespace holding a finalizer-held resource
+      cluster: project-namespace
+      try:
+        - apply:
+            file: 04-held-resource-in-namespace.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: blocked-ns
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: delete-projects
+      description: |
+        Delete both projects without waiting. Neither can finish while its
+        resources are held, so the delete call must not block the test.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              kubectl --kubeconfig kubeconfig-main delete project test-blocked-default-project --wait=false
+              kubectl --kubeconfig kubeconfig-main delete project test-blocked-namespace-project --wait=false
+
+    - name: verify-projects-wait-for-their-resources
+      description: |
+        Give cleanup time to run, then verify neither project has been removed,
+        and that each names what is holding it.
+      cluster: main
+      try:
+        - sleep:
+            duration: 45s
+        - assert:
+            file: assertions/assert-blocked-default.yaml
+        - assert:
+            file: assertions/assert-blocked-namespace.yaml
+
+    - name: verify-held-resource-in-default-survives
+      description: The held resource is still there, in a control plane that still answers
+      cluster: project-default
+      try:
+        - assert:
+            file: assertions/assert-held-resource-in-default.yaml
+
+    - name: verify-namespace-outlives-its-contents
+      description: |
+        The namespace is terminating, but must not be removed while the
+        resource inside it still exists.
+      cluster: project-namespace
+      try:
+        - assert:
+            file: assertions/assert-namespace-outlives-contents.yaml
+        - assert:
+            file: assertions/assert-held-resource-in-namespace.yaml
+
+    - name: release-finalizers
+      description: Release the consumer finalizers, as a working consumer would
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              kubectl --kubeconfig kubeconfig-project-default -n default patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}'
+              kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
+                --type=merge -p '{"metadata":{"finalizers":null}}'
+
+    - name: verify-projects-delete-promptly
+      description: With nothing left holding them, both projects finish deleting
+      cluster: main
+      try:
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-default-project
+            timeout: 120s
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-blocked-namespace-project
+            timeout: 120s
+            for:
+              deletion: {}
+
+    - name: cleanup-organization
+      description: Remove the organization the test created
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              name: test-blocked-resources-org

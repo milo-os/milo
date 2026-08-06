@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: blocked-ns
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: held-resource
+  namespace: blocked-ns
+  finalizers:
+    - test.miloapis.com/consumer-cleanup
+data:
+  purpose: "held by a consumer finalizer"

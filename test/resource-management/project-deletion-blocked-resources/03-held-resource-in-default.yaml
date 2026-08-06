@@ -1,0 +1,11 @@
+# Stands in for anything an operator creates for a project and finalizes on
+# deletion, in the namespace every project starts with.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: held-resource
+  namespace: default
+  finalizers:
+    - test.miloapis.com/consumer-cleanup
+data:
+  purpose: "held by a consumer finalizer"

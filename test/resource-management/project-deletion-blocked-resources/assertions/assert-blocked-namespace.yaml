@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-blocked-namespace-project
+status:
+  (conditions[?type == 'ResourceCleanup']):
+  - status: "True"
+    reason: CleanupAwaitingCompletion
+    (contains(message, 'blocked-ns')): true
+    (contains(message, 'test.miloapis.com/consumer-cleanup')): true

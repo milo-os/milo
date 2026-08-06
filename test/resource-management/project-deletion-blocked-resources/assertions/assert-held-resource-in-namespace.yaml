@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: held-resource
+  namespace: blocked-ns
+  finalizers:
+    - test.miloapis.com/consumer-cleanup
