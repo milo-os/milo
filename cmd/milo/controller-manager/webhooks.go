@@ -163,6 +163,12 @@ func newWebhookRESTMapper(ctx context.Context, rootClientBuilder clientbuilder.C
 // startCoreControlPlaneWebhooks starts the admission webhook server on every replica.
 // It is invoked before leader election when leader election is enabled so followers
 // also listen on the webhook port and Service endpoints remain healthy.
+//
+// This is the dedicated, non-leader-election webhook manager: admission stays
+// available even when leadership has not been (or cannot be) acquired, so it is
+// independent of the leader-gated reconcile loops. Do NOT add a separate webhook
+// Deployment to "decouple" it — that is already done here. To harden webhook
+// availability, run the controller-manager with >=2 replicas.
 func startCoreControlPlaneWebhooks(
 	ctx context.Context,
 	opts *Options,
