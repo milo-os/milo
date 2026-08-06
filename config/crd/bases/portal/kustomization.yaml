@@ -1,0 +1,3 @@
+resources:
+- portal.miloapis.com_consumerportalplugins.yaml
+- portal.miloapis.com_providerportalplugins.yaml

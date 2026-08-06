@@ -5,3 +5,4 @@ resources:
 - ../../bases/notification/
 - ../../bases/quota/
 - ../../bases/crm/
+- ../../bases/portal/
