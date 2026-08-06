@@ -1,0 +1,12 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: OrganizationMembership
+metadata:
+  name: user-admin-membership
+  namespace: organization-test-service-account-contract-org
+  labels:
+    test.miloapis.com/scenario: "service-account-contract"
+spec:
+  organizationRef:
+    name: test-service-account-contract-org
+  userRef:
+    name: "user-admin"

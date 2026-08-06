@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: service-account-contract-test
+  labels:
+    test.miloapis.com/scenario: "service-account-contract"
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-service-account-contract-org
