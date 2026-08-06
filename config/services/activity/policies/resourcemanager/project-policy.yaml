@@ -10,6 +10,15 @@
 # - Use the project name as display text
 # - Action-oriented language ("created project", "deleted project", "was suspended")
 # - Exclude system actors to reduce reconciliation noise
+#
+# eventRules for Suspended/Reinstated use event.regarding.name and
+# event.note (the events.k8s.io/v1 CEL contract exposes the Kubernetes
+# Event's involved object as `regarding`, not `involvedObject`, and its
+# message as `note`, not `message` — see datum-cloud/activity
+# internal/cel/environment.go). The controller crafts that note to be
+# consumer-safe: it names the suspension reason CATEGORY (e.g. "Abuse") but
+# never the ProjectSuspension resource name, requestedBy, or description,
+# which are internal admin detail.
 apiVersion: activity.miloapis.com/v1alpha1
 kind: ActivityPolicy
 metadata:
@@ -38,8 +47,8 @@ spec:
   eventRules:
     - name: suspended
       match: "event.reason == 'Suspended'"
-      summary: "Project {{ event.involvedObject.name }} was suspended"
+      summary: "Project {{ event.regarding.name }} was suspended (category: {{ event.note }})"
 
     - name: reinstated
       match: "event.reason == 'Reinstated'"
-      summary: "Project {{ event.involvedObject.name }} was reinstated"
+      summary: "Project {{ event.regarding.name }} was reinstated"

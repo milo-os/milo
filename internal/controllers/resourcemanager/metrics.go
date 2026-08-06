@@ -1,16 +1,10 @@
 package resourcemanager
 
 import (
-	"strings"
 	"sync"
-	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
 	"k8s.io/component-base/metrics"
 	legacyregistry "k8s.io/component-base/metrics/legacyregistry"
-
-	resourcemanagerv1alpha "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 )
 
 var (
@@ -35,6 +29,21 @@ var (
 		[]string{"target_state"}, // "suspended", "reinstated"
 	)
 
+	// eventEmitFailedTotal exists because event emission is best-effort: a
+	// failure is logged and the reconcile continues. Scope is now carried
+	// solely by impersonation, with no fallback, so a silent emit failure
+	// means suspension events stop reaching tenant feeds with nothing else
+	// to catch it. This counter is what makes that visible.
+	eventEmitFailedTotal = metrics.NewCounterVec(
+		&metrics.CounterOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_lifecycle_event_emit_failed_total",
+			Help:           "Total number of project lifecycle events that could not be emitted, by reason.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"reason"}, // "Suspended", "Reinstated"
+	)
+
 	pauseFailedTotal = metrics.NewCounter(
 		&metrics.CounterOpts{
 			Subsystem:      "milo_resourcemanager",
@@ -52,6 +61,7 @@ func init() {
 	legacyregistry.MustRegister(activeSuspensionsTotal)
 	legacyregistry.MustRegister(transitionDurationSeconds)
 	legacyregistry.MustRegister(pauseFailedTotal)
+	legacyregistry.MustRegister(eventEmitFailedTotal)
 }
 
 func reportActiveSuspensions(projectName string, reasons []string) {
@@ -91,20 +101,4 @@ func clearActiveSuspensions(projectName string) {
 
 func recordPauseFailure() {
 	pauseFailedTotal.Inc()
-}
-
-func recordTransition(eventRecorder record.EventRecorder, project *resourcemanagerv1alpha.Project, wasSuspended, isSuspendedNow bool, activeSuspensionNames []string, latestSuspensionTime metav1.Time) {
-	if !wasSuspended && isSuspendedNow {
-		if eventRecorder != nil {
-			eventRecorder.Eventf(project, "Normal", "Suspended", "Project %s has been suspended due to active suspensions: %s", project.Name, strings.Join(activeSuspensionNames, ", "))
-		}
-		if !latestSuspensionTime.IsZero() {
-			transitionDurationSeconds.WithLabelValues("suspended").Observe(time.Since(latestSuspensionTime.Time).Seconds())
-		}
-	} else if wasSuspended && !isSuspendedNow {
-		if eventRecorder != nil {
-			eventRecorder.Eventf(project, "Normal", "Reinstated", "Project %s has been reinstated", project.Name)
-		}
-		transitionDurationSeconds.WithLabelValues("reinstated").Observe(0)
-	}
 }

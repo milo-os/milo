@@ -93,6 +93,8 @@ The proxy extracts scope from user.Extra fields:
 - `iam.miloapis.com/parent-type` → `platform.miloapis.com/scope.type` (annotation)
 - `iam.miloapis.com/parent-name` → `platform.miloapis.com/scope.name` (annotation)
 
+**Controller-authored events**: In-cluster controllers carry no `parent-type`/`parent-name` extras of their own, so events they create through a plain client are stored with no scope annotations and are visible only at the platform level. Scope is never inferred from the event body to compensate — event fields are client-supplied and untrusted for a tenant-isolation decision. A controller whose events must reach a tenant's feed impersonates that parent context instead (see `ProjectEventEmitter`).
+
 Activity filters events based on these scope annotations:
 
 | User Scope | Visibility |
@@ -101,7 +103,7 @@ Activity filters events based on these scope annotations:
 | Organization | Events with matching scope.type=Organization and scope.name |
 | Project | Events with matching scope.type=Project and scope.name |
 
-Users cannot modify scope annotations. The proxy re-injects scope on every Create and Update operation to prevent tampering.
+Users cannot modify scope annotations: the request's own parent-type/parent-name context always takes priority over any annotations already present on the event, and the proxy re-injects scope on every Create and Update operation to prevent tampering. Nothing on the event body can influence scope.
 
 ### Retry Logic
 
