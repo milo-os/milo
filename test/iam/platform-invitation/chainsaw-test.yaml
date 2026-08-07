@@ -1,0 +1,62 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-invitation
+spec:
+  description: |
+    Validate PlatformInvitation end-to-end:
+    - Load EmailTemplate used by the controller
+    - Create PlatformInvitation
+    - Verify PlatformInvitation Ready=True
+    - Verify Email created in milo-system
+    - Create User with matching email
+    - Verify User registrationApproval=Approved
+  steps:
+  - name: setup-template
+    description: Apply the EmailTemplate required by PlatformInvitation controller
+    try:
+    - apply:
+        file: resources/email-template.yaml
+
+  - name: create-invitation
+    description: Create the PlatformInvitation
+    try:
+    - apply:
+        file: resources/platform-invitation.yaml
+        outputs:
+          - name: pi
+            value: (@)
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: PlatformInvitation
+        name: platform-invitation-e2e
+        timeout: 2m
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - assert:
+        file: assertions/assert-platforminvitation-ready.yaml
+    - assert:
+        file: assertions/assert-email-exists.yaml
+    - assert:
+        file: assertions/platformaccessapproval-exists.yaml
+
+  - name: create-user-and-verify
+    description: Create the User and verify registrationApproval becomes Approved
+    try:
+    - apply:
+        file: resources/user.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: platform-invited-user
+        timeout: 2m
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - assert:
+        file: assertions/assert-user-approved.yaml
+
+

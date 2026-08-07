@@ -1,0 +1,5 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: Email
+metadata:
+  name: (join('-', [$pi.metadata.uid, 'platform-invitation-e2e']))
+  namespace: milo-system

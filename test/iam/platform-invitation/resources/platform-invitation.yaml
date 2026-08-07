@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformInvitation
+metadata:
+  name: platform-invitation-e2e
+spec:
+  email: invited.user@example.com
+  givenName: Invited
+  familyName: User
+
+
