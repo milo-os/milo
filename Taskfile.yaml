@@ -292,6 +292,30 @@ tasks:
         KUBECONFIG=.milo/kubeconfig "{{.TOOL_DIR}}/chainsaw" test $TEST_PATHS --selector "requires!=authorization-provider"
     silent: true
 
+  test:scale:
+    desc: Run scale benchmarks against a running Milo API server. Requires 'task dev:setup' to be run first.
+    silent: true
+    cmds:
+      - |
+        set -e
+
+        if [ ! -f ".milo/kubeconfig" ]; then
+          echo "Error: Milo kubeconfig not found at .milo/kubeconfig"
+          echo "Please run 'task dev:setup' to set up the test infrastructure first."
+          exit 1
+        fi
+
+        if ! KUBECONFIG=.milo/kubeconfig kubectl get --raw /healthz &>/dev/null; then
+          echo "Error: Cannot connect to Milo API server"
+          echo "Please ensure the test infrastructure is running with 'task dev:setup'"
+          echo "You can check the status with:"
+          echo "  task test-infra:kubectl -- get pods -n milo-system"
+          exit 1
+        fi
+        echo "✓ Connected to Milo API server"
+
+        go test -tags scale -v -timeout 30m ./test/scale/...
+
   test:unit:
     desc: Run unit tests
     cmds:
