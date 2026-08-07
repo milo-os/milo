@@ -1,0 +1,35 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: GrantCreationPolicy
+metadata:
+  name: cn-mc-test-project-notes-grant-policy
+  labels:
+    test.miloapis.com/notes: "clusternote-multicluster"
+spec:
+  disabled: false
+  trigger:
+    resource:
+      apiVersion: "resourcemanager.miloapis.com/v1alpha1"
+      kind: "Project"
+    constraints:
+      - expression: 'has(trigger.metadata.labels) && "test.miloapis.com/notes" in trigger.metadata.labels && trigger.metadata.labels["test.miloapis.com/notes"] == "clusternote-multicluster"'
+  target:
+    parentContext:
+      apiGroup: "resourcemanager.miloapis.com"
+      kind: "Project"
+      nameExpression: "trigger.metadata.name"
+    resourceGrantTemplate:
+      metadata:
+        name: "auto-grant-{{trigger.metadata.name}}"
+        namespace: "milo-system"
+        labels:
+          quota.miloapis.com/auto-created: "true"
+          test.miloapis.com/notes: "clusternote-multicluster"
+      spec:
+        consumerRef:
+          apiGroup: "resourcemanager.miloapis.com"
+          kind: "Project"
+          name: "{{trigger.metadata.name}}"
+        allowances:
+          - resourceType: "notes.miloapis.com/notes"
+            buckets:
+              - amount: 10
