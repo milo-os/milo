@@ -235,7 +235,20 @@ func (v *UserValidator) createSelfManagePolicyBinding(ctx context.Context, user 
 		},
 	}
 
-	if err := v.client.Create(ctx, policyBinding); err != nil {
+	// Tolerate AlreadyExists: this webhook runs before the User is written to
+	// etcd, so a retried or concurrent signup re-enters here with the binding
+	// already present. Returning the error would fail admission on the User
+	// itself, and callers test for IsAlreadyExists on the User — a predicate an
+	// admission denial never satisfies.
+	//
+	// Leave an existing binding ALONE. A "repair" that compares the existing
+	// binding's UID against this attempt's is actively harmful: the apiserver
+	// stamps a fresh UID on every create attempt before admission runs, so a
+	// re-create of an already-persisted User — the steady state user_sweep.go
+	// produces on every pass — arrives carrying a UID that will never persist.
+	// Rewriting the binding to match it would destroy a correct record, and
+	// spec.resourceSelector is immutable so the damage is permanent.
+	if err := v.client.Create(ctx, policyBinding); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create policy binding resource: %w", err)
 	}
 
@@ -260,7 +273,17 @@ func (v *UserValidator) createUserPreference(ctx context.Context, user *iamv1alp
 	}
 
 	if err := v.client.Create(ctx, userPreference); err != nil {
-		return nil, fmt.Errorf("failed to create user preference resource: %w", err)
+		if !errors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("failed to create user preference resource: %w", err)
+		}
+		// Re-read, do not just swallow. Create populates UID on success but
+		// leaves it empty on conflict, and the caller stamps that UID into the
+		// userpreference-self-manage PolicyBinding's ResourceRef. Tolerating the
+		// error alone would emit an authorization record pointing at UID "" —
+		// wrong in a way no "returned no error" assertion would catch.
+		if err := v.client.Get(ctx, client.ObjectKey{Name: userPreference.Name}, userPreference); err != nil {
+			return nil, fmt.Errorf("failed to read existing user preference resource: %w", err)
+		}
 	}
 
 	return userPreference, nil
@@ -299,7 +322,9 @@ func (v *UserValidator) createUserPreferencePolicyBinding(ctx context.Context, u
 		},
 	}
 
-	if err := v.client.Create(ctx, policyBinding); err != nil {
+	// Tolerate AlreadyExists and leave an existing binding alone, same reasoning
+	// as the user-self-manage binding.
+	if err := v.client.Create(ctx, policyBinding); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create user preference policy binding resource: %w", err)
 	}
 
