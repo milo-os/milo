@@ -1,0 +1,18 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: suspension-escalation-test-project
+status:
+  (conditions[?type == 'Suspended']):
+  - status: "True"
+    reason: Suspended
+  (conditions[?type == 'PendingDeletion']):
+  - status: "True"
+    reason: SuspensionRetentionWindowElapsing
+  (suspensionEscalation.deletionAt != null): true
+  # notifiedDaysRemaining is populated by a second status patch just after
+  # deletionAt is set, so length() must not be called directly on it — while
+  # the reconcile is mid-flight, suspensionEscalation (and therefore this
+  # field) can still be null, and length(null) is a JMESPath type error
+  # (immediate assert failure) rather than a retryable false.
+  (length(suspensionEscalation.notifiedDaysRemaining || `[]`) > `0`): true
