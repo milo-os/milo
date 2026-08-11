@@ -1,0 +1,90 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: EmailTemplate
+metadata:
+  name: project-suspension-deletion-warning
+spec:
+  subject: "Action required: project {{.ProjectName}} will be deleted in {{.DaysUntilDeletion}} day(s)"
+  htmlBody: |
+    <html>
+      <head>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333333;
+          }
+          .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 30px;
+          }
+          .warning {
+            padding: 12px 16px;
+            background-color: #fff3cd;
+            border: 1px solid #ffe69c;
+            border-radius: 4px;
+            margin: 20px 0;
+          }
+          .footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #666666;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Project suspended: action required</h1>
+          </div>
+
+          <p>Hello {{.OrganizationName}},</p>
+
+          <p>Your project <strong>{{.ProjectName}}</strong> is currently suspended.</p>
+
+          <div class="warning">
+            <p>Unless the suspension is lifted, this project will be permanently
+            deleted in <strong>{{.DaysUntilDeletion}} day(s)</strong>, on
+            {{.DeletionDate}}.</p>
+          </div>
+
+          <p>To keep your project, resolve the reason for the suspension and
+          contact support if you believe this was done in error.</p>
+
+          <div class="footer">
+            <p>This is an automated message, please do not reply to this email.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  textBody: |
+    Project suspended: action required
+
+    Hello {{.OrganizationName}},
+
+    Your project {{.ProjectName}} is currently suspended.
+
+    Unless the suspension is lifted, this project will be permanently deleted
+    in {{.DaysUntilDeletion}} day(s), on {{.DeletionDate}}.
+
+    To keep your project, resolve the reason for the suspension and contact
+    support if you believe this was done in error.
+
+    Note: This is an automated message, please do not reply to this email.
+  variables:
+  - name: "ProjectName"
+    required: true
+    type: "string"
+  - name: "OrganizationName"
+    required: true
+    type: "string"
+  - name: "DaysUntilDeletion"
+    required: true
+    type: "string"
+  - name: "DeletionDate"
+    required: true
+    type: "string"
