@@ -66,6 +66,9 @@ spec:
               kubectl --kubeconfig kubeconfig-project-namespace -n blocked-ns patch configmap held-resource \
                 --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1
 
+              kubectl --kubeconfig kubeconfig-main patch claimcreationpolicy project-configmap-claim-policy \
+                --type=merge -p '{"spec":{"disabled":true}}' >/dev/null 2>&1 || true
+
               for project in test-blocked-default-project test-blocked-namespace-project; do
                 kubectl --kubeconfig kubeconfig-main delete project "${project}" --wait=false >/dev/null 2>&1
               done
@@ -241,6 +244,10 @@ spec:
       description: Remove the organization and user the test created
       cluster: main
       try:
+        - script:
+            content: |
+              kubectl --kubeconfig kubeconfig-main patch claimcreationpolicy project-configmap-claim-policy \
+                --type=merge -p '{"spec":{"disabled":false}}' >/dev/null 2>&1 || true
         - delete:
             ref:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
