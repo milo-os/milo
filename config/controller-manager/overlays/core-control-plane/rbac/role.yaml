@@ -319,6 +319,7 @@ rules:
 - apiGroups:
   - resourcemanager.miloapis.com
   resources:
+  - organizations/finalizers
   - projects/finalizers
   verbs:
   - update

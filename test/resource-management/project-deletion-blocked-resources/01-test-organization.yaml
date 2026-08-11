@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: test-blocked-resources-org
+  labels:
+    test.miloapis.com/scenario: "project-deletion-blocked-resources"
+  annotations:
+    kubernetes.io/description: "Organization for testing project deletion with blocked resources"
+    kubernetes.io/display-name: "Test Project Deletion Blocked Resources Organization"
+spec:
+  type: Standard

@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -42,6 +43,17 @@ func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace stri
 type OrganizationMutator struct{}
 
 func (m *OrganizationMutator) Default(ctx context.Context, org *resourcemanagerv1alpha1.Organization) error {
+	// Added here, synchronously at admission, rather than by the controller's
+	// first reconcile: a finalizer needs no cross-object existence check (unlike
+	// an owner reference), so it's safe to set before the object is persisted,
+	// and doing so here means it can never miss the window between an
+	// Organization being created and immediately deleted. Without it, an
+	// Organization deleted before the controller's first reconcile ever runs
+	// would have no finalizer to block on, and its namespace would be removed
+	// with no owner reference ever having been set -- orphaning it and
+	// everything inside it.
+	controllerutil.AddFinalizer(org, resourcemanagercontroller.OrganizationNamespaceFinalizer)
+
 	if !unifiedOrganizationsEnabled() {
 		return nil
 	}

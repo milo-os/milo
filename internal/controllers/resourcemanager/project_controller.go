@@ -33,6 +33,21 @@ import (
 
 const projectFinalizer = "resourcemanager.miloapis.com/project-controller"
 
+const (
+	// cleanupPollInterval is how often a deleting project is checked while its
+	// resources are expected to be draining.
+	cleanupPollInterval = 5 * time.Second
+
+	// cleanupFastPollWindow is how long a deleting project is polled at
+	// cleanupPollInterval before backing off. A project that has not drained by
+	// then is waiting on something that is not going to finish in a moment.
+	cleanupFastPollWindow = time.Minute
+
+	// cleanupSlowPollInterval is how often a project that has not drained
+	// within cleanupFastPollWindow is checked.
+	cleanupSlowPollInterval = 30 * time.Second
+)
+
 var gvrGatewayClass = schema.GroupVersionResource{
 	Group:    "gateway.networking.k8s.io",
 	Version:  "v1",
@@ -84,16 +99,6 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Deletion path: clean up project resources, then remove finalizer
 	if !project.DeletionTimestamp.IsZero() {
-		// Best-effort delete the ProjectControlPlane in infra
-		if r.InfraClient != nil {
-			var pcp infrastructurev1alpha1.ProjectControlPlane
-			if err := r.InfraClient.Get(ctx, types.NamespacedName{
-				Namespace: project.Namespace,
-				Name:      project.Name,
-			}, &pcp); err == nil && pcp.DeletionTimestamp.IsZero() {
-				_ = r.InfraClient.Delete(ctx, &pcp)
-			}
-		}
 		if controllerutil.ContainsFinalizer(&project, projectFinalizer) {
 			projCfg := r.forProject(r.BaseConfig, project.Name)
 
@@ -103,12 +108,14 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			if cleanupCond != nil && cleanupCond.Status == metav1.ConditionTrue &&
 				cleanupCond.Reason == resourcemanagerv1alpha.ProjectCleanupAwaitingCompletionReason {
 
-				done, err := r.Purger.IsPurgeComplete(ctx, projCfg, project.Name)
+				cleanup, err := r.Purger.Status(ctx, projCfg, project.Name)
 				if err != nil {
 					logger.Error(err, "check cleanup completion", "project", project.Name)
-					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+					return ctrl.Result{RequeueAfter: cleanupPollInterval}, nil
 				}
-				if done {
+				if cleanup.Complete {
+					clearProjectDeletionProgress(project.Name)
+
 					// Update ResourceCleanup condition to reflect completion
 					cleanupDone := metav1.Condition{
 						Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
@@ -120,6 +127,19 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupDone) {
 						if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
 							return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
+						}
+					}
+
+					// The control plane is only reclaimed once nothing is left
+					// in it, so consumers can finish their own cleanup against
+					// a control plane that still answers.
+					if r.InfraClient != nil {
+						var pcp infrastructurev1alpha1.ProjectControlPlane
+						if err := r.InfraClient.Get(ctx, types.NamespacedName{
+							Namespace: project.Namespace,
+							Name:      project.Name,
+						}, &pcp); err == nil && pcp.DeletionTimestamp.IsZero() {
+							_ = r.InfraClient.Delete(ctx, &pcp)
 						}
 					}
 
@@ -137,21 +157,43 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					return ctrl.Result{}, nil
 				}
 
-				// Resources still exist — transition back to CleanupStarted
-				// so the next reconcile re-issues delete commands.
-				reissue := metav1.Condition{
+				// Resources still exist. The project stays in Terminating and
+				// names what is holding it, so the component responsible for
+				// the finalizer is identifiable.
+				waiting := time.Since(project.DeletionTimestamp.Time)
+				recordProjectDeletionProgress(project.Name, waiting, len(cleanup.Blockers))
+				logger.Info("waiting for project resources to drain",
+					"project", project.Name,
+					"waitingSeconds", int(waiting.Seconds()),
+					"blockers", cleanup.Message())
+
+				awaiting := metav1.Condition{
 					Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
 					Status:             metav1.ConditionTrue,
-					Reason:             resourcemanagerv1alpha.ProjectCleanupStartedReason,
-					Message:            "Re-issuing delete commands for remaining project resources",
+					Reason:             resourcemanagerv1alpha.ProjectCleanupAwaitingCompletionReason,
+					Message:            cleanup.Message(),
 					ObservedGeneration: project.Generation,
 				}
-				if apimeta.SetStatusCondition(&project.Status.Conditions, reissue) {
+				if apimeta.SetStatusCondition(&project.Status.Conditions, awaiting) {
 					if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
 						return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
 					}
 				}
-				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+
+				if waiting <= cleanupFastPollWindow {
+					return ctrl.Result{RequeueAfter: cleanupPollInterval}, nil
+				}
+
+				// Namespaces that are drained in place stay writable, so
+				// objects can still appear after the first sweep. Re-issue the
+				// deletes on the slow poll to pick those up.
+				if err := r.Purger.StartPurge(ctx, projCfg, project.Name, projectpurge.Options{
+					Timeout:  2 * time.Minute,
+					Parallel: 16,
+				}); err != nil {
+					logger.Error(err, "re-issue cleanup", "project", project.Name)
+				}
+				return ctrl.Result{RequeueAfter: cleanupSlowPollInterval}, nil
 			}
 
 			// CleanupStarted or no condition yet — issue delete commands.
@@ -173,11 +215,11 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Parallel: 16,
 			}); err != nil {
 				logger.Error(err, "start cleanup", "project", project.Name)
-				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				return ctrl.Result{RequeueAfter: cleanupPollInterval}, nil
 			}
 
 			// Transition to awaiting completion — subsequent reconciles
-			// will check IsPurgeComplete instead of re-issuing deletes.
+			// poll for the resources to drain instead of re-issuing deletes.
 			cleanupAwaiting := metav1.Condition{
 				Type:               resourcemanagerv1alpha.ProjectResourceCleanup,
 				Status:             metav1.ConditionTrue,
@@ -191,7 +233,7 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 			}
 
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: cleanupPollInterval}, nil
 		}
 		return ctrl.Result{}, nil
 	}

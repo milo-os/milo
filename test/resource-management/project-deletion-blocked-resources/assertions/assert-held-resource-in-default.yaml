@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: held-resource
+  namespace: default
+  finalizers:
+    - test.miloapis.com/consumer-cleanup

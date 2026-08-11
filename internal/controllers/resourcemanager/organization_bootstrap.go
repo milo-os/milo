@@ -35,6 +35,21 @@ func EnsureOrganizationNamespace(ctx context.Context, c client.Client, org *reso
 		},
 	}
 
+	// The owner reference to org is deliberately NOT set here. This is called
+	// synchronously from the Organization's validating admission webhook,
+	// which runs before the Organization itself is persisted (Kubernetes
+	// invokes validating admission before the object is written to the
+	// backing store). A namespace created here with an owner reference to org
+	// would briefly point at an object that doesn't exist yet from any other
+	// reader's perspective -- including the garbage collector, which
+	// independently verifies owners it doesn't recognize and deletes
+	// dependents whose owner appears absent. Under load that GET can land in
+	// the gap before the Organization commits, and GC deletes the namespace
+	// within milliseconds of creating it.
+	//
+	// OrganizationController.Reconcile sets this owner reference once the
+	// Organization is genuinely committed and watchable, and holds a
+	// finalizer on the Organization so deletion can't outrun that step.
 	if err := c.Create(ctx, namespace); err != nil {
 		return fmt.Errorf("creating organization namespace: %w", err)
 	}

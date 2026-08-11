@@ -40,7 +40,7 @@ spec:
         - wait:
             apiVersion: iam.miloapis.com/v1alpha1
             kind: User
-            name: "user-admin"
+            name: "user-project-creation-admin"
             timeout: 30s
             for:
               condition:

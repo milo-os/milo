@@ -6,7 +6,8 @@ configMapGenerator:
     files:
     - projects.yaml
     - organizations.yaml
-    - organization_memberships.yaml 
+    - organization_memberships.yaml
+    - projectsuspensions.yaml
     options:
       labels:
         telemetry.datumapis.com/core-resource-metrics-config: "true"

@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: user-blocked-resources
+  labels:
+    test.miloapis.com/scenario: "project-deletion-blocked-resources"
+spec:
+  email: blocked-resources-admin@test.local
+  givenName: BlockedResourcesTest
+  familyName: Admin
