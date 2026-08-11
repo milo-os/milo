@@ -84,7 +84,7 @@ spec:
           - name: PROJECT_SUSPENSION_NOTIFICATION_DAYS
             value: "60,30,15,7,3,1"
           - name: PROJECT_SUSPENSION_DELETION_WARNING_EMAIL_TEMPLATE
-            value: emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarning
+            value: emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarningemailtemplate
           # Namespace suspension deletion warning Email resources are
           # created in, kept as a stable, centralized audit trail.
           - name: PROJECT_SUSPENSION_DELETION_WARNING_EMAIL_NAMESPACE

@@ -31,39 +31,18 @@ spec:
   steps:
     - name: setup-prerequisites
       description: |
-        Create the EmailTemplate the escalation controller's Email webhook
+        Install the EmailTemplate the escalation controller's Email webhook
         requires to exist before it will admit a warning Email (the
         controller-manager's default --project-suspension-deletion-warning-
-        email-template value).
+        email-template value). Pulled straight from its source of truth
+        (datum-cloud/email-templates), so the test exercises the real
+        template, not a stand-in.
       cluster: main
       try:
         - script:
             timeout: 30s
             content: |
-              cat <<'FIXTURES' | kubectl apply -f -
-              apiVersion: notification.miloapis.com/v1alpha1
-              kind: EmailTemplate
-              metadata:
-                name: emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarning
-                namespace: milo-system
-              spec:
-                subject: "Action required: project {{.ProjectName}} will be deleted in {{.DaysUntilDeletion}} day(s)"
-                textBody: "Hello {{.OrganizationName}}, your project {{.ProjectName}} is suspended and will be deleted in {{.DaysUntilDeletion}} day(s), on {{.DeletionDate}}."
-                htmlBody: "<p>Hello {{.OrganizationName}}, your project {{.ProjectName}} is suspended and will be deleted in {{.DaysUntilDeletion}} day(s), on {{.DeletionDate}}.</p>"
-                variables:
-                - name: ProjectName
-                  required: true
-                  type: string
-                - name: OrganizationName
-                  required: true
-                  type: string
-                - name: DaysUntilDeletion
-                  required: true
-                  type: string
-                - name: DeletionDate
-                  required: true
-                  type: string
-              FIXTURES
+              kubectl apply -k email-template-kustomization
 
     - name: setup-organization
       description: Create Organization with a contact e-mail for notifications

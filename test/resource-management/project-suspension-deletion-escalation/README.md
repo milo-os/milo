@@ -32,10 +32,12 @@ require the suite to block for the configured retention window.
 
 ### Step: `setup-prerequisites`
 
-Create the EmailTemplate the escalation controller's Email webhook
+Install the EmailTemplate the escalation controller's Email webhook
 requires to exist before it will admit a warning Email (the
 controller-manager's default --project-suspension-deletion-warning-
-email-template value).
+email-template value). Pulled straight from its source of truth
+(datum-cloud/email-templates), so the test exercises the real
+template, not a stand-in.
 
 
 #### Try
