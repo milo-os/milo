@@ -252,6 +252,11 @@ func (r *ProjectSuspensionEscalationController) sendEscalationWarningEmail(ctx c
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      emailName,
 				Namespace: r.EmailNamespace,
+				Labels: map[string]string{
+					resourcemanagerv1alpha.OrganizationNameLabel: project.Spec.OwnerRef.Name,
+					resourcemanagerv1alpha.ProjectNameLabel:      project.Name,
+					resourcemanagerv1alpha.ProjectUIDLabel:       string(project.UID),
+				},
 			},
 			Spec: notificationv1alpha1.EmailSpec{
 				TemplateRef: notificationv1alpha1.TemplateReference{

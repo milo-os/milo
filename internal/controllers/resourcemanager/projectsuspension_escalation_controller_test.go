@@ -161,6 +161,17 @@ func TestProjectSuspensionEscalationController_Reconcile(t *testing.T) {
 		if len(emails.Items) != 1 {
 			t.Fatalf("expected 1 warning email, got %d", len(emails.Items))
 		}
+
+		email := emails.Items[0]
+		if got := email.Labels[resourcemanagerv1alpha1.OrganizationNameLabel]; got != "test-org" {
+			t.Errorf("expected organization label %q, got %q", "test-org", got)
+		}
+		if got := email.Labels[resourcemanagerv1alpha1.ProjectNameLabel]; got != "test-project" {
+			t.Errorf("expected project label %q, got %q", "test-project", got)
+		}
+		if got := email.Labels[resourcemanagerv1alpha1.ProjectUIDLabel]; got != "test-project-uid" {
+			t.Errorf("expected project UID label %q, got %q", "test-project-uid", got)
+		}
 	})
 
 	t.Run("re-reconcile does not duplicate the same checkpoint", func(t *testing.T) {
