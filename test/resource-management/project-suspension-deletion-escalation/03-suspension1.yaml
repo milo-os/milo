@@ -5,6 +5,10 @@ metadata:
 spec:
   projectRef:
     name: suspension-escalation-test-project
-  reason: Abuse
+  # Billing is a warning-eligible reason (Fraud/Abuse are excluded by the
+  # controller's default --project-suspension-warning-excluded-reasons), so
+  # this suspension still produces the countdown warning e-mail the test
+  # asserts on below.
+  reason: Billing
   reinstateAuthority: Operator
   requestedBy: operator-admin

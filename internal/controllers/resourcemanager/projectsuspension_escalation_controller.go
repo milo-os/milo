@@ -63,6 +63,16 @@ type ProjectSuspensionEscalationController struct {
 	// per-organization namespace lifecycle.
 	EmailNamespace string
 
+	// WarningExcludedReasons lists the suspension reasons for which countdown
+	// deletion warning e-mails are NOT sent. Projects suspended for these
+	// reasons still count down to auto-deletion after the retention window;
+	// only the customer-facing warning e-mail is suppressed.
+	WarningExcludedReasons []resourcemanagerv1alpha.ProjectSuspensionReason
+
+	// warningExcludedReasonsSet is the O(1) lookup form of
+	// WarningExcludedReasons, built once in SetupWithManager.
+	warningExcludedReasonsSet map[resourcemanagerv1alpha.ProjectSuspensionReason]struct{}
+
 	// notificationCheckpoints is the sorted-descending, deduplicated set of
 	// "days until deletion" thresholds at which a warning e-mail is sent:
 	// NotificationDaysRemaining plus RetentionWindowDays itself so that a
@@ -101,6 +111,13 @@ func (r *ProjectSuspensionEscalationController) Reconcile(ctx context.Context, r
 	}
 
 	before := project.DeepCopy()
+
+	// Determine whether countdown warning e-mails should be sent for this
+	// suspension episode. A project can carry multiple suspension reasons;
+	// warnings go out if ANY reason is not excluded (see
+	// shouldSendWarningEmails). The reasons themselves are not copied here —
+	// they already live in project.status.suspensions.
+	sendWarningEmails := r.shouldSendWarningEmails(&project)
 
 	if project.Status.SuspensionEscalation == nil {
 		deletionAt := suspendedCond.LastTransitionTime.Add(time.Duration(r.RetentionWindowDays) * hoursPerDay)
@@ -142,13 +159,15 @@ func (r *ProjectSuspensionEscalationController) Reconcile(ctx context.Context, r
 
 	daysRemaining := int32(math.Ceil(remaining.Hours() / 24))
 
-	for _, checkpoint := range r.notificationCheckpoints {
-		if daysRemaining > checkpoint || containsInt32(project.Status.SuspensionEscalation.NotifiedDaysRemaining, checkpoint) {
-			continue
-		}
+	if sendWarningEmails {
+		for _, checkpoint := range r.notificationCheckpoints {
+			if daysRemaining > checkpoint || containsInt32(project.Status.SuspensionEscalation.NotifiedDaysRemaining, checkpoint) {
+				continue
+			}
 
-		if err := r.sendEscalationWarningEmail(ctx, &project, checkpoint, deletionAt); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to send suspension deletion warning email: %w", err)
+			if err := r.sendEscalationWarningEmail(ctx, &project, checkpoint, deletionAt); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to send suspension deletion warning email: %w", err)
+			}
 		}
 	}
 
@@ -270,6 +289,24 @@ func (r *ProjectSuspensionEscalationController) sendEscalationWarningEmail(ctx c
 	return nil
 }
 
+// shouldSendWarningEmails reports whether countdown warning e-mails should be
+// sent for a suspended project. A project can carry multiple suspension reasons
+// (status.suspensions is a list); warnings go out if ANY reason is not in
+// WarningExcludedReasons. An empty reason list (reason not yet propagated, or a
+// status that predates this field) defaults to sending, so a race between the
+// propagator and this controller never silently drops a notification.
+func (r *ProjectSuspensionEscalationController) shouldSendWarningEmails(project *resourcemanagerv1alpha.Project) bool {
+	if len(project.Status.Suspensions) == 0 {
+		return true
+	}
+	for _, s := range project.Status.Suspensions {
+		if _, excluded := r.warningExcludedReasonsSet[s.Reason]; !excluded {
+			return true
+		}
+	}
+	return false
+}
+
 // computeNotificationCheckpoints returns the sorted-descending, deduplicated
 // set of "days until deletion" thresholds at which a warning e-mail is sent:
 // the configured notificationDays, plus retentionWindowDays itself so that a
@@ -338,6 +375,10 @@ func (r *ProjectSuspensionEscalationController) SetupWithManager(mgr ctrl.Manage
 
 	r.EventRecorder = mgr.GetEventRecorderFor("project-suspension-escalation-controller")
 	r.notificationCheckpoints = computeNotificationCheckpoints(r.RetentionWindowDays, r.NotificationDaysRemaining)
+	r.warningExcludedReasonsSet = make(map[resourcemanagerv1alpha.ProjectSuspensionReason]struct{}, len(r.WarningExcludedReasons))
+	for _, reason := range r.WarningExcludedReasons {
+		r.warningExcludedReasonsSet[reason] = struct{}{}
+	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&resourcemanagerv1alpha.Project{}).
@@ -358,6 +399,18 @@ func (r *ProjectSuspensionEscalationController) validateConfig() error {
 	for _, days := range r.NotificationDaysRemaining {
 		if days <= 0 {
 			return fmt.Errorf("notification days must all be positive, got %d in %v", days, r.NotificationDaysRemaining)
+		}
+	}
+	for _, reason := range r.WarningExcludedReasons {
+		switch reason {
+		case resourcemanagerv1alpha.ReasonFraud,
+			resourcemanagerv1alpha.ReasonAbuse,
+			resourcemanagerv1alpha.ReasonBilling,
+			resourcemanagerv1alpha.ReasonCompliance,
+			resourcemanagerv1alpha.ReasonAdministrative:
+			// valid
+		default:
+			return fmt.Errorf("unknown excluded warning reason %q (must be one of Fraud, Abuse, Billing, Compliance, Administrative)", reason)
 		}
 	}
 	return nil

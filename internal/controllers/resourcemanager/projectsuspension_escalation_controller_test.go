@@ -60,6 +60,17 @@ func newTestOrganization(name string) *resourcemanagerv1alpha1.Organization {
 	}
 }
 
+// buildExcludedReasonsSet mirrors the set the controller builds in
+// SetupWithManager, so tests can construct a controller with a fully initialised
+// warningExcludedReasonsSet without spinning up a manager.
+func buildExcludedReasonsSet(reasons []resourcemanagerv1alpha1.ProjectSuspensionReason) map[resourcemanagerv1alpha1.ProjectSuspensionReason]struct{} {
+	set := make(map[resourcemanagerv1alpha1.ProjectSuspensionReason]struct{}, len(reasons))
+	for _, reason := range reasons {
+		set[reason] = struct{}{}
+	}
+	return set
+}
+
 func TestProjectSuspensionEscalationController_Reconcile(t *testing.T) {
 	scheme := getTestScheme()
 
@@ -438,6 +449,163 @@ func TestProjectSuspensionEscalationController_Reconcile(t *testing.T) {
 			t.Fatalf("expected no warning email without contact info, got %d", len(emails.Items))
 		}
 	})
+
+	t.Run("excluded-reason suspension schedules escalation but sends no warning email", func(t *testing.T) {
+		ctx := context.Background()
+		suspendedSince := time.Now().Add(-1 * time.Hour)
+		project := newSuspendedProject("test-project", "test-org", suspendedSince)
+		project.Status.Suspensions = []resourcemanagerv1alpha1.ProjectSuspensionInfo{
+			{
+				Reason:      resourcemanagerv1alpha1.ReasonAbuse,
+				SuspendedAt: metav1.NewTime(suspendedSince),
+			},
+		}
+		org := newTestOrganization("test-org")
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project, org).
+			WithStatusSubresource(&resourcemanagerv1alpha1.Project{}).Build()
+
+		r := &ProjectSuspensionEscalationController{
+			Client:                    c,
+			EventRecorder:             record.NewFakeRecorder(100),
+			RetentionWindowDays:       30,
+			NotificationDaysRemaining: []int{7, 3, 1},
+			EmailTemplateName:         "deletion-warning",
+			EmailNamespace:            testEmailNamespace,
+			WarningExcludedReasons: []resourcemanagerv1alpha1.ProjectSuspensionReason{
+				resourcemanagerv1alpha1.ReasonFraud,
+				resourcemanagerv1alpha1.ReasonAbuse,
+			},
+			warningExcludedReasonsSet: buildExcludedReasonsSet([]resourcemanagerv1alpha1.ProjectSuspensionReason{
+				resourcemanagerv1alpha1.ReasonFraud,
+				resourcemanagerv1alpha1.ReasonAbuse,
+			}),
+			notificationCheckpoints: computeNotificationCheckpoints(30, []int{7, 3, 1}),
+		}
+
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var got resourcemanagerv1alpha1.Project
+		if err := c.Get(ctx, client.ObjectKey{Name: "test-project"}, &got); err != nil {
+			t.Fatalf("failed to get project: %v", err)
+		}
+		if got.Status.SuspensionEscalation == nil {
+			t.Fatal("expected SuspensionEscalation to be scheduled even for an excluded reason")
+		}
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, resourcemanagerv1alpha1.ProjectPendingDeletion)
+		if cond == nil || cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected PendingDeletion condition True, got %+v", cond)
+		}
+		if len(got.Status.SuspensionEscalation.NotifiedDaysRemaining) != 0 {
+			t.Errorf("expected no checkpoint recorded for an excluded reason, got %v", got.Status.SuspensionEscalation.NotifiedDaysRemaining)
+		}
+
+		var emails notificationv1alpha1.EmailList
+		if err := c.List(ctx, &emails, client.InNamespace(testEmailNamespace)); err != nil {
+			t.Fatalf("failed to list emails: %v", err)
+		}
+		if len(emails.Items) != 0 {
+			t.Fatalf("expected no warning email for an excluded reason, got %d", len(emails.Items))
+		}
+	})
+
+	t.Run("all-excluded multi-suspension project sends no warning email", func(t *testing.T) {
+		ctx := context.Background()
+		suspendedSince := time.Now().Add(-1 * time.Hour)
+		project := newSuspendedProject("test-project", "test-org", suspendedSince)
+		project.Status.Suspensions = []resourcemanagerv1alpha1.ProjectSuspensionInfo{
+			{Reason: resourcemanagerv1alpha1.ReasonFraud, SuspendedAt: metav1.NewTime(suspendedSince)},
+			{Reason: resourcemanagerv1alpha1.ReasonAbuse, SuspendedAt: metav1.NewTime(suspendedSince)},
+		}
+		org := newTestOrganization("test-org")
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project, org).
+			WithStatusSubresource(&resourcemanagerv1alpha1.Project{}).Build()
+
+		r := &ProjectSuspensionEscalationController{
+			Client:                    c,
+			EventRecorder:             record.NewFakeRecorder(100),
+			RetentionWindowDays:       30,
+			NotificationDaysRemaining: []int{7, 3, 1},
+			EmailTemplateName:         "deletion-warning",
+			EmailNamespace:            testEmailNamespace,
+			WarningExcludedReasons: []resourcemanagerv1alpha1.ProjectSuspensionReason{
+				resourcemanagerv1alpha1.ReasonFraud,
+				resourcemanagerv1alpha1.ReasonAbuse,
+			},
+			warningExcludedReasonsSet: buildExcludedReasonsSet([]resourcemanagerv1alpha1.ProjectSuspensionReason{
+				resourcemanagerv1alpha1.ReasonFraud,
+				resourcemanagerv1alpha1.ReasonAbuse,
+			}),
+			notificationCheckpoints: computeNotificationCheckpoints(30, []int{7, 3, 1}),
+		}
+
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var emails notificationv1alpha1.EmailList
+		if err := c.List(ctx, &emails, client.InNamespace(testEmailNamespace)); err != nil {
+			t.Fatalf("failed to list emails: %v", err)
+		}
+		if len(emails.Items) != 0 {
+			t.Fatalf("expected no warning email when all reasons are excluded, got %d", len(emails.Items))
+		}
+	})
+
+	t.Run("mixed reasons send a warning when any reason is eligible", func(t *testing.T) {
+		ctx := context.Background()
+		suspendedSince := time.Now().Add(-1 * time.Hour)
+		project := newSuspendedProject("test-project", "test-org", suspendedSince)
+		project.Status.Suspensions = []resourcemanagerv1alpha1.ProjectSuspensionInfo{
+			{Reason: resourcemanagerv1alpha1.ReasonFraud, SuspendedAt: metav1.NewTime(suspendedSince)},
+			{Reason: resourcemanagerv1alpha1.ReasonBilling, SuspendedAt: metav1.NewTime(suspendedSince)},
+		}
+		org := newTestOrganization("test-org")
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project, org).
+			WithStatusSubresource(&resourcemanagerv1alpha1.Project{}).Build()
+
+		r := &ProjectSuspensionEscalationController{
+			Client:                    c,
+			EventRecorder:             record.NewFakeRecorder(100),
+			RetentionWindowDays:       30,
+			NotificationDaysRemaining: []int{7, 3, 1},
+			EmailTemplateName:         "deletion-warning",
+			EmailNamespace:            testEmailNamespace,
+			WarningExcludedReasons: []resourcemanagerv1alpha1.ProjectSuspensionReason{
+				resourcemanagerv1alpha1.ReasonFraud,
+				resourcemanagerv1alpha1.ReasonAbuse,
+			},
+			warningExcludedReasonsSet: buildExcludedReasonsSet([]resourcemanagerv1alpha1.ProjectSuspensionReason{
+				resourcemanagerv1alpha1.ReasonFraud,
+				resourcemanagerv1alpha1.ReasonAbuse,
+			}),
+			notificationCheckpoints: computeNotificationCheckpoints(30, []int{7, 3, 1}),
+		}
+
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var got resourcemanagerv1alpha1.Project
+		if err := c.Get(ctx, client.ObjectKey{Name: "test-project"}, &got); err != nil {
+			t.Fatalf("failed to get project: %v", err)
+		}
+		if len(got.Status.SuspensionEscalation.NotifiedDaysRemaining) == 0 {
+			t.Errorf("expected the immediate notice to be recorded when any reason is eligible, got %v", got.Status.SuspensionEscalation.NotifiedDaysRemaining)
+		}
+
+		var emails notificationv1alpha1.EmailList
+		if err := c.List(ctx, &emails, client.InNamespace(testEmailNamespace)); err != nil {
+			t.Fatalf("failed to list emails: %v", err)
+		}
+		if len(emails.Items) != 1 {
+			t.Fatalf("expected 1 warning email when any reason is eligible, got %d", len(emails.Items))
+		}
+	})
 }
 
 func TestProjectSuspensionEscalationController_validateConfig(t *testing.T) {
@@ -460,6 +628,41 @@ func TestProjectSuspensionEscalationController_validateConfig(t *testing.T) {
 			r := &ProjectSuspensionEscalationController{
 				RetentionWindowDays:       tt.retentionWindowDays,
 				NotificationDaysRemaining: tt.notificationDaysRemaining,
+			}
+			err := r.validateConfig()
+			if tt.wantErr && err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestProjectSuspensionEscalationController_validateConfig_WarningExcludedReasons(t *testing.T) {
+	tests := []struct {
+		name            string
+		warningExcluded []resourcemanagerv1alpha1.ProjectSuspensionReason
+		wantErr         bool
+	}{
+		{name: "valid excluded reasons", warningExcluded: []resourcemanagerv1alpha1.ProjectSuspensionReason{
+			resourcemanagerv1alpha1.ReasonFraud, resourcemanagerv1alpha1.ReasonAbuse,
+		}},
+		{name: "all five known reasons accepted", warningExcluded: []resourcemanagerv1alpha1.ProjectSuspensionReason{
+			resourcemanagerv1alpha1.ReasonFraud, resourcemanagerv1alpha1.ReasonAbuse,
+			resourcemanagerv1alpha1.ReasonBilling, resourcemanagerv1alpha1.ReasonCompliance,
+			resourcemanagerv1alpha1.ReasonAdministrative,
+		}},
+		{name: "empty excluded reasons is valid", warningExcluded: nil},
+		{name: "unknown excluded reason rejected", warningExcluded: []resourcemanagerv1alpha1.ProjectSuspensionReason{"NotAReason"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &ProjectSuspensionEscalationController{
+				RetentionWindowDays:    30,
+				WarningExcludedReasons: tt.warningExcluded,
 			}
 			err := r.validateConfig()
 			if tt.wantErr && err == nil {
