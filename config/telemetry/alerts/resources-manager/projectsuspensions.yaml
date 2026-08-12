@@ -23,6 +23,7 @@ spec:
             severity: warning
             category: readiness
             team: platform
+            service: milo
           annotations:
             runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-suspension-not-ready.md"
             summary: "Project suspension {{ $labels.resource_name }} is not ready"
@@ -49,6 +50,7 @@ spec:
             severity: warning
             category: readiness
             team: platform
+            service: milo
           annotations:
             runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-reinstatement-failed.md"
             summary: "Project {{ $labels.resource_name }} failed to reinstate"
