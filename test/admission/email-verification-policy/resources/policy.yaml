@@ -28,7 +28,6 @@ spec:
         (!('iam.miloapis.com/emailVerified' in request.userInfo.extra)) ||
         (request.userInfo.extra['iam.miloapis.com/emailVerified'][0] == 'true') ||
         (request.resource.group == 'authorization.k8s.io') ||
-        ('system:masters' in request.userInfo.groups) ||
         (oldObject != null && has(oldObject.metadata.deletionTimestamp))
       message: "Email address is not verified. Verify your email address before creating or modifying resources."
       reason: Forbidden
