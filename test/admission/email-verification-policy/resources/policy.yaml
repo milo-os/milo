@@ -23,11 +23,16 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["*"]
   validations:
+    # MUST NOT start with "(" — chainsaw treats a value that opens with "(" and
+    # closes with ")" as a JMESPath expression and tries to evaluate it, which
+    # fails as `SyntaxError: Unexpected token at the end of the expression:
+    # TOKRparen`. The leading "!" is what keeps this a literal string. Do not
+    # "tidy" the first clause back into parentheses.
     - expression: >-
-        (!has(request.userInfo.extra)) ||
-        (!('iam.miloapis.com/emailVerified' in request.userInfo.extra)) ||
-        (request.userInfo.extra['iam.miloapis.com/emailVerified'][0] == 'true') ||
-        (request.resource.group == 'authorization.k8s.io') ||
+        !has(request.userInfo.extra) ||
+        !('iam.miloapis.com/emailVerified' in request.userInfo.extra) ||
+        request.userInfo.extra['iam.miloapis.com/emailVerified'][0] == 'true' ||
+        request.resource.group == 'authorization.k8s.io' ||
         (oldObject != null && has(oldObject.metadata.deletionTimestamp))
       message: "Email address is not verified. Verify your email address before creating or modifying resources."
       reason: Forbidden
