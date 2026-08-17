@@ -1,0 +1,9 @@
+# An ordinary write, used to prove the policy is inert for an identity that
+# carries no emailVerified key. Nothing about Organizations matters here — any
+# non-exempt resource would do.
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: email-verify-inert-check
+spec:
+  type: Standard
