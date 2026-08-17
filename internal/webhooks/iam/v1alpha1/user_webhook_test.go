@@ -15,17 +15,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-// C-IDEM. ValidateCreate is a *validating* webhook with side effects: it
-// creates three resources. Kubernetes runs validating admission BEFORE the
-// etcd write, so a retried or concurrent signup re-enters this code with some
-// or all of those three already present.
-//
-// Without AlreadyExists tolerance the webhook fails admission on the User
-// itself. That is worse than a noisy duplicate, because zitadel-provider's
-// userprovision.EnsureUser treats apierrors.IsAlreadyExists(err) as success —
-// and an admission denial never satisfies that predicate. A benign retry
-// becomes a 500. Both callers depend on this: the actions handler and
-// user_sweep.go, whose whole design is calling EnsureUser repeatedly.
+// ValidateCreate creates three resources as side effects, and validating
+// admission runs before the etcd write — so a retried or concurrent signup
+// re-enters with some already present. Without AlreadyExists tolerance it fails
+// admission on the User, which zitadel-provider's userprovision.EnsureUser
+// cannot recognise as success (it tests IsAlreadyExists), turning a benign
+// retry into a 500.
 
 const idemUserName = "idem-user"
 
@@ -50,8 +45,7 @@ func admissionCtx() context.Context {
 	})
 }
 
-// The headline case: calling ValidateCreate twice must not error the second
-// time. This is exactly what a retried signup does.
+// Calling ValidateCreate twice must not error the second time — a retried signup.
 func TestValidateCreate_CalledTwice_IsIdempotent(t *testing.T) {
 	v := newIdemValidator()
 	user := newIdemUser()
@@ -63,8 +57,7 @@ func TestValidateCreate_CalledTwice_IsIdempotent(t *testing.T) {
 	assert.NoError(t, err, "second create must be a no-op, not an admission denial")
 }
 
-// One case per site, so a fix that covers one and misses the others fails
-// loudly rather than passing on the aggregate.
+// One case per site: a fix covering one but missing the others fails loudly.
 func TestValidateCreate_PreExistingSelfManageBinding_Tolerated(t *testing.T) {
 	existing := &iamv1alpha1.PolicyBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "user-self-manage-" + idemUserName},
@@ -75,16 +68,10 @@ func TestValidateCreate_PreExistingSelfManageBinding_Tolerated(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// The webhook must NOT try to "repair" an existing binding's UID.
-//
-// The apiserver stamps a fresh UID on every create attempt before admission
-// runs, so a re-create of an ALREADY-PERSISTED User — which is exactly what
-// user_sweep.go does on every pass — arrives carrying a UID that will never be
-// persisted. A repair keyed on that UID would delete a correct binding and
-// recreate it pinned to a phantom, and spec.resourceSelector is immutable so
-// the damage would be permanent and would recur every sweep.
-//
-// This test pins the safe behaviour: existing binding observed, untouched.
+// The webhook must not "repair" an existing binding's UID: the apiserver stamps
+// a fresh UID before admission on every create attempt, including re-creates of
+// an already-persisted User, so a repair keyed on it would pin the binding to a
+// UID that never persists. spec.resourceSelector is immutable.
 func TestValidateCreate_ExistingBindingIsNeverRewritten(t *testing.T) {
 	const persistedUID = "the-uid-that-actually-persisted"
 	existing := &iamv1alpha1.PolicyBinding{
@@ -120,12 +107,10 @@ func TestValidateCreate_PreExistingUserPreferencePolicyBinding_Tolerated(t *test
 	assert.NoError(t, err)
 }
 
-// The trap, and the one place where "it stopped erroring" and "it is correct"
-// diverge. createUserPreference RETURNS the object and the third PolicyBinding
-// stamps userPreference.UID into its ResourceRef. Create populates that UID on
-// success but leaves it empty on conflict — so merely tolerating AlreadyExists
-// would emit an authorization record pointing at UID "", which no
-// assert.NoError would ever catch.
+// createUserPreference returns the object and the third PolicyBinding stamps
+// userPreference.UID into its ResourceRef. Create leaves that UID empty on
+// conflict, so tolerating AlreadyExists without re-reading emits an
+// authorization record pointing at UID "".
 func TestValidateCreate_PreExistingUserPreference_RereadsForUID(t *testing.T) {
 	const wantUID = types.UID("userpref-uid-42")
 	existing := &iamv1alpha1.UserPreference{
@@ -149,8 +134,7 @@ func TestValidateCreate_PreExistingUserPreference_RereadsForUID(t *testing.T) {
 		"the UserPreference must be re-read on conflict; an empty UID here is a silently wrong authorization record")
 }
 
-// All three already present — the steady state user_sweep.go produces every
-// time it re-runs against an existing user.
+// All three already present — the steady state user_sweep.go produces.
 func TestValidateCreate_AllThreePreExisting_Tolerated(t *testing.T) {
 	v := newIdemValidator(
 		&iamv1alpha1.PolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: "user-self-manage-" + idemUserName}},
