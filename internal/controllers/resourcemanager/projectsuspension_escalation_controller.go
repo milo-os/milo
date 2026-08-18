@@ -256,6 +256,7 @@ func (r *ProjectSuspensionEscalationController) sendEscalationWarningEmail(ctx c
 					resourcemanagerv1alpha.OrganizationNameLabel: project.Spec.OwnerRef.Name,
 					resourcemanagerv1alpha.ProjectNameLabel:      project.Name,
 					resourcemanagerv1alpha.ProjectUIDLabel:       string(project.UID),
+					notificationv1alpha1.NotificationKindLabel:   notificationv1alpha1.NotificationKindProjectSuspensionWarning,
 				},
 			},
 			Spec: notificationv1alpha1.EmailSpec{

@@ -172,6 +172,9 @@ func TestProjectSuspensionEscalationController_Reconcile(t *testing.T) {
 		if got := email.Labels[resourcemanagerv1alpha1.ProjectUIDLabel]; got != "test-project-uid" {
 			t.Errorf("expected project UID label %q, got %q", "test-project-uid", got)
 		}
+		if got := email.Labels[notificationv1alpha1.NotificationKindLabel]; got != notificationv1alpha1.NotificationKindProjectSuspensionWarning {
+			t.Errorf("expected notification kind label %q, got %q", notificationv1alpha1.NotificationKindProjectSuspensionWarning, got)
+		}
 	})
 
 	t.Run("re-reconcile does not duplicate the same checkpoint", func(t *testing.T) {
