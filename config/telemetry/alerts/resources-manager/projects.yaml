@@ -14,6 +14,8 @@ spec:
           labels:
             severity: critical
             slo_violation: "true"
+            service: milo
+            team: platform
           annotations:
             runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
             summary: "Project {{ $labels.resource_name }} is stuck creating for over 60 seconds"

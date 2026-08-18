@@ -57,6 +57,14 @@ type Options struct {
 	// LabelSelector is an optional selector to filter projects based on labels.
 	// When provided, only projects matching this selector will be reconciled.
 	LabelSelector *metav1.LabelSelector
+
+	// ControllerName names the underlying projectcontrolplane controller.
+	// controller-runtime registers controllers by name in a process-global
+	// metrics registry, so every New call within the same process (e.g. one
+	// provider for webhooks and another for the quota system) needs a
+	// distinct name. Defaults to "projectcontrolplane" for compatibility with
+	// existing callers.
+	ControllerName string
 }
 
 // New creates a new Datum cluster Provider.
@@ -95,10 +103,15 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 		forOpts = append(forOpts, builder.WithPredicates(labelPredicate))
 	}
 
+	controllerName := opts.ControllerName
+	if controllerName == "" {
+		controllerName = "projectcontrolplane"
+	}
+
 	controllerBuilder := builder.ControllerManagedBy(localMgr).
 		For(&project, forOpts...).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
-		Named("projectcontrolplane")
+		Named(controllerName)
 
 	if err := controllerBuilder.Complete(p); err != nil {
 		return nil, fmt.Errorf("failed to create controller: %w", err)
