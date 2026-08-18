@@ -1,0 +1,12 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: suspension-escalation-test-project
+status:
+  (conditions[?type == 'Suspended']):
+  - status: "False"
+    reason: Active
+  (conditions[?type == 'PendingDeletion']):
+  - status: "False"
+    reason: Reinstated
+  (suspensionEscalation == null): true

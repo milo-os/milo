@@ -309,7 +309,6 @@ rules:
   - resourcemanager.miloapis.com
   resources:
   - organizations
-  - projects
   verbs:
   - get
   - list
@@ -323,6 +322,17 @@ rules:
   - projects/finalizers
   verbs:
   - update
+- apiGroups:
+  - resourcemanager.miloapis.com
+  resources:
+  - projects
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - resourcemanager.miloapis.com
   resources:

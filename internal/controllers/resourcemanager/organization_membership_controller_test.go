@@ -6,6 +6,7 @@ import (
 
 	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
+	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,6 +24,7 @@ func getTestScheme() *runtime.Scheme {
 	_ = iamv1alpha1.AddToScheme(scheme)
 	_ = resourcemanagerv1alpha1.AddToScheme(scheme)
 	_ = billingv1alpha1.AddToScheme(scheme)
+	_ = notificationv1alpha1.AddToScheme(scheme)
 	return scheme
 }
 

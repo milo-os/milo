@@ -3,10 +3,16 @@ kind: Project
 metadata:
   name: test-suspension-lifecycle-project
 status:
-  conditions:
-  - type: Suspended
-    status: "False"
+  (conditions[?type == 'Suspended']):
+  - status: "False"
     reason: Active
-  - type: Ready
-    status: "True"
+  (conditions[?type == 'Ready']):
+  - status: "True"
     reason: Ready
+  # The project was suspended along the way, so the escalation controller
+  # scheduled a PendingDeletion condition; reinstatement cancels it. Filtered
+  # by type (like the conditions above) so this assertion doesn't need to
+  # enumerate every condition on the resource.
+  (conditions[?type == 'PendingDeletion']):
+  - status: "False"
+    reason: Reinstated

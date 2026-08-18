@@ -1,0 +1,126 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-suspension-deletion-escalation
+spec:
+  description: |
+    Tests that a suspended project schedules an auditable escalation to
+    deletion and notifies the project's organization, and that reinstating
+    the project cancels the pending escalation.
+
+    This test verifies:
+    - Suspending a project sets status.suspensionEscalation.deletionAt and a
+      PendingDeletion condition (the retention-window clock).
+    - A countdown warning e-mail is sent to the organization's contact
+      address as soon as the project becomes suspended, stored in the
+      milo-system namespace as a centralized audit trail.
+    - Reinstating the project (lifting its only ProjectSuspension) clears
+      status.suspensionEscalation and flips PendingDeletion back to False.
+
+    Waiting out the full retention window and asserting the eventual Delete
+    is covered by unit tests (projectsuspension_escalation_controller_test.go),
+    which can control the clock deterministically; doing so here would
+    require the suite to block for the configured retention window.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+
+  steps:
+    - name: setup-prerequisites
+      description: |
+        Install the EmailTemplate the escalation controller's Email webhook
+        requires to exist before it will admit a warning Email (the
+        controller-manager's default --project-suspension-deletion-warning-
+        email-template value). Pulled straight from its source of truth
+        (datum-cloud/email-templates), so the test exercises the real
+        template, not a stand-in.
+      cluster: main
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              kubectl apply -k email-template-kustomization
+
+    - name: setup-organization
+      description: Create Organization with a contact e-mail for notifications
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-suspension-escalation-test-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create Project in organization context
+      cluster: org
+      try:
+        - apply:
+            file: 02-test-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: suspension-escalation-test-project
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: suspend-project
+      description: Suspend the project and verify the retention window is scheduled
+      cluster: main
+      try:
+        - apply:
+            file: 03-suspension1.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-escalation-scheduled.yaml
+
+    - name: verify-deletion-warning-email-sent
+      description: |
+        As soon as the project is suspended, a countdown warning e-mail must
+        be created for the organization's contact address. Warning e-mails
+        are stored in the milo-system namespace (not the organization's own
+        namespace) so they remain a stable, centralized audit trail.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              NS="milo-system"
+
+              WARNING_COUNT=$(kubectl get emails -n "${NS}" -o json \
+                | jq --arg addr "owner@example.com" \
+                  '[.items[] | select(
+                      .spec.recipient.emailAddress == $addr and
+                      (.spec.variables[]? | select(.name == "ProjectName" and .value == "suspension-escalation-test-project"))
+                    )] | length')
+
+              echo "Matching suspension deletion warning emails: ${WARNING_COUNT}"
+              if [ "${WARNING_COUNT}" -lt 1 ]; then
+                echo "FAIL: expected at least one suspension deletion warning email"
+                exit 1
+              fi
+
+    - name: reinstate-project
+      description: Lift the suspension and verify the escalation is cancelled
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: escalation-suspension-1
+        - assert:
+            cluster: org
+            file: assertions/assert-escalation-cancelled.yaml
