@@ -18,7 +18,7 @@ This test verifies:
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup-base-infrastructure](#step-setup-base-infrastructure) | 0 | 3 | 0 | 0 | 0 |
 | 2 | [setup-grant-creation-policy](#step-setup-grant-creation-policy) | 0 | 3 | 0 | 0 | 0 |
-| 3 | [setup-test-organization](#step-setup-test-organization) | 0 | 3 | 0 | 0 | 0 |
+| 3 | [setup-test-organization](#step-setup-test-organization) | 0 | 6 | 0 | 0 | 0 |
 | 4 | [verify-automatic-grant-creation](#step-verify-automatic-grant-creation) | 0 | 2 | 0 | 0 | 0 |
 | 5 | [test-condition-evaluation](#step-test-condition-evaluation) | 0 | 3 | 0 | 0 | 0 |
 | 6 | [test-template-rendering](#step-test-template-rendering) | 0 | 4 | 0 | 0 | 0 |
@@ -64,9 +64,12 @@ This should trigger automatic ResourceGrant creation.
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 0 | *No description* |
-| 2 | `wait` | 0 | 0 | *No description* |
-| 3 | `assert` | 0 | 0 | *No description* |
+| 1 | `delete` | 0 | 0 | Remove any leftover test organization from earlier runs |
+| 2 | `delete` | 0 | 0 | Ensure previous organization namespace is cleaned up |
+| 3 | `wait` | 0 | 0 | Wait for organization namespace to be fully removed |
+| 4 | `apply` | 0 | 0 | *No description* |
+| 5 | `wait` | 0 | 0 | *No description* |
+| 6 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `verify-automatic-grant-creation`
 

@@ -88,6 +88,24 @@ const (
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0
 	ProjectSuspension featuregate.Feature = "ProjectSuspension"
+
+	// EmailVerifiedGate makes EmailVerificationEnforcement deny, rather than
+	// only observe.
+	//
+	// This gate selects between two behaviours, not between running and not
+	// running. The plugin always evaluates: disabled it counts what it would
+	// have denied and admits, enabled it denies. That is affordable because the
+	// verdict is a map lookup on the request's own identity — an earlier
+	// version read it from a User resource behind an informer cache, and that
+	// version needed a gate to avoid paying for the cache while idle. Same
+	// name, opposite reason.
+	//
+	// Read milo_email_verification_denials_total{enforced="false"} before
+	// enabling: it is the population that will start being denied.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	EmailVerifiedGate featuregate.Feature = "EmailVerifiedGate"
 )
 
 func init() {
@@ -98,6 +116,10 @@ func init() {
 // Features are listed in alphabetical order.
 var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	DiscoveryContextFilter: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	EmailVerifiedGate: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
