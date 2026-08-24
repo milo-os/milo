@@ -235,7 +235,15 @@ func (v *UserValidator) createSelfManagePolicyBinding(ctx context.Context, user 
 		},
 	}
 
-	if err := v.client.Create(ctx, policyBinding); err != nil {
+	// Tolerate AlreadyExists: this webhook runs before the User is written to
+	// etcd, so a retried or concurrent signup re-enters here with the binding
+	// already present. Callers test IsAlreadyExists on the User, which an
+	// admission denial never satisfies.
+	//
+	// Do not "repair" an existing binding against this attempt's UID: the
+	// apiserver stamps a fresh UID before admission on every create attempt, so
+	// it may never persist, and spec.resourceSelector is immutable.
+	if err := v.client.Create(ctx, policyBinding); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create policy binding resource: %w", err)
 	}
 
@@ -260,7 +268,15 @@ func (v *UserValidator) createUserPreference(ctx context.Context, user *iamv1alp
 	}
 
 	if err := v.client.Create(ctx, userPreference); err != nil {
-		return nil, fmt.Errorf("failed to create user preference resource: %w", err)
+		if !errors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("failed to create user preference resource: %w", err)
+		}
+		// Re-read rather than swallow: Create leaves UID empty on conflict, and
+		// the caller stamps that UID into the userpreference-self-manage
+		// PolicyBinding's ResourceRef.
+		if err := v.client.Get(ctx, client.ObjectKey{Name: userPreference.Name}, userPreference); err != nil {
+			return nil, fmt.Errorf("failed to read existing user preference resource: %w", err)
+		}
 	}
 
 	return userPreference, nil
@@ -299,7 +315,9 @@ func (v *UserValidator) createUserPreferencePolicyBinding(ctx context.Context, u
 		},
 	}
 
-	if err := v.client.Create(ctx, policyBinding); err != nil {
+	// Tolerate AlreadyExists and leave an existing binding alone, same reasoning
+	// as the user-self-manage binding.
+	if err := v.client.Create(ctx, policyBinding); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create user preference policy binding resource: %w", err)
 	}
 

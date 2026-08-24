@@ -20,7 +20,7 @@ evaluation works correctly for structured types.
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup-resource-registration](#step-setup-resource-registration) | 0 | 2 | 0 | 0 | 0 |
 | 2 | [setup-grant-creation-policy](#step-setup-grant-creation-policy) | 0 | 2 | 0 | 0 | 0 |
-| 3 | [setup-test-organization](#step-setup-test-organization) | 0 | 2 | 0 | 0 | 0 |
+| 3 | [setup-test-organization](#step-setup-test-organization) | 0 | 5 | 0 | 0 | 0 |
 | 4 | [create-project-in-org](#step-create-project-in-org) | 0 | 2 | 0 | 0 | 0 |
 | 5 | [verify-grant-for-project](#step-verify-grant-for-project) | 0 | 1 | 0 | 0 | 0 |
 | 6 | [verify-bucket-pre-created](#step-verify-bucket-pre-created) | 0 | 1 | 0 | 0 | 0 |
@@ -64,8 +64,11 @@ Create test organization
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 0 | *No description* |
-| 2 | `wait` | 0 | 0 | *No description* |
+| 1 | `delete` | 0 | 0 | Remove any leftover test organization from earlier runs |
+| 2 | `delete` | 0 | 0 | Ensure previous organization namespace is cleaned up |
+| 3 | `wait` | 0 | 0 | Wait for organization namespace to be fully removed |
+| 4 | `apply` | 0 | 0 | *No description* |
+| 5 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `create-project-in-org`
 

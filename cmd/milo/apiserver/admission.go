@@ -1,6 +1,7 @@
 package app
 
 import (
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -27,6 +28,10 @@ func GetMiloOrderedPlugins() []string {
 			// ProjectSuspensionEnforcement runs before ResourceQuotaEnforcement
 			// so a denied-for-suspension request never triggers ResourceClaim
 			// creation.
+			// Cheapest of the three — a map lookup on the request identity, no
+			// client and no cache — and it is about WHO is asking, which is more
+			// fundamental than where or how much quota.
+			plugins = append(plugins, emailverification.PluginName)
 			plugins = append(plugins, projectsuspension.PluginName)
 			plugins = append(plugins, admissionquota.PluginName)
 		}
@@ -40,6 +45,7 @@ func GetMiloOrderedPlugins() []string {
 var MiloAdmissionPlugins = sets.New[string](
 	admissionquota.PluginName,    // ResourceQuotaEnforcement
 	projectsuspension.PluginName, // ProjectSuspensionEnforcement
+	emailverification.PluginName, // EmailVerificationEnforcement — observes unless EmailVerifiedGate is on
 	// Add future Milo admission plugins here
 )
 
