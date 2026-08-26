@@ -60,3 +60,8 @@ Thumbs.db
 # Build artifacts and caches
 node_modules/
 *.log
+
+# Local vendor directory (gitignored, so CI never has one). Copying a stale
+# vendor tree into the build context breaks `go build` with "inconsistent
+# vendoring".
+vendor/
