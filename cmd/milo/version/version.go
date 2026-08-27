@@ -5,8 +5,9 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"k8s.io/component-base/version"
 	"sigs.k8s.io/yaml"
+
+	miloversion "go.miloapis.com/milo/pkg/version"
 )
 
 // NewCommand creates a version command that displays version information
@@ -18,7 +19,7 @@ func NewCommand() *cobra.Command {
 		Short: "Print version information",
 		Long:  "Print version information for the Milo binary",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			versionInfo := version.Get()
+			versionInfo := miloversion.Get()
 
 			switch output {
 			case "json":
@@ -34,9 +35,10 @@ func NewCommand() *cobra.Command {
 				}
 				fmt.Print(string(data))
 			case "short":
-				fmt.Printf("Milo %s\n", versionInfo.GitVersion)
+				fmt.Printf("Milo %s\n", versionInfo.MiloVersion)
 			default:
-				fmt.Printf("Milo version: %s\n", versionInfo.GitVersion)
+				fmt.Printf("Milo version: %s\n", versionInfo.MiloVersion)
+				fmt.Printf("Kubernetes API version: %s\n", versionInfo.GitVersion)
 				fmt.Printf("Git commit: %s\n", versionInfo.GitCommit)
 				fmt.Printf("Git tree state: %s\n", versionInfo.GitTreeState)
 				fmt.Printf("Build date: %s\n", versionInfo.BuildDate)

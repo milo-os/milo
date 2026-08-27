@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	crd "go.miloapis.com/milo/config/crd"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
@@ -227,6 +228,9 @@ func NewOptions() *options.Options {
 
 	admissionquota.Register(s.Admission.GenericAdmission.Plugins)
 	projectsuspension.Register(s.Admission.GenericAdmission.Plugins)
+	// No AddReadyzChecks counterpart: this plugin holds no cache and makes no
+	// API calls, so it has nothing to be ready for.
+	emailverification.Register(s.Admission.GenericAdmission.Plugins)
 
 	s.Admission.GenericAdmission.RecommendedPluginOrder = GetMiloOrderedPlugins()
 

@@ -49,7 +49,11 @@ tasks:
 
         # Get git information for version injection
         GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-        VERSION="v0.0.0-master+${GIT_COMMIT:0:7}"
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "")
+        case "${VERSION}" in
+          v*) ;;
+          *) VERSION="v0.0.0-dev+${GIT_COMMIT:0:7}" ;;
+        esac
         GIT_TREE_STATE="clean"
         if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
           GIT_TREE_STATE="dirty"
