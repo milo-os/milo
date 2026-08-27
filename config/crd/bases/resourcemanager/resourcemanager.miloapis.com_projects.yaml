@@ -19,6 +19,9 @@ spec:
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
       type: string
+    - jsonPath: .status.suspensionEscalation.deletionAt
+      name: Delete At
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -135,6 +138,34 @@ spec:
                   - type
                   type: object
                 type: array
+              suspensionEscalation:
+                description: |-
+                  SuspensionEscalation tracks the retention-window deadline and
+                  notification history for a suspended project that is pending escalation
+                  to deletion. It is only present while the project is suspended and is
+                  cleared once the project is reinstated.
+                properties:
+                  deletionAt:
+                    description: |-
+                      DeletionAt is the time at which the project will be deleted if it
+                      remains suspended. It is fixed once computed so it does not drift if
+                      the configured retention window changes while the project is already
+                      suspended.
+                    format: date-time
+                    type: string
+                  notifiedDaysRemaining:
+                    description: |-
+                      NotifiedDaysRemaining lists the "days until deletion" thresholds for
+                      which a warning e-mail has already been sent, so that reconciliation
+                      does not send duplicate notifications.
+                    items:
+                      format: int32
+                      type: integer
+                    maxItems: 64
+                    type: array
+                required:
+                - deletionAt
+                type: object
               suspensions:
                 description: Suspensions lists the active/all suspensions currently
                   affecting the project.

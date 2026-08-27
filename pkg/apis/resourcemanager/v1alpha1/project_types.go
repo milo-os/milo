@@ -37,6 +37,32 @@ type ProjectStatus struct {
 	// Suspensions lists the active/all suspensions currently affecting the project.
 	// +kubebuilder:validation:Optional
 	Suspensions []ProjectSuspensionInfo `json:"suspensions,omitempty"`
+
+	// SuspensionEscalation tracks the retention-window deadline and
+	// notification history for a suspended project that is pending escalation
+	// to deletion. It is only present while the project is suspended and is
+	// cleared once the project is reinstated.
+	// +kubebuilder:validation:Optional
+	SuspensionEscalation *ProjectSuspensionEscalationStatus `json:"suspensionEscalation,omitempty"`
+}
+
+// ProjectSuspensionEscalationStatus records the retention-window deadline and
+// notification history for a project's pending escalation from suspension to
+// deletion.
+type ProjectSuspensionEscalationStatus struct {
+	// DeletionAt is the time at which the project will be deleted if it
+	// remains suspended. It is fixed once computed so it does not drift if
+	// the configured retention window changes while the project is already
+	// suspended.
+	// +kubebuilder:validation:Required
+	DeletionAt metav1.Time `json:"deletionAt"`
+
+	// NotifiedDaysRemaining lists the "days until deletion" thresholds for
+	// which a warning e-mail has already been sent, so that reconciliation
+	// does not send duplicate notifications.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=64
+	NotifiedDaysRemaining []int32 `json:"notifiedDaysRemaining,omitempty"`
 }
 
 const (
@@ -50,6 +76,11 @@ const (
 
 	// ProjectSuspended indicates whether the project is suspended.
 	ProjectSuspended = "Suspended"
+
+	// ProjectPendingDeletion indicates that the project is suspended past its
+	// retention window grace period and will be deleted at
+	// status.suspensionEscalation.deletionAt unless it is reinstated first.
+	ProjectPendingDeletion = "PendingDeletion"
 )
 
 // ProjectSuspendedCause is the metav1.StatusCause Type set on the
@@ -88,6 +119,14 @@ const (
 	// ProjectCleanupCompleteReason indicates that all project resources have
 	// been deleted.
 	ProjectCleanupCompleteReason = "CleanupComplete"
+
+	// ProjectPendingDeletionReason indicates that the project's suspension
+	// retention window is active and counting down to deletion.
+	ProjectPendingDeletionReason = "SuspensionRetentionWindowElapsing"
+
+	// ProjectPendingDeletionClearedReason indicates that a pending escalation
+	// to deletion was cancelled because the project was reinstated.
+	ProjectPendingDeletionClearedReason = "Reinstated"
 )
 
 // +kubebuilder:object:root=true
@@ -96,6 +135,7 @@ const (
 
 // Project is the Schema for the projects API.
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Delete At",type="string",JSONPath=".status.suspensionEscalation.deletionAt"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization"
 type Project struct {

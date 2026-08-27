@@ -1,0 +1,8 @@
+# Pulls the project-suspension-deletion-warning EmailTemplate directly from
+# its source of truth (datum-cloud/email-templates) so this test exercises
+# the real template, not a stand-in, and never needs manual re-syncing.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - https://raw.githubusercontent.com/datum-cloud/email-templates/main/config/email-templates/projectsuspensiondeletionwarning-emailtemplate.yaml

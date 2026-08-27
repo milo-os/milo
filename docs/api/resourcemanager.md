@@ -1149,6 +1149,16 @@ Known condition types are: "Ready"<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#projectstatussuspensionescalation">suspensionEscalation</a></b></td>
+        <td>object</td>
+        <td>
+          SuspensionEscalation tracks the retention-window deadline and
+notification history for a suspended project that is pending escalation
+to deletion. It is only present while the project is suspended and is
+cleared once the project is reinstated.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#projectstatussuspensionsindex">suspensions</a></b></td>
         <td>[]object</td>
         <td>
@@ -1230,6 +1240,50 @@ with respect to the current state of the instance.<br/>
           <br/>
             <i>Format</i>: int64<br/>
             <i>Minimum</i>: 0<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Project.status.suspensionEscalation
+<sup><sup>[↩ Parent](#projectstatus)</sup></sup>
+
+
+
+SuspensionEscalation tracks the retention-window deadline and
+notification history for a suspended project that is pending escalation
+to deletion. It is only present while the project is suspended and is
+cleared once the project is reinstated.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>deletionAt</b></td>
+        <td>string</td>
+        <td>
+          DeletionAt is the time at which the project will be deleted if it
+remains suspended. It is fixed once computed so it does not drift if
+the configured retention window changes while the project is already
+suspended.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>notifiedDaysRemaining</b></td>
+        <td>[]integer</td>
+        <td>
+          NotifiedDaysRemaining lists the "days until deletion" thresholds for
+which a warning e-mail has already been sent, so that reconciliation
+does not send duplicate notifications.<br/>
         </td>
         <td>false</td>
       </tr></tbody>

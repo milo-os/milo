@@ -1,0 +1,14 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: ProjectSuspension
+metadata:
+  name: escalation-suspension-1
+spec:
+  projectRef:
+    name: suspension-escalation-test-project
+  # Billing is a warning-eligible reason (Fraud/Abuse are excluded by the
+  # controller's default --project-suspension-warning-excluded-reasons), so
+  # this suspension still produces the countdown warning e-mail the test
+  # asserts on below.
+  reason: Billing
+  reinstateAuthority: Operator
+  requestedBy: operator-admin

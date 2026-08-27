@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: suspension-escalation-test-project
+spec:
+  ownerRef:
+    kind: Organization
+    name: suspension-escalation-test-org

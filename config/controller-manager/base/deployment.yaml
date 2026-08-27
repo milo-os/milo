@@ -45,6 +45,11 @@ spec:
           # Feature gates controlled via FEATURE_GATES env var.
           # Enable unified organizations: FEATURE_GATES=UnifiedOrganizations=true
           - --feature-gates=$(FEATURE_GATES)
+          - --project-suspension-retention-window-days=$(PROJECT_SUSPENSION_RETENTION_WINDOW_DAYS)
+          - --project-suspension-notification-days=$(PROJECT_SUSPENSION_NOTIFICATION_DAYS)
+          - --project-suspension-deletion-warning-email-template=$(PROJECT_SUSPENSION_DELETION_WARNING_EMAIL_TEMPLATE)
+          - --project-suspension-deletion-warning-email-namespace=$(PROJECT_SUSPENSION_DELETION_WARNING_EMAIL_NAMESPACE)
+          - --project-suspension-warning-excluded-reasons=$(PROJECT_SUSPENSION_WARNING_EXCLUDED_REASONS)
         env:
           - name: FEATURE_GATES
             value: ""
@@ -71,6 +76,25 @@ spec:
             value: /etc/kubernetes/pki/webhook/ca.crt
           - name: CONTROL_PLANE_SCOPE
             value: "core"
+          # How many days a project may remain suspended before it is
+          # automatically deleted.
+          - name: PROJECT_SUSPENSION_RETENTION_WINDOW_DAYS
+            value: "90"
+          # Days-until-deletion thresholds at which a warning e-mail is sent,
+          # in addition to the notice sent immediately upon suspension.
+          - name: PROJECT_SUSPENSION_NOTIFICATION_DAYS
+            value: "60,30,15,7,3,1"
+          - name: PROJECT_SUSPENSION_DELETION_WARNING_EMAIL_TEMPLATE
+            value: emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarningemailtemplate
+          # Namespace suspension deletion warning Email resources are
+          # created in, kept as a stable, centralized audit trail.
+          - name: PROJECT_SUSPENSION_DELETION_WARNING_EMAIL_NAMESPACE
+            value: milo-system
+          # Suspension reasons for which countdown deletion warning e-mails
+          # are NOT sent. Projects suspended for these reasons still auto-delete
+          # after the retention window; only the warning e-mail is suppressed.
+          - name: PROJECT_SUSPENSION_WARNING_EXCLUDED_REASONS
+            value: "Fraud,Abuse"
           # Soft memory limit tracking the cgroup cap so GC reclaims before
           # OOMKill (#631).
           - name: GOMEMLIMIT

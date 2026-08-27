@@ -1,6 +1,7 @@
 package resourcemanager
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,25 @@ var (
 		},
 	)
 
+	suspensionEscalatedTotal = metrics.NewCounter(
+		&metrics.CounterOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_suspension_escalated_total",
+			Help:           "Total number of projects deleted after their suspension retention window elapsed.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
+	suspensionWarningEmailsTotal = metrics.NewCounterVec(
+		&metrics.CounterOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_suspension_warning_emails_total",
+			Help:           "Total number of suspension deletion warning e-mails sent, categorized by days remaining until deletion.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"days_remaining"},
+	)
+
 	metricsMu            sync.Mutex
 	activeSuspensionsMap = make(map[string]map[string]bool) // projectName -> active reasons
 )
@@ -74,6 +94,20 @@ func init() {
 	legacyregistry.MustRegister(pauseFailedTotal)
 	legacyregistry.MustRegister(deletionPendingSeconds)
 	legacyregistry.MustRegister(deletionBlockingResources)
+	legacyregistry.MustRegister(suspensionEscalatedTotal)
+	legacyregistry.MustRegister(suspensionWarningEmailsTotal)
+}
+
+// recordSuspensionEscalated counts a project that was deleted after its
+// suspension retention window elapsed.
+func recordSuspensionEscalated() {
+	suspensionEscalatedTotal.Inc()
+}
+
+// recordSuspensionWarningEmailSent counts a suspension deletion warning
+// e-mail sent at the given number of days remaining until deletion.
+func recordSuspensionWarningEmailSent(daysRemaining int32) {
+	suspensionWarningEmailsTotal.WithLabelValues(strconv.Itoa(int(daysRemaining))).Inc()
 }
 
 // recordProjectDeletionProgress publishes how long a deleted project has been
