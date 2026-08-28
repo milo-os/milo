@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: test-project-lifecycle-org
+  labels:
+    test.miloapis.com/scenario: "project-lifecycle"
+  annotations:
+    kubernetes.io/description: "Organization for testing project lifecycle"
+    kubernetes.io/display-name: "Test Project Lifecycle Organization"
+spec:
+  type: Standard
