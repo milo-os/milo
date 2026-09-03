@@ -100,6 +100,9 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager)
 	if err := iamv1alpha1webhook.SetupUserDeactivationWebhooksWithManager(mgr, SystemNamespace); err != nil {
 		return fmt.Errorf("setting up userdeactivation webhook: %w", err)
 	}
+	if err := iamv1alpha1webhook.SetupGroupMembershipWebhooksWithManager(mgr); err != nil {
+		return fmt.Errorf("setting up groupmembership webhook: %w", err)
+	}
 	if err := identityv1alpha1webhook.SetupUserIdentityWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up useridentity webhook: %w", err)
 	}

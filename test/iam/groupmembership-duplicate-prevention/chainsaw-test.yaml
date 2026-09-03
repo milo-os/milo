@@ -1,0 +1,103 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: groupmembership-duplicate-prevention
+spec:
+  description: |
+    Verifies the GroupMembership validating webhook prevents a user from being
+    added to the same group more than once, rejects non-existent group and user
+    references, and prevents an existing membership from being updated.
+
+    This test verifies:
+    - Creating the first membership for a (user, group) pair succeeds.
+    - Creating a second membership for the same (user, group) pair is rejected
+      at admission.
+    - A different user can still join the same group.
+    - A user can join a different group.
+    - Creating a membership referencing a non-existent group is rejected at admission.
+    - Creating a membership referencing a non-existent user is rejected at admission.
+    - Updating an existing membership is rejected because group memberships are immutable.
+
+  steps:
+  - name: setup-users-and-groups
+    description: Create required Users and Groups for testing group memberships.
+    try:
+    - apply:
+        file: resources/users.yaml
+    - apply:
+        file: resources/groups.yaml
+    - assert:
+        file: resources/users.yaml
+    - assert:
+        file: resources/groups.yaml
+
+  - name: create-first-membership
+    description: The first membership linking a user to a group is accepted.
+    try:
+    - apply:
+        file: resources/membership-alice-eng.yaml
+    - assert:
+        file: resources/membership-alice-eng.yaml
+
+  - name: reject-duplicate-membership
+    description: A second membership for the same (user, group) pair is rejected by the webhook.
+    try:
+    - apply:
+        file: resources/membership-alice-eng-duplicate.yaml
+        expect:
+        - check:
+            ($error != null): true
+
+  - name: allow-different-user-same-group
+    description: A different user may still join the same group.
+    try:
+    - apply:
+        file: resources/membership-bob-eng.yaml
+    - assert:
+        file: resources/membership-bob-eng.yaml
+
+  - name: allow-same-user-different-group
+    description: The same user may join a different group.
+    try:
+    - apply:
+        file: resources/membership-alice-platform.yaml
+    - assert:
+        file: resources/membership-alice-platform.yaml
+
+  - name: reject-nonexistent-group
+    description: Creating a membership referencing a non-existent group is rejected.
+    try:
+    - apply:
+        file: resources/membership-alice-nonexistent-group.yaml
+        expect:
+        - check:
+            ($error != null): true
+
+  - name: reject-nonexistent-user
+    description: Creating a membership referencing a non-existent user is rejected.
+    try:
+    - apply:
+        file: resources/membership-nonexistent-user-eng.yaml
+        expect:
+        - check:
+            ($error != null): true
+
+  - name: reject-reference-update
+    description: Applying a change to an existing membership's group pointer is rejected because group memberships are immutable.
+    try:
+    - apply:
+        file: resources/membership-alice-eng-change-group.yaml
+        expect:
+        - check:
+            ($error != null): true
+
+  - name: reject-any-update
+    description: Re-applying an existing membership is rejected because group memberships are immutable.
+    try:
+    - apply:
+        file: resources/membership-alice-eng.yaml
+        expect:
+        - check:
+            ($error != null): true
+
+
