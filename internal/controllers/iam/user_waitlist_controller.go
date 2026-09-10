@@ -59,6 +59,15 @@ func (r *UserWaitlistController) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	// C11 (passkey Phase C): every mail this controller sends waits until zitadel-provider has
+	// marked the address as verified. Approval alone used to be enough, which mailed a welcome
+	// to addresses nobody had proven. No requeue: the controller watches User, and the field
+	// flip re-triggers reconcile, at which point the exactly-once guard above still applies.
+	if !emailVerified(user) {
+		log.Info("waiting for email verification", "emailVerification", user.Status.EmailVerification)
+		return ctrl.Result{}, nil
+	}
+
 	originalStatus := user.Status.DeepCopy()
 
 	// Send the waitlist email
@@ -188,6 +197,13 @@ func getEmailStatusCondition(user *iamv1alpha1.User) iamv1alpha1.UserWaitlistEma
 	default:
 		return ""
 	}
+}
+
+// emailVerified reports whether zitadel-provider has marked the user's email address as proven.
+// The field is written only by zitadel-provider (initial value on provisioning, the
+// user.human.email.verified/changed events, and its sweeper); milo never sets it.
+func emailVerified(user *iamv1alpha1.User) bool {
+	return user.Status.EmailVerification == iamv1alpha1.EmailVerificationStateVerified
 }
 
 func (r *UserWaitlistController) getEmailTemplateName(condition iamv1alpha1.UserWaitlistEmailSentCondition) string {
