@@ -6,3 +6,4 @@ resources:
   - useridentity.yaml
   - passkey.yaml
   - serviceaccountkey.yaml
+  - passkeyregistrationlink.yaml

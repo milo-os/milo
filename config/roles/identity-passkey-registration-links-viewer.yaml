@@ -1,0 +1,13 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: identity-passkey-registration-links-viewer
+  annotations:
+    kubernetes.io/display-name: Identity Passkey Registration Links Viewer
+    kubernetes.io/description: "Allows viewing passkey registration links sent to users."
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - identity.miloapis.com/passkeyregistrationlinks.get
+    - identity.miloapis.com/passkeyregistrationlinks.list
+    - identity.miloapis.com/passkeyregistrationlinks.watch

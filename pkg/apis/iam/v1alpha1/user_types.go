@@ -26,6 +26,18 @@ const (
 	UserStateInactive UserState = "Inactive"
 )
 
+// EmailVerificationState is the auth provider's view of whether the user's email
+// address is verified. Written ONLY by zitadel-provider (on provisioning, on the
+// user.human.email.verified/changed events, and reconciled by its sweeper); milo
+// controllers only read it. Empty means zitadel-provider has not synced it yet —
+// readers must treat anything but Verified as unproven.
+type EmailVerificationState string
+
+const (
+	EmailVerificationStateVerified   EmailVerificationState = "Verified"
+	EmailVerificationStateUnverified EmailVerificationState = "Unverified"
+)
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // User is the Schema for the users API
@@ -39,6 +51,7 @@ const (
 // +kubebuilder:printcolumn:name="Platform Access",type="string",JSONPath=".status.platformAccess"
 // +kubebuilder:resource:path=users,scope=Cluster
 // +kubebuilder:selectablefield:JSONPath=".status.platformAccess"
+// +kubebuilder:selectablefield:JSONPath=".status.emailVerification"
 // +kubebuilder:selectablefield:JSONPath=".spec.email"
 // +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform,User"
 type User struct {
@@ -85,6 +98,11 @@ type UserStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Pending;Approved;Rejected;Suspended
 	PlatformAccess PlatformAccessState `json:"platformAccess,omitempty"`
+
+	// EmailVerification is the auth provider's view of whether the user's email address is verified. See EmailVerificationState.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Verified;Unverified
+	EmailVerification EmailVerificationState `json:"emailVerification,omitempty"`
 
 	// LastLoginProvider records the identity provider that was most recently used by the
 	// user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
