@@ -14,6 +14,14 @@ resources:
   - ../../apiserver
   - ../../controller-manager/overlays/core-control-plane
 
+  # Infrastructure-group CRDs. milo-controller-manager runs with
+  # --control-plane-scope=core (see controller-manager/overlays/core-control-plane)
+  # and reconciles ProjectControlPlane, so its CRD must be installed or the
+  # controller loops on "no matches for kind ProjectControlPlane". Consumers of
+  # this overlay (resource-metrics, dns-operator) previously had to install it
+  # separately; include it here so the overlay stands up a working core CP.
+  - ../../crd/bases/infrastructure
+
   # Deploy argo-events (controller runs on infrastructure cluster)
   - ../../dependencies/argo-system
 
