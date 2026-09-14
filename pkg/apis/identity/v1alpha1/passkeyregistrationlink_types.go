@@ -29,26 +29,33 @@ type PasskeyRegistrationLink struct {
 type PasskeyRegistrationLinkSpec struct {
 	// UserRef names the iam.miloapis.com User (metadata.name is the provider user ID)
 	// who receives the link. The link only ever goes to that user's verified address.
+	// +kubebuilder:validation:Required
 	UserRef PasskeyRegistrationLinkUserReference `json:"userRef"`
 	// RequestedBy is the metadata.name of the staff User asking. Recorded for audit;
 	// the server rejects a value that does not match the authenticated caller.
+	// +kubebuilder:validation:Required
 	RequestedBy string `json:"requestedBy"`
 	// Reason is why the link is being sent (ticket reference, customer request). Required.
+	// +kubebuilder:validation:Required
 	Reason string `json:"reason"`
 }
 
 // PasskeyRegistrationLinkUserReference points at a User by name.
 type PasskeyRegistrationLinkUserReference struct {
+	// +kubebuilder:validation:Required
 	Name string `json:"name"`
 }
 
 // PasskeyRegistrationLinkStatus is filled by the server on create.
 type PasskeyRegistrationLinkStatus struct {
 	// UserUID is the UID of the User the link was sent to.
+	// +kubebuilder:validation:Optional
 	UserUID string `json:"userUID,omitempty"`
 	// EmailName is the notification.miloapis.com Email resource that carries the link.
+	// +kubebuilder:validation:Optional
 	EmailName string `json:"emailName,omitempty"`
 	// ExpiresAt is when the issued code stops working (the provider's configured lifetime).
+	// +kubebuilder:validation:Optional
 	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
 }
 
