@@ -3566,6 +3566,15 @@ populated by the auth provider or any service that provides a user avatar URL.<b
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>emailVerification</b></td>
+        <td>enum</td>
+        <td>
+          EmailVerification is the auth provider's view of whether the user's email address is verified. See EmailVerificationState.<br/>
+          <br/>
+            <i>Enum</i>: Verified, Unverified<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>lastLoginProvider</b></td>
         <td>string</td>
         <td>
