@@ -24,9 +24,8 @@ To change a milo policy in a live control plane: edit the policy file here,
 merge, cut a release; Flux re-applies the CR (overwriting the live object) — no
 manual kubectl.
 
-**Known latent bug pattern:** the unguarded
-`link(audit.responseObject.metadata.name, audit.objectRef)` expression recurs
-across several policies (milo iam/resourcemanager among them). On a *rejected*
-create there is no `responseObject`, so the template fails and the event lands
-in the activity processor DLQ — a slow DLQ leak. Guard `responseObject` access
-in any new or edited policy.
+**Guard `responseObject` access.** A rejected request carries no
+`responseObject`, so a template that reads it unguarded fails and the event
+lands in the activity processor DLQ. The existing iam and resourcemanager
+create policies already wrap it in `has(audit.responseObject.metadata.name) ?
+... : ...` fallbacks; follow that shape in any new or edited policy.
