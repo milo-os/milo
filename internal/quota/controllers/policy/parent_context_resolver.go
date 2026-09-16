@@ -29,7 +29,6 @@ const (
 type ParentContextResolver struct {
 	clientCache    map[string]*CachedClient
 	mu             sync.RWMutex
-	defaultClient  client.Client
 	baseRestConfig *rest.Config
 	scheme         *runtime.Scheme
 	clientTTL      time.Duration
@@ -51,14 +50,13 @@ type ParentContextResolverOptions struct {
 // NewParentContextResolver creates a new ParentContextResolver.
 // Scheme must include all resource types for parent context creation.
 // Pass empty ParentContextResolverOptions{} for defaults.
-func NewParentContextResolver(defaultClient client.Client, baseRestConfig *rest.Config, scheme *runtime.Scheme, opts ParentContextResolverOptions) *ParentContextResolver {
+func NewParentContextResolver(baseRestConfig *rest.Config, scheme *runtime.Scheme, opts ParentContextResolverOptions) *ParentContextResolver {
 	if opts.ClientTTL == 0 {
 		opts.ClientTTL = DefaultClientTTL
 	}
 
 	resolver := &ParentContextResolver{
 		clientCache:    make(map[string]*CachedClient),
-		defaultClient:  defaultClient,
 		baseRestConfig: baseRestConfig,
 		scheme:         scheme,
 		clientTTL:      opts.ClientTTL,
@@ -110,12 +108,15 @@ func (r *ParentContextResolver) ResolveClient(
 		return cachedClient.client, nil
 	}
 
-	// Create new client
+	// Create new client. A parent context that cannot be reached is an error
+	// for the caller to report, not a reason to write into the local control
+	// plane instead: a grant that lands there never reaches the project, and
+	// the silent substitution would hide the resolution failure behind
+	// whatever the local write happens to return.
 	newClient, err := r.createClientForParentContext(ctx, parentContext, triggerObj)
 	if err != nil {
-		logger.Error(err, "Failed to create client for parent context")
-		// Fall back to default client on error
-		return r.defaultClient, nil
+		return nil, fmt.Errorf("failed to create client for parent context %s/%s %q: %w",
+			parentContext.APIGroup, parentContext.Kind, parentContext.Name, err)
 	}
 
 	// Cache the client

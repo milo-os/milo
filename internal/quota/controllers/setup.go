@@ -122,7 +122,7 @@ func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interfac
 	// 7. Grant Creation controller (automatic grant creation - core cluster only)
 	logger.V(1).Info("Setting up Grant Creation controller (core cluster only)")
 	templateEngine := engine.NewTemplateEngine(celEngine, logger)
-	parentContextResolver := policy.NewParentContextResolver(standardMgr.GetClient(), standardMgr.GetConfig(), standardMgr.GetScheme(), policy.ParentContextResolverOptions{})
+	parentContextResolver := policy.NewParentContextResolver(standardMgr.GetConfig(), standardMgr.GetScheme(), policy.ParentContextResolverOptions{})
 
 	informerManager, err := informer.NewManagerFromManager(standardMgr)
 	if err != nil {
