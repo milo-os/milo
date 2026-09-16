@@ -13,6 +13,7 @@ spec:
     - PolicyBindings can reference groups
     - GroupMemberships link users to groups
     - Deleting a group cascades to delete GroupMemberships
+    - GroupMemberships are annotated with the member's email at admission
     - PolicyBindings are updated when groups are deleted
     - PolicyBindings are deleted when they have no remaining subjects
 
@@ -89,6 +90,15 @@ spec:
         file: resources/memberships.yaml
     - assert:
         file: resources/memberships.yaml
+  - name: stamp-member-email
+    description: A GroupMembership referencing an existing User is annotated with the member's email at admission
+    try:
+    - apply:
+        file: resources/email-user.yaml
+    - apply:
+        file: resources/membership-with-email.yaml
+    - assert:
+        file: resources/assert-membership-email.yaml
   - name: delete-groups
     description: Delete groups and verify cascade deletion of memberships and policy binding updates
     try:
