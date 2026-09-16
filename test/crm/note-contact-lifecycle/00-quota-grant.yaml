@@ -1,0 +1,18 @@
+# Notes on contacts and users consume the author's quota. In production this
+# grant comes from a GrantCreationPolicy in the datum repo.
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceGrant
+metadata:
+  name: crm-note-contact-lifecycle-grant
+  namespace: milo-system
+  labels:
+    test.miloapis.com/scenario: "crm-note-contact-lifecycle"
+spec:
+  consumerRef:
+    apiGroup: iam.miloapis.com
+    kind: User
+    name: admin
+  allowances:
+    - resourceType: notes.miloapis.com/user-notes
+      buckets:
+        - amount: 1000

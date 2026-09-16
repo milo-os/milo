@@ -3,8 +3,6 @@ kind: Test
 metadata:
   name: crm-note-contact-lifecycle
 spec:
-  # Re-enabled: notes on platform-scoped subjects (Contact, User) no longer hit the
-  # project notes quota policy. See config/services/quota/claim-policies/.
   skip: false
   description: |
     End-to-end tests for CRM Notes.
@@ -15,6 +13,12 @@ spec:
     - Deleting a User causes owned Notes to be garbage-collected via ownerReferences
 
   steps:
+    - name: grant-author-note-quota
+      description: Notes on contacts and users consume the author's quota
+      try:
+        - apply:
+            file: 00-quota-grant.yaml
+
     - name: create-user-contact-and-notes
       description: Create IAM User, Notification Contact, and CRM Notes, then verify Note status
       try:

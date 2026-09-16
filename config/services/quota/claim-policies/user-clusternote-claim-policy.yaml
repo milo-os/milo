@@ -1,0 +1,36 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ClaimCreationPolicy
+metadata:
+  name: user-clusternote-claim-policy
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+spec:
+  trigger:
+    resource:
+      apiVersion: notes.miloapis.com/v1alpha1
+      kind: ClusterNote
+    # Notes on contacts, users and organizations belong to no project, so they
+    # count against the note author instead.
+    constraints:
+      - expression: "trigger.spec.subjectRef.apiGroup in ['notification.miloapis.com', 'iam.miloapis.com', 'resourcemanager.miloapis.com']"
+  target:
+    resourceClaimTemplate:
+      metadata:
+        name: "user-clusternote-{{ trigger.metadata.name }}"
+        namespace: "{{requestInfo.namespace}}"
+        labels:
+          app.kubernetes.io/name: milo
+          app.kubernetes.io/component: quota-system
+        annotations:
+          kubernetes.io/description: "Automatic quota claim for ClusterNote creation"
+      spec:
+        # creatorRef is set by the mutating webhook from the authenticated
+        # user, so it can't be spoofed into another user's quota.
+        consumerRef:
+          apiGroup: iam.miloapis.com
+          kind: User
+          name: "{{trigger.spec.creatorRef.name}}"
+        requests:
+          - resourceType: notes.miloapis.com/user-notes
+            amount: 1

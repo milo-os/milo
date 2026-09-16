@@ -10,12 +10,8 @@ spec:
     resource:
       apiVersion: notes.miloapis.com/v1alpha1
       kind: ClusterNote
-    # Only notes about project-scoped subjects count against a project's note
-    # quota. Notes about platform-scoped subjects (Contact, User, Organization)
-    # have no owning project, so path-derived consumer resolution in the quota
-    # admission plugin cannot name a consumer for them and the claim would be
-    # rejected against this registration's required Project consumer type.
-    # Excluding them here means no claim is created and the note is admitted.
+    # Notes on contacts, users and organizations belong to no project; they
+    # count against the note author instead (see user-*-claim-policy.yaml).
     constraints:
       - expression: "!(trigger.spec.subjectRef.apiGroup in ['notification.miloapis.com', 'iam.miloapis.com', 'resourcemanager.miloapis.com'])"
   target:

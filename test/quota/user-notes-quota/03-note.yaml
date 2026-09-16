@@ -1,0 +1,13 @@
+apiVersion: notes.miloapis.com/v1alpha1
+kind: Note
+metadata:
+  name: user-notes-quota-note
+spec:
+  subjectRef:
+    apiGroup: notification.miloapis.com
+    kind: Contact
+    name: user-notes-quota-contact
+    namespace: ($namespace)
+  creatorRef:
+    name: admin
+  content: "Note on a contact - should consume the author's quota"

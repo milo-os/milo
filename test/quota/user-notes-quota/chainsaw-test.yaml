@@ -1,0 +1,82 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: quota-user-notes
+spec:
+  description: |
+    Notes on platform-scoped subjects count against the note author's quota
+    rather than a project's.
+
+    This test verifies:
+    - A Note on a Contact creates a ResourceClaim consuming notes.miloapis.com/user-notes
+    - The claim's consumer is the authenticated author, not a project
+    - The claim is granted when the author has quota available
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+
+  steps:
+    - name: grant-author-quota
+      description: Give the note author an allowance for user-scoped notes
+      try:
+        - apply:
+            file: 01-grant.yaml
+
+    - name: create-contact-and-note
+      description: Create a Contact and attach a Note to it
+      try:
+        - apply:
+            file: 02-contact.yaml
+        - apply:
+            file: 03-note.yaml
+        - assert:
+            resource:
+              apiVersion: notes.miloapis.com/v1alpha1
+              kind: Note
+              metadata:
+                name: user-notes-quota-note
+                namespace: ($namespace)
+
+    - name: verify-claim-consumes-author-quota
+      description: The claim must name the author as consumer and be granted
+      try:
+        - assert:
+            resource:
+              apiVersion: quota.miloapis.com/v1alpha1
+              kind: ResourceClaim
+              metadata:
+                name: user-note-user-notes-quota-note
+                namespace: ($namespace)
+              spec:
+                consumerRef:
+                  apiGroup: iam.miloapis.com
+                  kind: User
+                  name: admin
+                requests:
+                  - resourceType: notes.miloapis.com/user-notes
+                    amount: 1
+        - assert:
+            resource:
+              apiVersion: quota.miloapis.com/v1alpha1
+              kind: ResourceClaim
+              metadata:
+                name: user-note-user-notes-quota-note
+                namespace: ($namespace)
+              status:
+                (conditions[?type == 'Granted']):
+                  - status: "True"
+
+    - name: no-project-claim-created
+      description: The project-scoped notes quota must not be consumed
+      try:
+        - script:
+            content: |
+              set -eu
+              if kubectl --kubeconfig kubeconfig-main -n $NAMESPACE get resourceclaim note-user-notes-quota-note >/dev/null 2>&1; then
+                echo "project-scoped claim was created for a contact note"
+                exit 1
+              fi
+            env:
+              - name: NAMESPACE
+                value: ($namespace)

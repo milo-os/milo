@@ -1,0 +1,8 @@
+apiVersion: notification.miloapis.com/v1alpha1
+kind: Contact
+metadata:
+  name: user-notes-quota-contact
+spec:
+  email: user-notes-quota-contact@example.com
+  givenName: Quota
+  familyName: Contact

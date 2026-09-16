@@ -7,4 +7,5 @@ sortOptions:
 resources:
   - configmap-registration.yaml
   - note-registration.yaml
+  - note-user-registration.yaml
   - secret-registration.yaml

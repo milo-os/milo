@@ -1,0 +1,31 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceRegistration
+metadata:
+  name: notes-per-user
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+    services.miloapis.com/owner: notes.miloapis.com
+  annotations:
+    kubernetes.io/display-name: "Notes"
+    kubernetes.io/description: "Maximum number of notes a user can create on contacts, users, and organizations"
+spec:
+  consumerType:
+    apiGroup: iam.miloapis.com
+    kind: User
+
+  type: Entity
+
+  resourceType: notes.miloapis.com/user-notes
+
+  description: "Maximum number of notes a user can create on contacts, users, and organizations"
+
+  baseUnit: note
+  displayUnit: notes
+  unitConversionFactor: 1
+
+  claimingResources:
+    - apiGroup: notes.miloapis.com
+      kind: Note
+    - apiGroup: notes.miloapis.com
+      kind: ClusterNote

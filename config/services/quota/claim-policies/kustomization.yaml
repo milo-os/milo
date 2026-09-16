@@ -9,3 +9,5 @@ resources:
   - configmap-claim-policy.yaml
   - note-claim-policy.yaml
   - secret-claim-policy.yaml
+  - user-clusternote-claim-policy.yaml
+  - user-note-claim-policy.yaml

@@ -1,0 +1,19 @@
+# Notes on platform-scoped subjects consume the author's quota. In production
+# this grant comes from a GrantCreationPolicy in the datum repo; the test
+# supplies it directly.
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceGrant
+metadata:
+  name: user-notes-quota-test-grant
+  namespace: milo-system
+  labels:
+    test.miloapis.com/scenario: "user-notes-quota"
+spec:
+  consumerRef:
+    apiGroup: iam.miloapis.com
+    kind: User
+    name: admin
+  allowances:
+    - resourceType: notes.miloapis.com/user-notes
+      buckets:
+        - amount: 1000
