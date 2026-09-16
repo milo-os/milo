@@ -139,6 +139,9 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager)
 	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up policybinding webhook: %w", err)
 	}
+	if err := iamv1alpha1webhook.SetupGroupMembershipWebhooksWithManager(mgr); err != nil {
+		return fmt.Errorf("setting up groupmembership webhook: %w", err)
+	}
 	return nil
 }
 
