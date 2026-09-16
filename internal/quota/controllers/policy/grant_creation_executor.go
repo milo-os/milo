@@ -5,10 +5,12 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -26,6 +28,22 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	"go.miloapis.com/milo/pkg/quota/engine"
 )
+
+// errTargetGone marks a grant write that can never succeed on retry because the
+// target namespace is terminating or the target control plane no longer exists.
+// processTriggerResource skips such failures instead of emitting a Warning event,
+// so a Project stuck in Terminating does not produce a failure on every resync.
+var errTargetGone = errors.New("target control plane gone or terminating")
+
+// classifyTargetWriteError wraps errors from a grant Create/Update with
+// errTargetGone when the target namespace is terminating or the target
+// control plane returns NotFound for the write itself. Other errors pass through.
+func classifyTargetWriteError(err error) error {
+	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) || apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: %w", errTargetGone, err)
+	}
+	return err
+}
 
 // GrantCreationController watches trigger resources and creates grants based on active policies.
 type GrantCreationController struct {
@@ -108,6 +126,13 @@ func (r *GrantCreationController) processTriggerResource(obj *unstructured.Unstr
 		return
 	}
 
+	// A trigger with a deletion timestamp is on its way out; creating a grant
+	// for it would only fail or be garbage collected immediately.
+	if obj.GetDeletionTimestamp() != nil {
+		logger.V(2).Info("Trigger is being deleted; skipping grant creation")
+		return
+	}
+
 	// Get the specific policy
 	policy, err := r.getPolicyByName(ctx, policyName)
 	if err != nil {
@@ -125,6 +150,10 @@ func (r *GrantCreationController) processTriggerResource(obj *unstructured.Unstr
 
 	// Process the policy
 	if err := r.processPolicy(ctx, policy, obj); err != nil {
+		if errors.Is(err, errTargetGone) {
+			logger.V(1).Info("Target control plane gone or terminating; not retrying", "reason", err.Error())
+			return
+		}
 		logger.Error(err, "Failed to process policy")
 		r.EventRecorder.Eventf(obj, "Warning", "PolicyProcessingFailed",
 			"Failed to process grant creation policy %s: %v", policy.Name, err)
@@ -355,7 +384,7 @@ func (r *GrantCreationController) createOrUpdateGrant(
 			}
 			logger.Info("Creating new ResourceGrant")
 			if err := targetClient.Create(ctx, grant); err != nil {
-				return fmt.Errorf("failed to create grant: %w", err)
+				return fmt.Errorf("failed to create grant: %w", classifyTargetWriteError(err))
 			}
 
 			r.EventRecorder.Eventf(triggerObj, "Normal", "GrantCreated",
@@ -379,7 +408,7 @@ func (r *GrantCreationController) createOrUpdateGrant(
 
 	logger.Info("Updating existing ResourceGrant")
 	if err := targetClient.Update(ctx, existingGrant); err != nil {
-		return fmt.Errorf("failed to update grant: %w", err)
+		return fmt.Errorf("failed to update grant: %w", classifyTargetWriteError(err))
 	}
 
 	r.EventRecorder.Eventf(triggerObj, "Normal", "GrantUpdated",
