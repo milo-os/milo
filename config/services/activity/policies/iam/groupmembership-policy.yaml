@@ -8,8 +8,9 @@
 #
 # Design principles:
 # - Prefer the member's email from the iam.miloapis.com/user-email annotation,
-#   stamped by the GroupMembership mutating webhook at admission; fall back to
-#   spec.userRef.name (the User name) when the annotation is absent
+#   stamped by the GroupMembership mutating webhook at admission and kept in
+#   sync by the GroupMembership controller; fall back to spec.userRef.name
+#   (the User name) when the annotation is absent
 # - Rules are listed most-specific first, and the annotation rules also match
 #   strictly more narrowly than the userRef rules, so the same rule wins
 #   regardless of evaluation order
