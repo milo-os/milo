@@ -598,6 +598,14 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			groupMembershipCtrl := iamcontroller.GroupMembershipController{
+				Client: ctrl.GetClient(),
+			}
+			if err := groupMembershipCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up group membership controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			platformInvitationCtrl := iamcontroller.PlatformInvitationController{
 				Client:                              ctrl.GetClient(),
 				PlatformInvitationEmailTemplateName: PlatformInvitationEmailTemplate,
