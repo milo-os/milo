@@ -12,12 +12,6 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 )
 
-// UserEmailAnnotation carries the email of the User referenced by a
-// GroupMembership. The mutating webhook stamps it at admission so consumers
-// that only see the GroupMembership (for example the activity log) can show
-// the member's email instead of the opaque User name.
-const UserEmailAnnotation = "iam.miloapis.com/user-email"
-
 func SetupGroupMembershipWebhooksWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.GroupMembership{}).
 		WithDefaulter(&GroupMembershipMutator{
@@ -62,7 +56,7 @@ func (m *GroupMembershipMutator) Default(ctx context.Context, gm *iamv1alpha1.Gr
 	if gm.Annotations == nil {
 		gm.Annotations = map[string]string{}
 	}
-	gm.Annotations[UserEmailAnnotation] = user.Spec.Email
+	gm.Annotations[iamv1alpha1.UserEmailAnnotation] = user.Spec.Email
 	log.Info("stamped member email on group membership", "user", userName)
 
 	return nil

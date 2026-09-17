@@ -46,7 +46,7 @@ func TestGroupMembershipMutator_Default(t *testing.T) {
 		"email stamped when user exists": {
 			preObjects: []client.Object{memberUser},
 			expectedAnnotations: map[string]string{
-				UserEmailAnnotation: "member@example.com",
+				iamv1alpha1.UserEmailAnnotation: "member@example.com",
 			},
 		},
 		"no annotation and no error when user is missing": {
@@ -56,15 +56,15 @@ func TestGroupMembershipMutator_Default(t *testing.T) {
 			preObjects:  []client.Object{memberUser},
 			annotations: map[string]string{"example.com/keep": "yes"},
 			expectedAnnotations: map[string]string{
-				"example.com/keep":  "yes",
-				UserEmailAnnotation: "member@example.com",
+				"example.com/keep":              "yes",
+				iamv1alpha1.UserEmailAnnotation: "member@example.com",
 			},
 		},
 		"stale email annotation refreshed from the user": {
 			preObjects:  []client.Object{memberUser},
-			annotations: map[string]string{UserEmailAnnotation: "old@example.com"},
+			annotations: map[string]string{iamv1alpha1.UserEmailAnnotation: "old@example.com"},
 			expectedAnnotations: map[string]string{
-				UserEmailAnnotation: "member@example.com",
+				iamv1alpha1.UserEmailAnnotation: "member@example.com",
 			},
 		},
 		"no annotation when user has no email": {
