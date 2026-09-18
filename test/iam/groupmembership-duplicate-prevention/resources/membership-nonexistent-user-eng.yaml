@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: GroupMembership
+metadata:
+  name: gm-nonexistent-user-eng
+  namespace: ($namespace)
+spec:
+  userRef:
+    name: non-existent-user
+  groupRef:
+    name: eng
+    namespace: ($namespace)

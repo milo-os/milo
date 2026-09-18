@@ -291,6 +291,28 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-groupmembership
+      port: 9443
+  failurePolicy: Fail
+  name: vgroupmembership.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - groupmemberships
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
       path: /validate-iam-miloapis-com-v1alpha1-platformaccess
       port: 9443
   failurePolicy: Fail

@@ -1,0 +1,17 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: alice
+spec:
+  email: alice@example.com
+  givenName: Alice
+  familyName: Smith
+---
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: bob
+spec:
+  email: bob@example.com
+  givenName: Bob
+  familyName: Jones

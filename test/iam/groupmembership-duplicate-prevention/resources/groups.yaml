@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Group
+metadata:
+  name: eng
+  namespace: ($namespace)
+---
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Group
+metadata:
+  name: platform
+  namespace: ($namespace)
