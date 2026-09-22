@@ -256,6 +256,55 @@ func TestProjectSuspensionEscalationController_Reconcile(t *testing.T) {
 		}
 	})
 
+	t.Run("sends a single e-mail at the true days remaining after multiple checkpoints are crossed", func(t *testing.T) {
+		ctx := context.Background()
+		// The controller missed both the 7-day and 3-day marks (a reconcile gap):
+
+		// the project is now ~1 day from deletion with only the 30-day notice sent.
+		project := newSuspendedProject("test-project", "test-org", time.Now().Add(-29*24*time.Hour))
+		project.Status.SuspensionEscalation = &resourcemanagerv1alpha1.ProjectSuspensionEscalationStatus{
+			DeletionAt:            metav1.NewTime(time.Now().Add(24 * time.Hour)),
+			NotifiedDaysRemaining: []int32{30},
+		}
+		org := newTestOrganization("test-org")
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project, org).
+			WithStatusSubresource(&resourcemanagerv1alpha1.Project{}).Build()
+
+		r := &ProjectSuspensionEscalationController{
+			Client:                    c,
+			EventRecorder:             record.NewFakeRecorder(100),
+			RetentionWindowDays:       30,
+			NotificationDaysRemaining: []int{7, 3, 1},
+			EmailTemplateName:         "deletion-warning",
+			EmailNamespace:            testEmailNamespace,
+			notificationCheckpoints:   computeNotificationCheckpoints(30, []int{7, 3, 1}),
+		}
+
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var emails notificationv1alpha1.EmailList
+		if err := c.List(ctx, &emails, client.InNamespace(testEmailNamespace)); err != nil {
+			t.Fatalf("failed to list emails: %v", err)
+		}
+		// Exactly one e-mail, quoted at the true remaining days, not one per
+		// crossed checkpoint.
+		if len(emails.Items) != 1 {
+			t.Fatalf("expected exactly 1 warning email after multiple checkpoints were crossed, got %d", len(emails.Items))
+		}
+
+		var got resourcemanagerv1alpha1.Project
+		if err := c.Get(ctx, client.ObjectKey{Name: "test-project"}, &got); err != nil {
+			t.Fatalf("failed to get project: %v", err)
+		}
+		if !containsInt32(got.Status.SuspensionEscalation.NotifiedDaysRemaining, 7) ||
+			!containsInt32(got.Status.SuspensionEscalation.NotifiedDaysRemaining, 3) {
+			t.Errorf("expected crossed checkpoints 7 and 3 recorded, got %v", got.Status.SuspensionEscalation.NotifiedDaysRemaining)
+		}
+	})
+
 	t.Run("deletes the project once the retention window elapses", func(t *testing.T) {
 		ctx := context.Background()
 		suspendedSince := time.Now().Add(-31 * 24 * time.Hour)
