@@ -1,0 +1,45 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-access-rejection
+spec:
+  description: |
+    Verify that a User's registrationApproval starts as Pending and becomes Rejected
+    after creating a PlatformAccessRejection.
+  steps:
+  - name: rejection-flow
+    description: Create a User, confirm Pending, then reject and expect Rejected
+    try:
+    - apply:
+        file: resources/user-rejection.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: access-rejection-test-user
+        timeout: 2m
+        for:
+          condition:
+            name: Ready
+            value: 'True'
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: access-rejection-test-user
+        timeout: 1m
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Pending
+    - apply:
+        file: resources/rejection.yaml
+    - wait:
+        apiVersion: iam.miloapis.com/v1alpha1
+        kind: User
+        name: access-rejection-test-user
+        timeout: 2m
+        for:
+          jsonPath:
+            path: '{.status.registrationApproval}'
+            value: Rejected
+
+

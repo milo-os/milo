@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccessRejection
+metadata:
+  name: access-rejection-for-test-user
+spec:
+  subjectRef:
+    name: access-rejection-test-user
+  reason: Not eligible for platform access
