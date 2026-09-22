@@ -5,4 +5,4 @@ on:
 
 jobs:
   validate-kustomize:
-    uses: datum-cloud/actions/.github/workflows/validate-kustomize.yaml@v1.7.1
+    uses: datum-cloud/actions/.github/workflows/validate-kustomize.yaml@v1.9.0
