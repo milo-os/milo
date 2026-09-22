@@ -144,14 +144,15 @@ func TestGroupMembership_Create_GroupDoesNotExistRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), `"ghost-group"`)
 }
 
-func TestGroupMembership_Update_AnyUpdateRejected(t *testing.T) {
+func TestGroupMembership_Update_MetadataOnlyAllowed(t *testing.T) {
 	oldMembership := newGroupMembership("gm-1", "ns1", "alice", "eng", "ns1")
 	newMembership := newGroupMembership("gm-1", "ns1", "alice", "eng", "ns1")
+	newMembership.Finalizers = []string{"iam.miloapis.com/openfga"}
+	newMembership.Labels = map[string]string{"iam.miloapis.com/group-name": "eng"}
 	v := newTestValidator()
 
 	_, err := v.ValidateUpdate(context.Background(), oldMembership, newMembership)
-	require.Error(t, err, "any update must be rejected")
-	assert.Contains(t, err.Error(), "immutable")
+	require.NoError(t, err, "metadata-only updates such as the OpenFGA controller adding its finalizer must be allowed")
 }
 
 func TestGroupMembership_Update_ChangeGroupRejected(t *testing.T) {

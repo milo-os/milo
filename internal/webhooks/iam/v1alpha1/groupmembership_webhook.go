@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,9 +56,9 @@ func SetupGroupMembershipWebhooksWithManager(mgr ctrl.Manager) error {
 //   - The referenced Group must exist.
 //   - A user may be a member of a given group at most once within a namespace.
 //
-// Updates are rejected outright because a GroupMembership is a pure (user,
-// group) link with no mutable spec. Delete and recreate the membership to
-// change which user belongs to which group.
+// The spec is immutable: a GroupMembership is a pure (user, group) link, so
+// changing it is rejected and the membership must be deleted and recreated to
+// change which user belongs to which group. Metadata-only updates are allowed.
 type GroupMembershipValidator struct {
 	client client.Client
 }
@@ -117,6 +118,14 @@ func (v *GroupMembershipValidator) ValidateCreate(ctx context.Context, membershi
 
 func (v *GroupMembershipValidator) ValidateUpdate(ctx context.Context, oldMembership, newMembership *iamv1alpha1.GroupMembership) (admission.Warnings, error) {
 	groupmembershiplog.Info("Validating GroupMembership update", "name", newMembership.Name, "namespace", newMembership.Namespace)
+
+	// Only the spec is immutable. Metadata-only updates (finalizers, labels,
+	// owner references) must pass: the OpenFGA controller adds and removes its
+	// finalizer through a regular update, and rejecting that leaves memberships
+	// without their authorization tuple and undeletable.
+	if equality.Semantic.DeepEqual(oldMembership.Spec, newMembership.Spec) {
+		return nil, nil
+	}
 
 	var errs field.ErrorList
 	errs = append(errs, field.Forbidden(
