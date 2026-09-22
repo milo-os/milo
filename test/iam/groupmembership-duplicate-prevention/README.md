@@ -2,7 +2,8 @@
 
 Verifies the GroupMembership validating webhook prevents a user from being
 added to the same group more than once, rejects non-existent group and user
-references, and prevents an existing membership from being updated.
+references, and prevents the spec of an existing membership from being
+changed while still allowing metadata-only updates.
 
 This test verifies:
 - Creating the first membership for a (user, group) pair succeeds.
@@ -12,7 +13,8 @@ This test verifies:
 - A user can join a different group.
 - Creating a membership referencing a non-existent group is rejected at admission.
 - Creating a membership referencing a non-existent user is rejected at admission.
-- Updating an existing membership is rejected because group memberships are immutable.
+- Changing an existing membership's group pointer is rejected because the spec is immutable.
+- A metadata-only update to an existing membership is accepted.
 
 
 ## Steps
@@ -27,7 +29,7 @@ This test verifies:
 | 6 | [reject-nonexistent-group](#step-reject-nonexistent-group) | 0 | 1 | 0 | 0 | 0 |
 | 7 | [reject-nonexistent-user](#step-reject-nonexistent-user) | 0 | 1 | 0 | 0 | 0 |
 | 8 | [reject-reference-update](#step-reject-reference-update) | 0 | 1 | 0 | 0 | 0 |
-| 9 | [reject-any-update](#step-reject-any-update) | 0 | 1 | 0 | 0 | 0 |
+| 9 | [allow-metadata-only-update](#step-allow-metadata-only-update) | 0 | 2 | 0 | 0 | 0 |
 
 ### Step: `setup-users-and-groups`
 
@@ -107,7 +109,7 @@ Creating a membership referencing a non-existent user is rejected.
 
 ### Step: `reject-reference-update`
 
-Applying a change to an existing membership's group pointer is rejected because group memberships are immutable.
+Applying a change to an existing membership's group pointer is rejected because the membership spec is immutable.
 
 #### Try
 
@@ -115,15 +117,16 @@ Applying a change to an existing membership's group pointer is rejected because 
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
 
-### Step: `reject-any-update`
+### Step: `allow-metadata-only-update`
 
-Re-applying an existing membership is rejected because group memberships are immutable.
+A metadata-only update is accepted because only the spec is immutable. This is the path the OpenFGA controller takes when it adds its finalizer to a new membership.
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
 
 ---
 
