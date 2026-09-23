@@ -21,3 +21,22 @@ spec:
             type: Gauge
             gauge:
               path: [metadata, creationTimestamp]
+        - name: "status_condition"
+          each:
+            type: Gauge
+            gauge:
+              path: [status, conditions]
+              labelsFromPath:
+                type: ["type"]
+                reason: ["reason"]
+              valueFrom: ["status"]
+        - name: "status_condition_last_transition_time"
+          each:
+            type: Gauge
+            gauge:
+              path: [status, conditions]
+              labelsFromPath:
+                type: ["type"]
+                reason: ["reason"]
+                status: ["status"]
+              valueFrom: ["lastTransitionTime"]
