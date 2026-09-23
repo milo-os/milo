@@ -76,6 +76,30 @@ spec:
                 - name: namespace
                   value: "object.metadata.namespace"
 
+    - name: iam-group-memberships-status-condition
+      resource:
+        group: iam.miloapis.com
+        version: v1alpha1
+        resource: groupmemberships
+      families:
+        - name: milo_group_memberships_status_condition
+          help: "Status conditions for IAM group memberships"
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "item.type"
+                - name: reason
+                  value: "item.reason"
+                - name: status
+                  value: "item.status"
+
     # iam.miloapis.com: ServiceAccount
     - name: iam-service-accounts-info
       resource:

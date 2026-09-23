@@ -15,3 +15,8 @@ spec:
         - record: iam_miloapis_com:policybindings:not_ready
           expr: |
             count(milo_policy_bindings_status_condition{type="Ready"} == 0)
+
+        - record: iam_miloapis_com:groupmemberships:not_ready
+          expr: |
+            count(milo_group_memberships_status_condition{type="Ready"} == 0)
+
