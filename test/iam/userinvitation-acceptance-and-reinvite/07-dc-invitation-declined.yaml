@@ -1,0 +1,17 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: UserInvitation
+metadata:
+  name: ui-dc-test-invite
+  namespace: organization-ui-dc-test-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-acceptance-and-reinvite"
+spec:
+  organizationRef:
+    name: ui-dc-test-org
+  email: invitee@ui-dc-test.local
+  givenName: Invitee
+  familyName: User
+  roles:
+    - name: resourcemanager.miloapis.com-organization-viewer
+      namespace: milo-system
+  state: Declined
