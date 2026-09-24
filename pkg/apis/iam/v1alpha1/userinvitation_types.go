@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -46,6 +48,16 @@ type UserInvitation struct {
 
 	Spec   UserInvitationSpec   `json:"spec,omitempty"`
 	Status UserInvitationStatus `json:"status,omitempty"`
+}
+
+// IsExpired returns true when the invitation has an expiration date in the
+// past. Invitations without an expiration date never expire.
+func (ui *UserInvitation) IsExpired() bool {
+	if ui.Spec.ExpirationDate == nil {
+		return false
+	}
+	now := metav1.NewTime(time.Now().UTC())
+	return ui.Spec.ExpirationDate.Before(&now)
 }
 
 // UserInvitationSpec defines the desired state of UserInvitation
