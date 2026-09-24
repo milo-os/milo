@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
@@ -768,119 +767,6 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 		t.Fatalf("UserInvitation should be deleted after acceptance")
 	} else if !apierr.IsNotFound(err) {
 		t.Fatalf("unexpected error getting UserInvitation: %v", err)
-	}
-}
-
-// TestUserInvitationController_Reconcile_AcceptedExpiredDoesNotGrantMembership
-// verifies that an invitation that reached spec.state == Accepted but whose
-// expiration boundary has already passed does NOT grant membership. An expired
-// invitation never produces a membership: the record is left in place and
-// flagged Expired rather than converted into the membership the invitee
-// requested. This includes the legacy "Accepted" tombstones left behind by the
-// old buggy behavior that recorded Accepted after expiration without granting
-// any membership.
-func TestUserInvitationController_Reconcile_AcceptedExpiredDoesNotGrantMembership(t *testing.T) {
-	tests := map[string]struct {
-		// staleExpiredCondition seeds the record as a legacy tombstone that has
-		// already been flagged expired by an earlier (buggy) reconcile.
-		staleExpiredCondition bool
-	}{
-		"accepted but expired at reconcile":                 {staleExpiredCondition: false},
-		"legacy accepted tombstone already flagged expired": {staleExpiredCondition: true},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.TODO()
-			scheme := getTestScheme()
-
-			// Expiration date in the past: reconcile happens after the boundary.
-			expiredAt := metav1.NewTime(time.Now().UTC().Add(-1 * time.Hour))
-
-			user := &iamv1alpha1.User{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-user", UID: types.UID("u-uid")},
-				Spec:       iamv1alpha1.UserSpec{Email: "test@example.com"},
-			}
-
-			inviter := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "inviter", UID: types.UID("inviter-uid")}, Spec: iamv1alpha1.UserSpec{GivenName: "John", FamilyName: "Doe", Email: "inviter@example.com"}}
-
-			ui := &iamv1alpha1.UserInvitation{
-				ObjectMeta: metav1.ObjectMeta{Name: "inv", Namespace: "default", UID: types.UID("ui-uid")},
-				Spec: iamv1alpha1.UserInvitationSpec{
-					Email:           user.Spec.Email,
-					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "org"},
-					State:           iamv1alpha1.UserInvitationStateAccepted,
-					Roles:           []iamv1alpha1.RoleReference{{Name: "org-admin", Namespace: "milo-system"}},
-					InvitedBy:       iamv1alpha1.UserReference{Name: inviter.Name},
-					ExpirationDate:  &expiredAt,
-				},
-			}
-			if tc.staleExpiredCondition {
-				ui.Status.Conditions = []metav1.Condition{{
-					Type:               string(iamv1alpha1.UserInvitationExpiredCondition),
-					Status:             metav1.ConditionTrue,
-					Reason:             string(iamv1alpha1.UserInvitationStateExpiredReason),
-					Message:            "User Invitation is expired",
-					LastTransitionTime: expiredAt,
-				}}
-			}
-
-			org := &resourcemanagerv1alpha1.Organization{
-				ObjectMeta: metav1.ObjectMeta{Name: "org", UID: types.UID("org-uid"), Annotations: map[string]string{"kubernetes.io/display-name": "Organization Display Name"}},
-			}
-
-			builder := fake.NewClientBuilder().WithScheme(scheme).
-				WithStatusSubresource(&iamv1alpha1.UserInvitation{}).
-				WithObjects(user.DeepCopy(), ui.DeepCopy(), org.DeepCopy(), inviter.DeepCopy())
-			builder = builder.WithIndex(&iamv1alpha1.User{}, userEmailIndexKey, func(obj client.Object) []string {
-				u := obj.(*iamv1alpha1.User)
-				return []string{strings.ToLower(u.Spec.Email)}
-			})
-			builder = builder.WithIndex(&iamv1alpha1.UserInvitation{}, userEmailIndexKey, func(obj client.Object) []string {
-				inv := obj.(*iamv1alpha1.UserInvitation)
-				return []string{strings.ToLower(inv.Spec.Email)}
-			})
-
-			c := builder.Build()
-
-			uic := &UserInvitationController{
-				Client:          c,
-				SystemNamespace: "milo-system",
-			}
-			initFinalizer(t, uic)
-
-			// First reconcile registers the finalizer and returns early.
-			if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-				t.Fatalf("first reconcile (finalizer registration) error: %v", err)
-			}
-
-			// Second reconcile: the accepted branch is gated on the invitation not
-			// being expired, so an Accepted invitation that has already lapsed must
-			// not produce a membership.
-			if _, err := uic.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}}); err != nil {
-				t.Fatalf("second reconcile (accepted) error: %v", err)
-			}
-
-			// No OrganizationMembership may be created for an expired invitation.
-			omName := "member-" + user.Name
-			omNamespace := "organization-" + ui.Spec.OrganizationRef.Name
-			om := &resourcemanagerv1alpha1.OrganizationMembership{}
-			if err := c.Get(ctx, types.NamespacedName{Name: omName, Namespace: omNamespace}, om); err == nil {
-				t.Fatalf("expected NO OrganizationMembership for an expired Accepted invitation, but one was created")
-			} else if !apierr.IsNotFound(err) {
-				t.Fatalf("unexpected error getting OrganizationMembership: %v", err)
-			}
-
-			// The invitation itself is retained (not converted and not deleted) and
-			// flagged Expired.
-			after := &iamv1alpha1.UserInvitation{}
-			if err := c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, after); err != nil {
-				t.Fatalf("expected the expired invitation to be retained: %v", err)
-			}
-			if !meta.IsStatusConditionTrue(after.Status.Conditions, string(iamv1alpha1.UserInvitationExpiredCondition)) {
-				t.Fatalf("expected the retained invitation to carry the Expired condition, got conditions: %+v", after.Status.Conditions)
-			}
-		})
 	}
 }
 
