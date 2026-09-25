@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
@@ -145,6 +144,50 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("failed to update UserInvitation status with invitee user information: %w", err)
 	}
 
+	// Honor an accepted invitation, but only while it is still live. The
+	// validating webhook rejects accepting an invitation whose expiration date
+	// has already passed (UserInvitationValidator.ValidateUpdate), so reaching
+	// spec.state == Accepted means the user accepted before the boundary.
+	//
+	// The !isUserInvitationExpired guard means an expired invitation never
+	// produces a membership. In particular it prevents converting legacy
+	// "Accepted" tombstones left behind by the old buggy behavior, whose state
+	// was recorded as Accepted after expiration without any membership being
+	// granted, into new memberships. An expired invitation simply falls
+	// through and is flagged Expired below.
+	//
+	// Boundary edge: if the user accepts while the invitation is still live
+	// but the controller reconciles only after the expiration boundary, the
+	// guard treats the acceptance like a tombstone, so no membership is
+	// granted and the record is flagged Expired. This is accepted behavior;
+	// the invitee can ask for a fresh invitation.
+	if isUserInvitationAccepted(ui) {
+		user, err := r.getInviteeUser(ctx, ui.Spec.Email)
+		if err != nil {
+			log.Error(err, "Failed to get Invitee User")
+			return ctrl.Result{}, fmt.Errorf("failed to get Invitee User: %w", err)
+		}
+		if user == nil {
+			log.Info("Accepted UserInvitation has no invitee User yet, waiting for User creation", "name", ui.Name)
+			return ctrl.Result{}, nil
+		}
+
+		// Create the OrganizationMembership with roles
+		if err := r.createOrganizationMembership(ctx, user, ui); err != nil {
+			log.Error(err, "Failed to create OrganizationMembership for userInvitation")
+			return ctrl.Result{}, fmt.Errorf("failed to create OrganizationMembership for userInvitation: %w", err)
+		}
+
+		// Delete the UserInvitation now that it has been fully processed and accepted.
+		if err := r.Client.Delete(ctx, ui); err != nil && !errors.IsNotFound(err) {
+			log.Error(err, "Failed to delete UserInvitation after acceptance")
+			return ctrl.Result{}, fmt.Errorf("failed to delete UserInvitation after acceptance: %w", err)
+		}
+
+		log.Info("UserInvitation accepted and deleted", "userInvitation", ui.GetName())
+		return ctrl.Result{}, nil
+	}
+
 	// Check if the UserInvitation is ready
 	if meta.IsStatusConditionTrue(ui.Status.Conditions, string(iamv1alpha1.UserInvitationReadyCondition)) {
 		log.Info("UserInvitation is ready, skipping reconciliation")
@@ -211,26 +254,6 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if user == nil {
 		log.Info("Invitee User not found, skipping reconciliation. Reconciliation will be triggered again when the User is created.")
-		return ctrl.Result{}, nil
-	}
-
-	// Grant roles to the invitee user for the organization if the invitation is accepted
-	if isUserInvitationAccepted(ui) {
-		log.Info("Creating OrganizationMembership with roles for the invitee user, as the invitation is accepted", "user", user.Name, "roles", ui.Spec.Roles)
-
-		// Create the OrganizationMembership with roles
-		if err := r.createOrganizationMembership(ctx, user, ui); err != nil {
-			log.Error(err, "Failed to create OrganizationMembership for userInvitation")
-			return ctrl.Result{}, fmt.Errorf("failed to create OrganizationMembership for userInvitation: %w", err)
-		}
-
-		// Delete the UserInvitation now that it has been fully processed and accepted.
-		if err := r.Client.Delete(ctx, ui); err != nil && !errors.IsNotFound(err) {
-			log.Error(err, "Failed to delete UserInvitation after acceptance")
-			return ctrl.Result{}, fmt.Errorf("failed to delete UserInvitation after acceptance: %w", err)
-		}
-
-		log.Info("UserInvitation accepted and deleted", "userInvitation", ui.GetName())
 		return ctrl.Result{}, nil
 	}
 
@@ -746,13 +769,11 @@ func isUserInvitationDeclined(ui *iamv1alpha1.UserInvitation) bool {
 	return ui.Spec.State == iamv1alpha1.UserInvitationStateDeclined
 }
 
-// isUserInvitationExpired returns true if the UserInvitation is expired
+// isUserInvitationExpired returns true if the UserInvitation is expired.
+// It delegates to UserInvitation.IsExpired so the validating webhook and the
+// controller share a single source of truth for expiration semantics.
 func isUserInvitationExpired(ui *iamv1alpha1.UserInvitation) bool {
-	now := metav1.NewTime(time.Now().UTC())
-	if ui.Spec.ExpirationDate != nil && ui.Spec.ExpirationDate.Before(&now) {
-		return true
-	}
-	return false
+	return ui.IsExpired()
 }
 
 func (r *UserInvitationController) updateUserInvitationInviteeUserStatus(ctx context.Context, ui *iamv1alpha1.UserInvitation) error {

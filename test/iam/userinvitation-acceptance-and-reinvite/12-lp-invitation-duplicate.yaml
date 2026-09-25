@@ -1,0 +1,17 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: UserInvitation
+metadata:
+  name: ui-lp-test-invite-2
+  namespace: organization-ui-lp-test-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-acceptance-and-reinvite"
+spec:
+  organizationRef:
+    name: ui-lp-test-org
+  email: invitee@ui-lp-test.local
+  givenName: Invitee
+  familyName: User
+  roles:
+    - name: resourcemanager.miloapis.com-organization-viewer
+      namespace: milo-system
+  state: Pending
