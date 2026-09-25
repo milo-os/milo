@@ -157,6 +157,7 @@ data:
         - group: "iam.miloapis.com"
         - group: "infrastructure.miloapis.com"
         - group: "quota.miloapis.com"
+        - group: "notification.miloapis.com"
 
       # Log core Kubernetes API resources at RequestResponse level
       - level: RequestResponse
