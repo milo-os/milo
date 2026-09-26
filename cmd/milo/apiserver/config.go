@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -63,6 +64,8 @@ import (
 	datumfilters "go.miloapis.com/milo/pkg/server/filters"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
+	openapiutil "k8s.io/kube-openapi/pkg/util"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
 type Config struct {
@@ -344,6 +347,39 @@ func (c *Config) Complete() (CompletedConfig, error) {
 	}}, nil
 }
 
+// restFriendlyDefinitionNames converts OpenAPI definition names that still carry
+// a raw Go import path before handing them to the generic namer.
+//
+// The identity types are produced by a pinned openapi-gen (see the
+// generate:openapi:identity task) that predates the Kubernetes 1.35 convention
+// of emitting REST-friendly model names. Through 1.34 the serving layer applied
+// that conversion itself; 1.35 moved it into the generator and turned
+// DefinitionNamer.GetDefinitionName into a pass-through, so the import path now
+// reaches the published spec verbatim. Its slashes are JSON-Pointer escaped to
+// "~1" inside every $ref while the definitions key keeps the literal "/", which
+// leaves every intra-group reference dangling and breaks client-side validation
+// for every group this apiserver serves, not just identity.
+//
+// Converting before the namer runs also lets its lookup hit, which restores the
+// x-kubernetes-group-version-kind extension on the identity kinds.
+//
+// Only slash-bearing names are converted: ToRESTFriendlyName is not idempotent
+// and would mangle an already-friendly "io.k8s.api.core.v1.Pod" into
+// "Pod.v1.core.api.k8s.io".
+//
+// Drop this once the identity types are regenerated with a 1.35-era openapi-gen.
+func restFriendlyDefinitionNames(namer func(string) (string, spec.Extensions)) func(string) (string, spec.Extensions) {
+	return func(name string) (string, spec.Extensions) {
+		if strings.Contains(name, "/") {
+			name = openapiutil.ToRESTFriendlyName(name)
+		}
+		if namer == nil {
+			return name, nil
+		}
+		return namer(name)
+	}
+}
+
 func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	var registry *discoveryctx.Registry
 	if utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter) {
@@ -400,6 +436,13 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if genericConfig.OpenAPIConfig != nil {
+		genericConfig.OpenAPIConfig.GetDefinitionName = restFriendlyDefinitionNames(genericConfig.OpenAPIConfig.GetDefinitionName)
+	}
+	if genericConfig.OpenAPIV3Config != nil {
+		genericConfig.OpenAPIV3Config.GetDefinitionName = restFriendlyDefinitionNames(genericConfig.OpenAPIV3Config.GetDefinitionName)
 	}
 
 	loopbackClientConfig := genericConfig.LoopbackClientConfig
