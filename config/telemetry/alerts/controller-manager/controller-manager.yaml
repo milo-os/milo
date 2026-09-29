@@ -15,7 +15,7 @@ spec:
             }[15m]) >= 3
           labels:
             severity: warning
-            service: milo-controller-manager
+            service: milo
           annotations:
             summary: "milo-controller-manager is restarting repeatedly"
             description: |
@@ -37,7 +37,7 @@ spec:
           labels:
             expected_no_match: "true"
             severity: critical
-            service: milo-controller-manager
+            service: milo
           annotations:
             summary: "milo-controller-manager is in CrashLoopBackOff"
             description: |
