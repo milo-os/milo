@@ -2,15 +2,21 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
+	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 func policyBinding(subjects ...iamv1alpha1.Subject) *iamv1alpha1.PolicyBinding {
@@ -119,6 +125,418 @@ func TestPolicyBindingMutator_Default(t *testing.T) {
 			if tc.assertUID != nil {
 				tc.assertUID(t, pb.Spec.Subjects)
 			}
+		})
+	}
+}
+
+func testProject(name, org string) *resourcemanagerv1alpha1.Project {
+	return &resourcemanagerv1alpha1.Project{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: map[string]string{resourcemanagerv1alpha1.OrganizationNameLabel: org},
+		},
+		Spec: resourcemanagerv1alpha1.ProjectSpec{
+			OwnerRef: resourcemanagerv1alpha1.OwnerReference{Kind: "Organization", Name: org},
+		},
+	}
+}
+
+func testServiceAccount(name string) *iamv1alpha1.ServiceAccount {
+	return &iamv1alpha1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID("sa-uid-" + name)},
+		Spec:       iamv1alpha1.ServiceAccountSpec{State: "Active"},
+	}
+}
+
+// fakeProjectClientGetter returns the client registered for a project, or an
+// error when none is (mirroring a project whose control plane is unknown).
+type fakeProjectClientGetter struct {
+	clients map[string]client.Client
+}
+
+func (f *fakeProjectClientGetter) GetClientForProject(_ context.Context, projectName string) (client.Client, error) {
+	cl, ok := f.clients[projectName]
+	if !ok {
+		return nil, fmt.Errorf("no client for project %q", projectName)
+	}
+	return cl, nil
+}
+
+// orgContextRequest returns a context whose admission request carries an
+// organization parent context for orgID, as injected by the Milo API server's
+// OrganizationContextAuthorizationDecorator.
+func orgContextRequest(orgID string) context.Context {
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UserInfo: authenticationv1.UserInfo{
+				Extra: map[string]authenticationv1.ExtraValue{
+					iamv1alpha1.ParentNameExtraKey:     {orgID},
+					iamv1alpha1.ParentKindExtraKey:     {"Organization"},
+					iamv1alpha1.ParentAPIGroupExtraKey: {resourcemanagerv1alpha1.GroupVersion.Group},
+				},
+			},
+		},
+	}
+	return admission.NewContextWithRequest(context.Background(), req)
+}
+
+// orgContextSuperuserRequest is orgContextRequest but with system:masters in the
+// request user's groups, mirroring how the platform superuser is authenticated.
+func orgContextSuperuserRequest(orgID string) context.Context {
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UserInfo: authenticationv1.UserInfo{
+				Groups: []string{"system:masters"},
+				Extra: map[string]authenticationv1.ExtraValue{
+					iamv1alpha1.ParentNameExtraKey:     {orgID},
+					iamv1alpha1.ParentKindExtraKey:     {"Organization"},
+					iamv1alpha1.ParentAPIGroupExtraKey: {resourcemanagerv1alpha1.GroupVersion.Group},
+				},
+			},
+		},
+	}
+	return admission.NewContextWithRequest(context.Background(), req)
+}
+
+func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
+	orgA := "acme"
+	orgB := "globex"
+	projectA := testProject("project-a", orgA)
+	projectB := testProject("project-b", orgB)
+	projectNoOrg := &resourcemanagerv1alpha1.Project{
+		ObjectMeta: metav1.ObjectMeta{Name: "project-unlabeled"},
+		Spec: resourcemanagerv1alpha1.ProjectSpec{
+			OwnerRef: resourcemanagerv1alpha1.OwnerReference{Kind: "Organization", Name: orgA},
+		},
+	}
+
+	projectBinding := func(projectName string) *iamv1alpha1.PolicyBinding {
+		return &iamv1alpha1.PolicyBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+			Spec: iamv1alpha1.PolicyBindingSpec{
+				RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+				Subjects: []iamv1alpha1.Subject{{Kind: "ServiceAccount", Name: "robot", UID: "sa-uid-1"}},
+				ResourceSelector: iamv1alpha1.ResourceSelector{
+					ResourceRef: &iamv1alpha1.ResourceReference{
+						APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+						Kind:     "Project",
+						Name:     projectName,
+						UID:      "project-uid-1",
+					},
+				},
+			},
+		}
+	}
+
+	sa := &iamv1alpha1.Subject{Kind: "ServiceAccount", Name: "robot", UID: "sa-uid-1"}
+	user := &iamv1alpha1.Subject{Kind: "User", Name: "alice", UID: "user-uid-1"}
+	group := &iamv1alpha1.Subject{Kind: "Group", Name: "loaders", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA), UID: "group-uid-1"}
+	systemGroup := &iamv1alpha1.Subject{Kind: "Group", Name: "system:authenticated-users"}
+
+	tests := map[string]struct {
+		preObjects  []client.Object
+		ctx         context.Context
+		binding     *iamv1alpha1.PolicyBinding
+		expectError bool
+		contains    string
+
+		// projectClients overrides the per-project control-plane clients the
+		// validator reads ServiceAccounts through. When nil, every known project
+		// client contains the default SA (robot), so the cross-project check
+		// passes.
+		projectClients map[string][]client.Object
+
+		// noProjectClients simulates a validator with no project-cluster wiring
+		// (projectClients field nil): every membership check fails closed.
+		noProjectClients bool
+	}{
+		"org context with a serviceaccount bound to a project in the org": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-a"),
+			expectError: false,
+		},
+		"org context denies a serviceaccount from another project in the same org": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-a"),
+			expectError: true,
+			contains:    "is not part of project",
+			// robot lives only in project-c, not in the target project-a.
+			projectClients: map[string][]client.Object{
+				"project-a": {},
+				"project-c": {testServiceAccount("robot")},
+			},
+		},
+		"org context fails closed when the project control plane cannot be reached": {
+			preObjects:       []client.Object{projectA},
+			ctx:              orgContextRequest(orgA),
+			binding:          projectBinding("project-a"),
+			expectError:      true,
+			contains:         "cannot verify",
+			noProjectClients: true,
+		},
+		"org context denies a user subject": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-a"),
+			expectError: true,
+			contains:    "organization-context policybindings may only grant roles to ServiceAccounts",
+		},
+		"org context denies a group subject": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-a"),
+			expectError: true,
+			contains:    "may only grant roles to ServiceAccounts",
+		},
+		"org context denies a system group subject": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-a"),
+			expectError: true,
+			contains:    "may only grant roles to ServiceAccounts",
+		},
+		"org context denies a project in another org": {
+			preObjects:  []client.Object{projectB},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-b"),
+			expectError: true,
+			contains:    "does not belong to organization",
+		},
+		"org context denies a missing project": {
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-does-not-exist"),
+			expectError: true,
+			contains:    "Not found",
+		},
+		"org context denies a project without the organization label": {
+			preObjects:  []client.Object{projectNoOrg},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-unlabeled"),
+			expectError: true,
+			contains:    "does not belong to organization",
+		},
+		"org context denies an organization target": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*sa},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Organization",
+							Name:     orgA,
+							UID:      "org-uid-1",
+						},
+					},
+				},
+			},
+			expectError: true,
+			contains:    "Unsupported value",
+		},
+		"org context denies a resourceKind target": {
+			ctx: orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*sa},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceKind: &iamv1alpha1.ResourceKind{APIGroup: resourcemanagerv1alpha1.GroupVersion.Group, Kind: "Project"},
+					},
+				},
+			},
+			expectError: true,
+			contains:    "resourceKind (kind-level) targets are not allowed in organization context",
+		},
+		"org context denies a binding in the wrong namespace": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     projectBinding("project-a"),
+			expectError: true,
+			contains:    "must be created in the organization's namespace",
+		},
+		"not in org context is unaffected even with a user subject and organization target": {
+			ctx: admission.NewContextWithRequest(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{},
+			}),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: "some-namespace"},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*user},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Organization",
+							Name:     orgB,
+							UID:      "org-uid-2",
+						},
+					},
+				},
+			},
+			expectError: false,
+		},
+		"system:masters in org context bypasses the restrictions even with a user subject and foreign target": {
+			preObjects: []client.Object{projectB},
+			ctx:        orgContextSuperuserRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*user},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "project-b",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: false,
+		},
+		"system:masters in org context bypasses even a missing project target": {
+			ctx: orgContextSuperuserRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: "wrong-namespace"},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*user},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "does-not-exist",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			testBinding := tc.binding
+			// Apply subject overrides per case so table entries stay readable.
+			switch name {
+			case "org context denies a user subject":
+				testBinding.Spec.Subjects = []iamv1alpha1.Subject{*user}
+			case "org context denies a group subject":
+				testBinding.Spec.Subjects = []iamv1alpha1.Subject{*group}
+			case "org context denies a system group subject":
+				testBinding.Spec.Subjects = []iamv1alpha1.Subject{*systemGroup}
+			case "org context denies a binding in the wrong namespace":
+				testBinding.Namespace = "default"
+			}
+
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.preObjects...).Build()
+
+			// Build per-project control-plane clients, seeded by default with an
+			// SA in every project. projectClients override per case.
+			var validator *PolicyBindingValidator
+			if tc.noProjectClients {
+				validator = &PolicyBindingValidator{client: cl}
+			} else {
+				projectClients := make(map[string]client.Client, len(tc.projectClients)+1)
+				defaultProjects := []string{"project-a", "project-b", "project-c"}
+				for _, projectName := range defaultProjects {
+					projectClients[projectName] = fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(testServiceAccount("robot")).Build()
+				}
+				for projectName, objs := range tc.projectClients {
+					projectClients[projectName] = fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(objs...).Build()
+				}
+				validator = &PolicyBindingValidator{
+					client:         cl,
+					projectClients: &fakeProjectClientGetter{clients: projectClients},
+				}
+			}
+
+			_, err := validator.ValidateCreate(tc.ctx, testBinding)
+
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.contains)
+				var statusErr *apierrors.StatusError
+				assert.ErrorAs(t, err, &statusErr, "error should be a StatusError")
+				if statusErr != nil {
+					assert.Equal(t, metav1.StatusReasonInvalid, statusErr.ErrStatus.Reason, "error reason should be Invalid")
+				}
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
+	orgA := "acme"
+	projectA := testProject("project-a", orgA)
+
+	saBinding := &iamv1alpha1.PolicyBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+		Spec: iamv1alpha1.PolicyBindingSpec{
+			RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+			Subjects: []iamv1alpha1.Subject{{Kind: "ServiceAccount", Name: "robot", UID: "sa-uid-1"}},
+			ResourceSelector: iamv1alpha1.ResourceSelector{
+				ResourceRef: &iamv1alpha1.ResourceReference{
+					APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+					Kind:     "Project",
+					Name:     "project-a",
+					UID:      "project-uid-1",
+				},
+			},
+		},
+	}
+
+	tests := map[string]struct {
+		oldPB       *iamv1alpha1.PolicyBinding
+		newPB       *iamv1alpha1.PolicyBinding
+		expectError bool
+		contains    string
+	}{
+		"update keeps serviceaccount subjects and is allowed": {
+			oldPB:       saBinding,
+			newPB:       saBinding,
+			expectError: false,
+		},
+		"update that swaps in a user subject is denied": {
+			oldPB: saBinding,
+			newPB: func() *iamv1alpha1.PolicyBinding {
+				b := saBinding.DeepCopy()
+				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "User", Name: "alice", UID: "user-uid-1"}}
+				return b
+			}(),
+			expectError: true,
+			contains:    "may only grant roles to ServiceAccounts",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA).Build()
+			projectClient := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(testServiceAccount("robot")).Build()
+			validator := &PolicyBindingValidator{
+				client:         cl,
+				projectClients: &fakeProjectClientGetter{clients: map[string]client.Client{"project-a": projectClient}},
+			}
+
+			_, err := validator.ValidateUpdate(orgContextRequest(orgA), tc.oldPB, tc.newPB)
+
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.contains)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }
