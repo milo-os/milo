@@ -24,7 +24,14 @@ This test verifies:
 - Kind-level (resourceKind) targets are denied.
 - User and system-group subjects are denied.
 - A binding created in a namespace other than the organization's namespace
-  is denied (by the authorizer before the webhook).
+  is denied.
+
+The PolicyBinding steps run as test-user (system:authenticated), who is
+granted RBAC to create PolicyBindings in each organization namespace by the
+setup. They cannot run as the admin user: the validating webhook is bypassed
+for system:masters (so the controller manager and other system components
+can create bindings through an org control plane, matching the organization
+and user webhooks), which would let every denied binding through.
 
 
 ## Steps
@@ -32,18 +39,19 @@ This test verifies:
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup-organizations](#step-setup-organizations) | 0 | 4 | 0 | 0 | 0 |
-| 2 | [create-user](#step-create-user) | 0 | 2 | 0 | 0 | 0 |
-| 3 | [create-project-a](#step-create-project-a) | 0 | 2 | 0 | 0 | 0 |
-| 4 | [create-project-b](#step-create-project-b) | 0 | 2 | 0 | 0 | 0 |
-| 5 | [create-service-account-a](#step-create-service-account-a) | 0 | 2 | 0 | 0 | 0 |
-| 6 | [create-service-account-b](#step-create-service-account-b) | 0 | 2 | 0 | 0 | 0 |
-| 7 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
-| 8 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
-| 9 | [deny-serviceaccount-from-another-project](#step-deny-serviceaccount-from-another-project) | 0 | 1 | 0 | 0 | 0 |
-| 10 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
-| 11 | [deny-user-subject](#step-deny-user-subject) | 0 | 1 | 0 | 0 | 0 |
-| 12 | [deny-system-group-subject](#step-deny-system-group-subject) | 0 | 1 | 0 | 0 | 0 |
-| 13 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 2 | [grant-policybinding-rbac](#step-grant-policybinding-rbac) | 0 | 1 | 0 | 0 | 0 |
+| 3 | [create-user](#step-create-user) | 0 | 2 | 0 | 0 | 0 |
+| 4 | [create-project-a](#step-create-project-a) | 0 | 2 | 0 | 0 | 0 |
+| 5 | [create-project-b](#step-create-project-b) | 0 | 2 | 0 | 0 | 0 |
+| 6 | [create-service-account-a](#step-create-service-account-a) | 0 | 2 | 0 | 0 | 0 |
+| 7 | [create-service-account-b](#step-create-service-account-b) | 0 | 2 | 0 | 0 | 0 |
+| 8 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
+| 9 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
+| 10 | [deny-serviceaccount-from-another-project](#step-deny-serviceaccount-from-another-project) | 0 | 1 | 0 | 0 | 0 |
+| 11 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
+| 12 | [deny-user-subject](#step-deny-user-subject) | 0 | 1 | 0 | 0 | 0 |
+| 13 | [deny-system-group-subject](#step-deny-system-group-subject) | 0 | 1 | 0 | 0 | 0 |
+| 14 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organizations`
 
@@ -57,6 +65,16 @@ Create the two test organizations and wait for their namespaces
 | 2 | `apply` | 0 | 0 | *No description* |
 | 3 | `wait` | 0 | 0 | *No description* |
 | 4 | `wait` | 0 | 0 | *No description* |
+
+### Step: `grant-policybinding-rbac`
+
+Authorize test-user to create PolicyBindings in both org namespaces
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
 
 ### Step: `create-user`
 
@@ -77,7 +95,7 @@ Create the Project that belongs to Organization A and wait for its control plane
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 1 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `create-project-b`
@@ -88,7 +106,7 @@ Create the Project that belongs to Organization B and wait for its control plane
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 1 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `create-service-account-a`
@@ -99,7 +117,7 @@ Create a ServiceAccount in Project A's control plane
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 1 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `create-service-account-b`
@@ -110,7 +128,7 @@ Create a ServiceAccount in Project B's control plane
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `apply` | 0 | 1 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `allow-serviceaccount-bound-to-in-project`
