@@ -18,11 +18,10 @@ import (
 )
 
 type StorageProvider struct {
-	Sessions           sessionsregistry.Backend
-	UserIdentities     useridentitiesregistry.Backend
-	ServiceAccountKeys serviceaccountkeysregistry.Backend
-	Passkeys           passkeysregistry.Backend
-	// PasskeyRegistrationLinks is optional: the resource is served only when a backend is set.
+	Sessions                 sessionsregistry.Backend
+	UserIdentities           useridentitiesregistry.Backend
+	ServiceAccountKeys       serviceaccountkeysregistry.Backend
+	Passkeys                 passkeysregistry.Backend
 	PasskeyRegistrationLinks passkeyregistrationlinksregistry.Backend
 }
 

@@ -275,8 +275,6 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 		backend, _ := passkeysbackend.NewDynamicProvider(cfg)
 		provider.Passkeys = backend
 
-		// Registration links are served by the same provider, so they reuse the
-		// passkeys settings and feature gate.
 		linksBackend, err := passkeyregistrationlinksbackend.NewDynamicProvider(passkeyregistrationlinksbackend.Config{
 			BaseConfig:     cfg.BaseConfig,
 			ProviderURL:    cfg.ProviderURL,

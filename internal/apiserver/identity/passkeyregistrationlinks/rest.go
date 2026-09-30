@@ -15,13 +15,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// Backend is the interface that the REST handler delegates creates to.
-// Implementations proxy requests to the auth-provider (e.g. Zitadel) service.
 type Backend interface {
 	CreatePasskeyRegistrationLink(ctx context.Context, u authuser.Info, link *identityv1alpha1.PasskeyRegistrationLink, opts *metav1.CreateOptions) (*identityv1alpha1.PasskeyRegistrationLink, error)
 }
 
-// REST is create-only: the provider cannot revoke or list issued links.
 type REST struct {
 	backend Backend
 }
@@ -61,7 +58,6 @@ func (r *REST) Create(
 
 func (r *REST) Destroy() {}
 
-// ConvertToTable satisfies rest.TableConvertor with a kubectl-friendly table output.
 func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
 	table := &metav1.Table{
 		ColumnDefinitions: []metav1.TableColumnDefinition{

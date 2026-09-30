@@ -20,12 +20,6 @@ import (
 	"k8s.io/client-go/transport"
 )
 
-// Config controls how the provider talks to the remote passkeyregistrationlinks API
-// via a remote URL. It mirrors passkeys.Config: milo reuses the passkeys provider
-// settings for this resource.
-//
-// Retries is accepted for parity with the other identity providers but is never
-// applied: see CreatePasskeyRegistrationLink.
 type Config struct {
 	BaseConfig *rest.Config
 
@@ -82,7 +76,6 @@ func NewDynamicProvider(cfg Config) (*DynamicProvider, error) {
 	}, nil
 }
 
-// dynForUser creates a per-call client-go dynamic.Interface that forwards identity via X-Remote-*.
 func (b *DynamicProvider) dynForUser(ctx context.Context) (dynamic.Interface, error) {
 	u, ok := apirequest.UserFrom(ctx)
 	if !ok || u == nil {
@@ -121,12 +114,6 @@ func (b *DynamicProvider) filterExtras(src map[string][]string) map[string][]str
 	return out
 }
 
-// ---- Public API ----
-
-// CreatePasskeyRegistrationLink sends exactly one create to the provider. It is not
-// retried: a create that failed on the wire may still have minted and emailed a
-// link, and a retry would send the user a second one. The provider's error is
-// returned as-is so the caller sees its status code.
 func (b *DynamicProvider) CreatePasskeyRegistrationLink(ctx context.Context, _ authuser.Info, link *identityv1alpha1.PasskeyRegistrationLink, opts *metav1.CreateOptions) (*identityv1alpha1.PasskeyRegistrationLink, error) {
 	dyn, err := b.dynForUser(ctx)
 	if err != nil {

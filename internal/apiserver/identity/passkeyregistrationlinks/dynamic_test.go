@@ -33,7 +33,6 @@ func newTestProvider(t *testing.T, handler http.HandlerFunc) *DynamicProvider {
 		t.Fatalf("write CA: %v", err)
 	}
 
-	// Retries is set on purpose: Create must ignore it.
 	dp, err := NewDynamicProvider(Config{ProviderURL: ts.URL, CAFile: caFile, Retries: 3})
 	if err != nil {
 		t.Fatalf("NewDynamicProvider: %v", err)
