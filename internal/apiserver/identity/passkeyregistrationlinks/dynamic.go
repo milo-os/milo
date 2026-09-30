@@ -30,7 +30,6 @@ type Config struct {
 	ClientKeyFile  string
 
 	Timeout     time.Duration
-	Retries     int
 	ExtrasAllow map[string]struct{}
 }
 

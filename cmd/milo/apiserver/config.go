@@ -215,8 +215,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.SessionsProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := sessionsbackend.NewDynamicProvider(cfg)
-		provider.Sessions = backend
+		backend, err := sessionsbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "Sessions disabled: provider not configured")
+		} else {
+			provider.Sessions = backend
+		}
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.UserIdentities) {
@@ -234,8 +238,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.UserIdentitiesProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := useridentitiesbackend.NewDynamicProvider(cfg)
-		provider.UserIdentities = backend
+		backend, err := useridentitiesbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "User identities disabled: provider not configured")
+		} else {
+			provider.UserIdentities = backend
+		}
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.ServiceAccountKeys) {
@@ -253,8 +261,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.ServiceAccountKeysProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := serviceaccountkeysbackend.NewDynamicProvider(cfg)
-		provider.ServiceAccountKeys = backend
+		backend, err := serviceaccountkeysbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "Service account keys disabled: provider not configured")
+		} else {
+			provider.ServiceAccountKeys = backend
+		}
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.Passkeys) {
@@ -272,8 +284,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.PasskeysProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := passkeysbackend.NewDynamicProvider(cfg)
-		provider.Passkeys = backend
+		backend, err := passkeysbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "Passkeys disabled: provider not configured")
+		} else {
+			provider.Passkeys = backend
+		}
 
 		linksBackend, err := passkeyregistrationlinksbackend.NewDynamicProvider(passkeyregistrationlinksbackend.Config{
 			BaseConfig:     cfg.BaseConfig,
@@ -282,7 +298,6 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			ClientCertFile: cfg.ClientCertFile,
 			ClientKeyFile:  cfg.ClientKeyFile,
 			Timeout:        cfg.Timeout,
-			Retries:        cfg.Retries,
 			ExtrasAllow:    cfg.ExtrasAllow,
 		})
 		if err != nil {

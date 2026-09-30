@@ -2,7 +2,8 @@ package passkeyregistrationlinks
 
 import (
 	"context"
-	"time"
+	"errors"
+	"net/http"
 
 	identityv1alpha1 "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
 
@@ -49,7 +50,12 @@ func (r *REST) Create(
 	logger.V(4).Info("Creating passkey registration link", "user", link.Spec.UserRef.Name, "requestedBy", link.Spec.RequestedBy)
 	res, err := r.backend.CreatePasskeyRegistrationLink(ctx, u, link, opts)
 	if err != nil {
-		logger.Error(err, "Create passkey registration link failed", "user", link.Spec.UserRef.Name)
+		var statusErr *apierrors.StatusError
+		if errors.As(err, &statusErr) && statusErr.Status().Code < http.StatusInternalServerError {
+			logger.V(2).Info("Create passkey registration link rejected", "user", link.Spec.UserRef.Name, "code", statusErr.Status().Code, "reason", statusErr.Status().Reason)
+		} else {
+			logger.Error(err, "Create passkey registration link failed", "user", link.Spec.UserRef.Name)
+		}
 		return nil, err
 	}
 	logger.V(4).Info("Created passkey registration link", "name", res.Name, "user", link.Spec.UserRef.Name, "emailName", res.Status.EmailName)
@@ -57,28 +63,3 @@ func (r *REST) Create(
 }
 
 func (r *REST) Destroy() {}
-
-func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
-	table := &metav1.Table{
-		ColumnDefinitions: []metav1.TableColumnDefinition{
-			{Name: "Name", Type: "string"},
-			{Name: "User", Type: "string"},
-			{Name: "Age", Type: "date"},
-		},
-	}
-
-	link, ok := object.(*identityv1alpha1.PasskeyRegistrationLink)
-	if !ok {
-		return nil, nil
-	}
-	age := metav1.Now().Rfc3339Copy()
-	if !link.CreationTimestamp.IsZero() {
-		age = link.CreationTimestamp
-	}
-	table.Rows = append(table.Rows, metav1.TableRow{
-		Cells:  []interface{}{link.Name, link.Spec.UserRef.Name, age.Time.Format(time.RFC3339)},
-		Object: runtime.RawExtension{Object: link},
-	})
-
-	return table, nil
-}

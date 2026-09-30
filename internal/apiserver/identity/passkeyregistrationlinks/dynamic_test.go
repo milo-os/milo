@@ -33,7 +33,7 @@ func newTestProvider(t *testing.T, handler http.HandlerFunc) *DynamicProvider {
 		t.Fatalf("write CA: %v", err)
 	}
 
-	dp, err := NewDynamicProvider(Config{ProviderURL: ts.URL, CAFile: caFile, Retries: 3})
+	dp, err := NewDynamicProvider(Config{ProviderURL: ts.URL, CAFile: caFile})
 	if err != nil {
 		t.Fatalf("NewDynamicProvider: %v", err)
 	}
@@ -42,6 +42,7 @@ func newTestProvider(t *testing.T, handler http.HandlerFunc) *DynamicProvider {
 
 func testLink() *identityv1alpha1.PasskeyRegistrationLink {
 	return &identityv1alpha1.PasskeyRegistrationLink{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "passkey-recovery-"},
 		Spec: identityv1alpha1.PasskeyRegistrationLinkSpec{
 			UserRef:     identityv1alpha1.PasskeyRegistrationLinkUserReference{Name: "user-2"},
 			RequestedBy: "staff-1",
@@ -51,12 +52,13 @@ func testLink() *identityv1alpha1.PasskeyRegistrationLink {
 }
 
 func TestCreatePasskeyRegistrationLink_ForwardsIdentityAndDecodes(t *testing.T) {
-	var gotUser, gotUserRef string
+	var gotUser string
+	var gotBody identityv1alpha1.PasskeyRegistrationLink
 	dp := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		gotUser = r.Header.Get("X-Remote-User")
 		var body identityv1alpha1.PasskeyRegistrationLink
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		gotUserRef = body.Spec.UserRef.Name
+		gotBody = *body.DeepCopy()
 
 		body.APIVersion = identityv1alpha1.SchemeGroupVersion.String()
 		body.Kind = "PasskeyRegistrationLink"
@@ -77,8 +79,17 @@ func TestCreatePasskeyRegistrationLink_ForwardsIdentityAndDecodes(t *testing.T) 
 	if gotUser != "staff@example.com" {
 		t.Fatalf("X-Remote-User = %q, want %q", gotUser, "staff@example.com")
 	}
-	if gotUserRef != "user-2" {
-		t.Fatalf("forwarded spec.userRef.name = %q, want %q", gotUserRef, "user-2")
+	if gotBody.GenerateName != "passkey-recovery-" {
+		t.Fatalf("forwarded metadata.generateName = %q, want %q", gotBody.GenerateName, "passkey-recovery-")
+	}
+	if gotBody.Spec.UserRef.Name != "user-2" {
+		t.Fatalf("forwarded spec.userRef.name = %q, want %q", gotBody.Spec.UserRef.Name, "user-2")
+	}
+	if gotBody.Spec.RequestedBy != "staff-1" {
+		t.Fatalf("forwarded spec.requestedBy = %q, want %q", gotBody.Spec.RequestedBy, "staff-1")
+	}
+	if gotBody.Spec.Reason != "ticket-123" {
+		t.Fatalf("forwarded spec.reason = %q, want %q", gotBody.Spec.Reason, "ticket-123")
 	}
 	if got.Name != "prl-abc" || got.Status.EmailName != "email-1" {
 		t.Fatalf("decoded link = %+v", got)

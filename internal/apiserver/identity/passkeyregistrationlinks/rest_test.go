@@ -2,6 +2,7 @@ package passkeyregistrationlinks_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
@@ -18,11 +19,15 @@ type fakeBackend struct {
 	calls   int
 	gotLink *identityv1alpha1.PasskeyRegistrationLink
 	created *identityv1alpha1.PasskeyRegistrationLink
+	err     error
 }
 
 func (f *fakeBackend) CreatePasskeyRegistrationLink(_ context.Context, _ authuser.Info, link *identityv1alpha1.PasskeyRegistrationLink, _ *metav1.CreateOptions) (*identityv1alpha1.PasskeyRegistrationLink, error) {
 	f.calls++
 	f.gotLink = link
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.created, nil
 }
 
@@ -85,5 +90,39 @@ func TestREST_IsCreateOnly(t *testing.T) {
 	}
 	if _, ok := interface{}(r).(rest.Updater); ok {
 		t.Fatal("PasskeyRegistrationLink REST storage must not implement rest.Updater (create-only contract)")
+	}
+}
+
+func TestREST_Create_ReturnsBackendErrorsUnchanged(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     *apierrors.StatusError
+		matches func(error) bool
+	}{
+		{name: "bad request", err: apierrors.NewBadRequest("user has no passkeys"), matches: apierrors.IsBadRequest},
+		{name: "internal error", err: apierrors.NewInternalError(errors.New("provider failed")), matches: apierrors.IsInternalError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := passkeyregistrationlinks.NewREST(&fakeBackend{err: tt.err})
+			ctx := apirequest.WithUser(context.Background(), &authuser.DefaultInfo{Name: "staff@example.com"})
+			in := &identityv1alpha1.PasskeyRegistrationLink{
+				Spec: identityv1alpha1.PasskeyRegistrationLinkSpec{
+					UserRef: identityv1alpha1.PasskeyRegistrationLinkUserReference{Name: "user-2"},
+				},
+			}
+
+			got, err := r.Create(ctx, in, nil, &metav1.CreateOptions{})
+			if got != nil {
+				t.Fatalf("Create result = %v, want nil", got)
+			}
+			var statusErr *apierrors.StatusError
+			if !errors.As(err, &statusErr) || statusErr != tt.err {
+				t.Fatalf("Create error = %T %v, want the backend's StatusError unchanged", err, err)
+			}
+			if !tt.matches(err) {
+				t.Fatalf("Create error = %v, lost its reason", err)
+			}
+		})
 	}
 }
