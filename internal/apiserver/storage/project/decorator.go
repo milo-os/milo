@@ -15,6 +15,9 @@ import (
 // ProjectAwareDecorator builds per-project storage isolation using etcd prefix separation.
 // When bootstrapper is non-nil, it ensures the milo-system namespace exists in project control planes.
 func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, bootstrapper *NamespaceBootstrapper) generic.StorageDecorator {
+	if gr.Group == "" && gr.Resource == "namespaces" {
+		bootstrapper = nil
+	}
 	return func(
 		cfg *storagebackend.ConfigForResource,
 		resourcePrefix string,

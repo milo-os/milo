@@ -21,18 +21,21 @@ const (
 	DefaultNamespaceBootstrapTimeout = 5 * time.Second
 
 	defaultBootstrapRetryAfter = 30 * time.Second
+	defaultBootstrapReadyTTL   = 10 * time.Minute
 )
 
 type NamespaceBootstrapper struct {
 	timeout    time.Duration
 	retryAfter time.Duration
+	readyTTL   time.Duration
 	now        func() time.Time
 	run        func(ctx context.Context, project string) error
 
 	ready sync.Map
 
-	mu       sync.Mutex
-	attempts map[string]*bootstrapAttempt
+	mu        sync.Mutex
+	attempts  map[string]*bootstrapAttempt
+	lastSweep time.Time
 }
 
 type bootstrapAttempt struct {
@@ -57,6 +60,7 @@ func newNamespaceBootstrapper(timeout time.Duration, run func(ctx context.Contex
 	return &NamespaceBootstrapper{
 		timeout:    timeout,
 		retryAfter: defaultBootstrapRetryAfter,
+		readyTTL:   defaultBootstrapReadyTTL,
 		now:        time.Now,
 		run:        run,
 		attempts:   map[string]*bootstrapAttempt{},
@@ -67,53 +71,92 @@ func (b *NamespaceBootstrapper) Ensure(ctx context.Context, project string) {
 	if b == nil || project == "" {
 		return
 	}
-	if _, ok := b.ready.Load(project); ok {
+	now := b.now()
+	if expiry, ok := b.ready.Load(project); ok && now.Before(expiry.(time.Time)) {
 		return
 	}
 
 	b.mu.Lock()
-	if a, ok := b.attempts[project]; ok {
-		select {
-		case <-a.done:
-			if a.err == nil || b.now().Sub(a.finished) < b.retryAfter {
-				b.mu.Unlock()
-				return
-			}
-		default:
+	b.sweepLocked(now)
+	a, ok := b.attempts[project]
+	if ok && b.finishedLocked(a) {
+		if a.err == nil || now.Sub(a.finished) < b.retryAfter {
 			b.mu.Unlock()
-			select {
-			case <-a.done:
-			case <-ctx.Done():
-			}
 			return
 		}
+		ok = false
 	}
-	a := &bootstrapAttempt{done: make(chan struct{})}
-	b.attempts[project] = a
+	if !ok {
+		a = &bootstrapAttempt{done: make(chan struct{})}
+		b.attempts[project] = a
+		go b.attempt(project, a)
+	}
 	b.mu.Unlock()
 
+	select {
+	case <-a.done:
+	case <-ctx.Done():
+	}
+}
+
+func (b *NamespaceBootstrapper) attempt(project string, a *bootstrapAttempt) {
 	start := b.now()
-	runCtx, cancel := context.WithTimeout(context.Background(), b.timeout)
-	err := b.run(runCtx, project)
-	cancel()
+	var err error
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("namespace bootstrap panicked: %v", r)
+		}
+		result := "success"
+		if err != nil {
+			result = "error"
+			klog.ErrorS(err, "Failed to bootstrap namespace in project control plane",
+				"project", project, "namespace", miloSystemNamespace)
+		}
+		namespaceBootstrapDuration.WithLabelValues(result).Observe(b.now().Sub(start).Seconds())
 
-	result := "success"
-	if err != nil {
-		result = "error"
-		klog.ErrorS(err, "Failed to bootstrap namespace in project control plane",
-			"project", project, "namespace", miloSystemNamespace)
-	}
-	namespaceBootstrapDuration.WithLabelValues(result).Observe(b.now().Sub(start).Seconds())
+		b.mu.Lock()
+		a.err = err
+		a.finished = b.now()
+		if err == nil {
+			b.ready.Store(project, a.finished.Add(b.readyTTL))
+			if b.attempts[project] == a {
+				delete(b.attempts, project)
+			}
+		}
+		b.mu.Unlock()
+		close(a.done)
+	}()
 
-	b.mu.Lock()
-	a.err = err
-	a.finished = b.now()
-	if err == nil {
-		b.ready.Store(project, struct{}{})
-		delete(b.attempts, project)
+	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
+	defer cancel()
+	err = b.run(ctx, project)
+}
+
+func (b *NamespaceBootstrapper) finishedLocked(a *bootstrapAttempt) bool {
+	select {
+	case <-a.done:
+		return true
+	default:
+		return false
 	}
-	b.mu.Unlock()
-	close(a.done)
+}
+
+func (b *NamespaceBootstrapper) sweepLocked(now time.Time) {
+	if now.Sub(b.lastSweep) < b.retryAfter {
+		return
+	}
+	b.lastSweep = now
+	for project, a := range b.attempts {
+		if b.finishedLocked(a) && now.Sub(a.finished) >= b.retryAfter {
+			delete(b.attempts, project)
+		}
+	}
+	b.ready.Range(func(project, expiry any) bool {
+		if !now.Before(expiry.(time.Time)) {
+			b.ready.Delete(project)
+		}
+		return true
+	})
 }
 
 func createMiloSystemNamespace(ctx context.Context, loopbackConfig *rest.Config, project string) error {
