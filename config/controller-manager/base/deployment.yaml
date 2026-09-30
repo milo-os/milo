@@ -24,6 +24,7 @@ spec:
       - name: milo-controller-manager
         image: ghcr.io/milo-os/milo:latest
         imagePullPolicy: IfNotPresent
+        terminationMessagePolicy: FallbackToLogsOnError
         args:
           - controller-manager
           - --leader-elect=true
