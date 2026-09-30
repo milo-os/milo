@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mccontext "sigs.k8s.io/multicluster-runtime/pkg/context"
+	mccontroller "sigs.k8s.io/multicluster-runtime/pkg/controller"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -46,8 +47,9 @@ const (
 // aggregated quota (Limit/Allocated/Available). It is the single writer for
 // bucket objects; other controllers are read-only.
 type AllowanceBucketController struct {
-	Scheme  *runtime.Scheme
-	Manager mcmanager.Manager
+	Scheme                  *runtime.Scheme
+	Manager                 mcmanager.Manager
+	MaxConcurrentReconciles int
 }
 
 // +kubebuilder:rbac:groups=quota.miloapis.com,resources=allowancebuckets,verbs=get;list;watch;create;update;patch;delete
@@ -318,10 +320,6 @@ func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, cl
 			bucket.Status.ObservedGeneration = bucket.Generation
 
 			if err := clusterClient.Status().Update(ctx, bucket); err != nil {
-				if apierrors.IsConflict(err) {
-					// Controller runtime will automatically re-queue this resource
-					return nil
-				}
 				return fmt.Errorf("failed to update bucket during reservation: %w", err)
 			}
 
@@ -534,6 +532,7 @@ func (r *AllowanceBucketController) SetupWithManager(mgr mcmanager.Manager) erro
 			}),
 		).
 		Named("allowance-bucket").
+		WithOptions(mccontroller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Complete(r)
 }
 
