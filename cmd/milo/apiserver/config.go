@@ -48,6 +48,7 @@ import (
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
+	passkeyregistrationlinksbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
 	passkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
@@ -273,6 +274,24 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 		}
 		backend, _ := passkeysbackend.NewDynamicProvider(cfg)
 		provider.Passkeys = backend
+
+		// Registration links are served by the same provider, so they reuse the
+		// passkeys settings and feature gate.
+		linksBackend, err := passkeyregistrationlinksbackend.NewDynamicProvider(passkeyregistrationlinksbackend.Config{
+			BaseConfig:     cfg.BaseConfig,
+			ProviderURL:    cfg.ProviderURL,
+			CAFile:         cfg.CAFile,
+			ClientCertFile: cfg.ClientCertFile,
+			ClientKeyFile:  cfg.ClientKeyFile,
+			Timeout:        cfg.Timeout,
+			Retries:        cfg.Retries,
+			ExtrasAllow:    cfg.ExtrasAllow,
+		})
+		if err != nil {
+			klog.ErrorS(err, "Passkey registration links disabled: provider not configured")
+		} else {
+			provider.PasskeyRegistrationLinks = linksBackend
+		}
 	}
 
 	return provider
@@ -358,6 +377,10 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		)
 		registry.RegisterStatic(
 			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeys"},
+			discoveryctx.ContextUser,
+		)
+		registry.RegisterStatic(
+			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeyregistrationlinks"},
 			discoveryctx.ContextUser,
 		)
 	}

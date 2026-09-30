@@ -9,6 +9,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver"
 
+	passkeyregistrationlinksregistry "go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
 	passkeysregistry "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
 	serviceaccountkeysregistry "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsregistry "go.miloapis.com/milo/internal/apiserver/identity/sessions"
@@ -21,6 +22,8 @@ type StorageProvider struct {
 	UserIdentities     useridentitiesregistry.Backend
 	ServiceAccountKeys serviceaccountkeysregistry.Backend
 	Passkeys           passkeysregistry.Backend
+	// PasskeyRegistrationLinks is optional: the resource is served only when a backend is set.
+	PasskeyRegistrationLinks passkeyregistrationlinksregistry.Backend
 }
 
 func (p StorageProvider) GroupName() string { return identityv1alpha1.SchemeGroupVersion.Group }
@@ -41,6 +44,9 @@ func (p StorageProvider) NewRESTStorage(
 		"useridentities":     useridentitiesregistry.NewREST(p.UserIdentities),
 		"serviceaccountkeys": serviceaccountkeysregistry.NewREST(p.ServiceAccountKeys),
 		"passkeys":           passkeysregistry.NewREST(p.Passkeys),
+	}
+	if p.PasskeyRegistrationLinks != nil {
+		storage["passkeyregistrationlinks"] = passkeyregistrationlinksregistry.NewREST(p.PasskeyRegistrationLinks)
 	}
 
 	apiGroupInfo.VersionedResourcesStorageMap = map[string]map[string]rest.Storage{
