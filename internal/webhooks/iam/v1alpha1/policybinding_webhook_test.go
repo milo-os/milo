@@ -2,7 +2,6 @@ package v1alpha1
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -141,27 +140,6 @@ func testProject(name, org string) *resourcemanagerv1alpha1.Project {
 	}
 }
 
-func testServiceAccount(name string) *iamv1alpha1.ServiceAccount {
-	return &iamv1alpha1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID("sa-uid-" + name)},
-		Spec:       iamv1alpha1.ServiceAccountSpec{State: "Active"},
-	}
-}
-
-// fakeProjectClientGetter returns the client registered for a project, or an
-// error when none is (mirroring a project whose control plane is unknown).
-type fakeProjectClientGetter struct {
-	clients map[string]client.Client
-}
-
-func (f *fakeProjectClientGetter) GetClientForProject(_ context.Context, projectName string) (client.Client, error) {
-	cl, ok := f.clients[projectName]
-	if !ok {
-		return nil, fmt.Errorf("no client for project %q", projectName)
-	}
-	return cl, nil
-}
-
 // orgContextRequest returns a context whose admission request carries an
 // organization parent context for orgID, as injected by the Milo API server's
 // OrganizationContextAuthorizationDecorator.
@@ -239,16 +217,6 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 		binding     *iamv1alpha1.PolicyBinding
 		expectError bool
 		contains    string
-
-		// projectClients overrides the per-project control-plane clients the
-		// validator reads ServiceAccounts through. When nil, every known project
-		// client contains the default SA (robot), so the cross-project check
-		// passes.
-		projectClients map[string][]client.Object
-
-		// noProjectClients simulates a validator with no project-cluster wiring
-		// (projectClients field nil): every membership check fails closed.
-		noProjectClients bool
 	}{
 		"org context with a serviceaccount bound to a project in the org": {
 			preObjects:  []client.Object{projectA},
@@ -256,25 +224,11 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding:     projectBinding("project-a"),
 			expectError: false,
 		},
-		"org context denies a serviceaccount from another project in the same org": {
+		"org context allows a serviceaccount from another project in the same org": {
 			preObjects:  []client.Object{projectA},
 			ctx:         orgContextRequest(orgA),
 			binding:     projectBinding("project-a"),
-			expectError: true,
-			contains:    "is not part of project",
-			// robot lives only in project-c, not in the target project-a.
-			projectClients: map[string][]client.Object{
-				"project-a": {},
-				"project-c": {testServiceAccount("robot")},
-			},
-		},
-		"org context fails closed when the project control plane cannot be reached": {
-			preObjects:       []client.Object{projectA},
-			ctx:              orgContextRequest(orgA),
-			binding:          projectBinding("project-a"),
-			expectError:      true,
-			contains:         "cannot verify",
-			noProjectClients: true,
+			expectError: false,
 		},
 		"org context denies a user subject": {
 			preObjects:  []client.Object{projectA},
@@ -438,26 +392,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			}
 
 			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.preObjects...).Build()
-
-			// Build per-project control-plane clients, seeded by default with an
-			// SA in every project. projectClients override per case.
-			var validator *PolicyBindingValidator
-			if tc.noProjectClients {
-				validator = &PolicyBindingValidator{client: cl}
-			} else {
-				projectClients := make(map[string]client.Client, len(tc.projectClients)+1)
-				defaultProjects := []string{"project-a", "project-b", "project-c"}
-				for _, projectName := range defaultProjects {
-					projectClients[projectName] = fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(testServiceAccount("robot")).Build()
-				}
-				for projectName, objs := range tc.projectClients {
-					projectClients[projectName] = fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(objs...).Build()
-				}
-				validator = &PolicyBindingValidator{
-					client:         cl,
-					projectClients: &fakeProjectClientGetter{clients: projectClients},
-				}
-			}
+			validator := &PolicyBindingValidator{client: cl}
 
 			_, err := validator.ValidateCreate(tc.ctx, testBinding)
 
@@ -523,11 +458,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA).Build()
-			projectClient := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(testServiceAccount("robot")).Build()
-			validator := &PolicyBindingValidator{
-				client:         cl,
-				projectClients: &fakeProjectClientGetter{clients: map[string]client.Client{"project-a": projectClient}},
-			}
+			validator := &PolicyBindingValidator{client: cl}
 
 			_, err := validator.ValidateUpdate(orgContextRequest(orgA), tc.oldPB, tc.newPB)
 

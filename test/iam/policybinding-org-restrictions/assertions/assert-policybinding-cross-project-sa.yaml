@@ -3,17 +3,13 @@ kind: PolicyBinding
 metadata:
   name: pb-cross-project-sa
   namespace: organization-pb-org-a
-  labels:
-    test.miloapis.com/scenario: "policybinding-org-restrictions"
 spec:
   roleRef:
     name: some-role
     namespace: organization-pb-org-a
-  # The subject ServiceAccount (pb-robot-b) lives in pb-project-b's control
-  # plane, while the target Project (pb-project-a) belongs to Organization A.
-  # A ServiceAccount may be granted access outside of its own project, so this
-  # cross-project binding is accepted: an organization admin can grant a
-  # ServiceAccount roles on any Project in the organization.
+  # The ServiceAccount subject lives in a different project's control plane
+  # than the target, but the binding is accepted: an organization admin may
+  # grant a ServiceAccount access outside of its own project.
   subjects:
     - kind: ServiceAccount
       name: pb-robot-b

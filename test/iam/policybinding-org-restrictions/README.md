@@ -12,15 +12,18 @@ request user. In that context the webhook enforces:
 - The target must be a Project that belongs to the request organization,
   referenced as a resourceRef. Kind-level (resourceKind) targets are
   rejected.
-- Each ServiceAccount subject must live in the target Project's control
-  plane, so a binding cannot grant one project's roles to a ServiceAccount
-  that belongs to a different project.
+- ServiceAccounts may be granted roles to any Project in the organization
+  — an organization admin can grant a ServiceAccount access outside of its
+  own project (for example, IAM admin access across the whole org) — so a
+  ServiceAccount is not required to live in the target Project's control
+  plane.
 
 This test verifies:
 - A ServiceAccount bound to a Project within the same organization and
   control plane is accepted.
+- A ServiceAccount that lives in a different project may be granted a role
+  targeting a Project in the organization.
 - Binding a Project that belongs to another organization is denied.
-- Binding a ServiceAccount that lives in another project is denied.
 - Kind-level (resourceKind) targets are denied.
 - User and system-group subjects are denied.
 - A binding created in a namespace other than the organization's namespace
@@ -47,7 +50,7 @@ and user webhooks), which would let every denied binding through.
 | 7 | [create-service-account-b](#step-create-service-account-b) | 0 | 2 | 0 | 0 | 0 |
 | 8 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
 | 9 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
-| 10 | [deny-serviceaccount-from-another-project](#step-deny-serviceaccount-from-another-project) | 0 | 1 | 0 | 0 | 0 |
+| 10 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
 | 11 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
 | 12 | [deny-user-subject](#step-deny-user-subject) | 0 | 1 | 0 | 0 | 0 |
 | 13 | [deny-system-group-subject](#step-deny-system-group-subject) | 0 | 1 | 0 | 0 | 0 |
@@ -152,15 +155,16 @@ Binding a Project owned by another organization is denied
 |:-:|---|:-:|:-:|---|
 | 1 | `create` | 0 | 0 | *No description* |
 
-### Step: `deny-serviceaccount-from-another-project`
+### Step: `allow-serviceaccount-from-another-project`
 
-Binding a ServiceAccount that lives in a different project is denied
+A ServiceAccount that lives in a different project may be granted a role targeting a Project in the organization
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `create` | 0 | 0 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `deny-resourcekind-target`
 

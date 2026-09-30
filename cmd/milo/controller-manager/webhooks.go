@@ -75,13 +75,13 @@ func newClusterAwareWebhookServer(opts *Options, port int) webhook.Server {
 }
 
 func registerCoreControlPlaneWebhooks(mgr controllerruntime.Manager, mcMgr mcmanager.Manager) error {
-	if err := registerCoreControlPlaneWebhooksWithoutNotes(mgr, mcMgr); err != nil {
+	if err := registerCoreControlPlaneWebhooksWithoutNotes(mgr); err != nil {
 		return err
 	}
 	return registerNoteWebhooks(mgr, mcMgr)
 }
 
-func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager, mcMgr mcmanager.Manager) error {
+func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager) error {
 	if err := resourcemanagerv1alpha1webhook.SetupProjectSuspensionWebhooksWithManager(mgr, SystemNamespace); err != nil {
 		return fmt.Errorf("setting up projectsuspension webhook: %w", err)
 	}
@@ -139,7 +139,7 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager,
 	if err := iamv1alpha1webhook.SetupPlatformAccessWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up platform access webhook: %w", err)
 	}
-	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr, mcMgr); err != nil {
+	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up policybinding webhook: %w", err)
 	}
 	return nil

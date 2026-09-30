@@ -12,8 +12,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
-	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
-	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -24,14 +22,13 @@ import (
 // backing object and therefore no uid to resolve.
 const systemGroupPrefix = "system:"
 
-func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager, mcMgr mcmanager.Manager) error {
+func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.PolicyBinding{}).
 		WithDefaulter(&PolicyBindingMutator{
 			client: mgr.GetClient(),
 		}).
 		WithValidator(&PolicyBindingValidator{
-			client:         mgr.GetClient(),
-			projectClients: &multiclusterProjectClientGetter{mcMgr: mcMgr},
+			client: mgr.GetClient(),
 		}).
 		Complete()
 }
@@ -159,15 +156,13 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 //     Kind-level (resourceKind / Root) targets are rejected too, since they
 //     grant at a scope wider than the org.
 //
-//   - Each ServiceAccount subject must belong to the target Project. A
-//     ServiceAccount lives in exactly one project's control-plane cluster (one
-//     cluster per project), so a project-scoped read of the subject only
-//     succeeds for the project that hosts it. If the read fails — the SA is in
-//     another project, or cannot be verified at all — the binding is denied.
-//     This stops an org holder from granting a project's roles to a Service
-//     Account that belongs to a different project in the same (or another) org.
-//
 //   - The binding's namespace must match the organization's namespace.
+//
+// A ServiceAccount subject is not required to live in the target Project's
+// control plane: an organization admin may grant a ServiceAccount access
+// outside of its own project (for example, IAM admin access across the whole
+// organization). The org-containment rules above are what keep those grants
+// inside the organization.
 //
 // Requests that carry no organization parent context (platform scope, internal
 // controllers) are unaffected: they may bind Users, Groups, and any target.
@@ -176,35 +171,6 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 // the organization and user webhooks.
 type PolicyBindingValidator struct {
 	client client.Client
-
-	// projectClients returns the control-plane client for a project name. It is
-	// a narrowed view of the multicluster manager so the validator can be unit
-	// tested with a stub; production wiring always provides it. A nil value
-	// falls closed: the validator can verify nothing and denies.
-	projectClients projectClientGetter
-}
-
-// projectClientGetter returns a client for a project's control-plane cluster.
-// Each project is fronted by its own control plane, so reads through this
-// client are scoped to the project: an object that lives in a different
-// project's control plane is not visible here.
-type projectClientGetter interface {
-	GetClientForProject(ctx context.Context, projectName string) (client.Client, error)
-}
-
-// multiclusterProjectClientGetter adapts the multicluster manager to
-// projectClientGetter. Cluster names in the multicluster runtime are the
-// project names (the same names used in URL paths and parent extras).
-type multiclusterProjectClientGetter struct {
-	mcMgr mcmanager.Manager
-}
-
-func (g *multiclusterProjectClientGetter) GetClientForProject(ctx context.Context, projectName string) (client.Client, error) {
-	cluster, err := g.mcMgr.GetCluster(ctx, multicluster.ClusterName(projectName))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get project control plane %q: %w", projectName, err)
-	}
-	return cluster.GetClient(), nil
 }
 
 func (v *PolicyBindingValidator) ValidateCreate(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
@@ -284,9 +250,6 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	}
 
 	// Target: only a Project within the request organization may be referenced.
-	// targetProjectName is set when the target resolves to a concrete in-org
-	// Project; it gates the cross-project ServiceAccount check below.
-	var targetProjectName string
 	selector := pb.Spec.ResourceSelector
 	switch {
 	case selector.ResourceRef != nil:
@@ -321,10 +284,7 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 				field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
 				fmt.Sprintf("project %q does not belong to organization %q", ref.Name, orgID),
 			))
-			break
 		}
-
-		targetProjectName = ref.Name
 	case selector.ResourceKind != nil:
 		errs = append(errs, field.Forbidden(
 			field.NewPath("spec", "resourceSelector", "resourceKind"),
@@ -332,15 +292,13 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
-	// Subjects: only ServiceAccounts may be bound in organization context, and
-	// each must belong to the target Project. A ServiceAccount lives in exactly
-	// one project's control-plane cluster, so a project-scoped read of the
-	// subject succeeds only for the project that hosts it. Any failure to
-	// confirm membership — the SA is in another project, has no project, or the
-	// check itself cannot run — denies the binding (fail closed).
+	// Subjects: only ServiceAccounts may be bound in organization context. An
+	// organization admin may grant a ServiceAccount access to any Project in the
+	// organization, including outside the ServiceAccount's own project's control
+	// plane — for example IAM admin access across the whole org — so there is no
+	// requirement that the ServiceAccount live in the target Project.
 	for i := range pb.Spec.Subjects {
 		subject := &pb.Spec.Subjects[i]
-		subjectNamePath := field.NewPath("spec", "subjects").Index(i).Child("name")
 
 		if subject.Kind != "ServiceAccount" {
 			notSupported := field.NotSupported(
@@ -350,18 +308,6 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 			)
 			notSupported.Detail = fmt.Sprintf("organization-context policybindings may only grant roles to ServiceAccounts, not to Subject kind %q", subject.Kind)
 			errs = append(errs, notSupported)
-			continue
-		}
-
-		// The cross-project check only applies when the target resolved to a
-		// concrete in-org project. If it did not (wrong kind, missing or foreign
-		// project), the target errors above already deny the binding.
-		if targetProjectName == "" {
-			continue
-		}
-
-		if _, err := v.serviceAccountInProject(ctx, subject.Name, targetProjectName); err != nil {
-			errs = append(errs, crossProjectSubjectError(subjectNamePath, subject.Name, targetProjectName, err))
 		}
 	}
 
@@ -370,49 +316,4 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	}
 
 	return nil, nil
-}
-
-// serviceAccountInProject reports whether the named ServiceAccount exists in
-// the given project's control-plane cluster. Because each project is fronted by
-// its own control plane, the read succeeds only when the ServiceAccount
-// actually lives in that project; a ServiceAccount that belongs to a different
-// project (or to none) is not visible here and reads as NotFound.
-//
-// The project name is the cluster name the multicluster runtime keys clusters
-// by — the same name used in URL paths and parent extras.
-func (v *PolicyBindingValidator) serviceAccountInProject(ctx context.Context, saName, projectName string) (bool, error) {
-	if v.projectClients == nil {
-		// No project-cluster wiring: the validator can verify nothing, so it
-		// reports failure and the caller falls closed.
-		return false, fmt.Errorf("project client mapping is not configured")
-	}
-
-	projectClient, err := v.projectClients.GetClientForProject(ctx, projectName)
-	if err != nil {
-		return false, err
-	}
-
-	sa := &iamv1alpha1.ServiceAccount{}
-	if err := projectClient.Get(ctx, client.ObjectKey{Name: saName}, sa); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// crossProjectSubjectError converts a failed membership check into a field
-// error. A NotFound means the ServiceAccount is not part of the target project;
-// any other failure (missing wiring, control plane not reachable) is treated
-// the same way: the subject cannot be verified as belonging to the target
-// project, which fails closed.
-func crossProjectSubjectError(path *field.Path, saName, projectName string, err error) *field.Error {
-	if errors.IsNotFound(err) {
-		return field.Forbidden(
-			path,
-			fmt.Sprintf("service account %q is not part of project %q and cannot be bound to it; service accounts live in exactly one project", saName, projectName),
-		)
-	}
-	return field.Forbidden(
-		path,
-		fmt.Sprintf("cannot verify that service account %q is part of project %q: %v; the binding is denied because the service account's project could not be confirmed (fail closed)", saName, projectName, err),
-	)
 }
