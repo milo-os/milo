@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -11,19 +12,30 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"k8s.io/apiserver/pkg/server/mux"
 	"k8s.io/component-base/metrics/legacyregistry"
+	"k8s.io/klog/v2"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 func installMetricsHandler(m *mux.PathRecorderMux) {
 	m.Unregister("/metrics")
-	m.Handle("/metrics", metricsHandler(legacyregistry.DefaultGatherer, ctrlmetrics.Registry))
+	m.Handle("/metrics", metricsHandler(legacyregistry.Registerer(), legacyregistry.DefaultGatherer, ctrlmetrics.Registry))
 }
 
-func metricsHandler(gatherers ...prometheus.Gatherer) http.Handler {
+func metricsHandler(registerer prometheus.Registerer, gatherers ...prometheus.Gatherer) http.Handler {
 	return promhttp.InstrumentMetricHandler(
-		prometheus.DefaultRegisterer,
-		promhttp.HandlerFor(mergedGatherer(gatherers), promhttp.HandlerOpts{}),
+		registerer,
+		promhttp.HandlerFor(mergedGatherer(gatherers), promhttp.HandlerOpts{
+			ErrorLog:      klogErrorLog{},
+			ErrorHandling: promhttp.ContinueOnError,
+			Registry:      registerer,
+		}),
 	)
+}
+
+type klogErrorLog struct{}
+
+func (klogErrorLog) Println(v ...interface{}) {
+	klog.ErrorDepth(1, strings.TrimSuffix(fmt.Sprintln(v...), "\n"))
 }
 
 type mergedGatherer []prometheus.Gatherer
@@ -50,6 +62,8 @@ func (g mergedGatherer) Gather() ([]*dto.MetricFamily, error) {
 				continue
 			}
 			if existing.GetType() != family.GetType() {
+				errs = append(errs, fmt.Errorf("metric family %q is gathered as both %s and %s, dropping %d %s series",
+					name, existing.GetType(), family.GetType(), len(family.GetMetric()), family.GetType()))
 				continue
 			}
 			for _, metric := range family.GetMetric() {
