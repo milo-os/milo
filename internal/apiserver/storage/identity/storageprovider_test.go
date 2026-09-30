@@ -36,3 +36,31 @@ func TestStorageProvider_RegistersPasskeysWhenBackendSet(t *testing.T) {
 		t.Fatal(`expected "passkeys" resource to be registered`)
 	}
 }
+
+type fakePasskeyRegistrationLinksBackend struct{}
+
+func (fakePasskeyRegistrationLinksBackend) CreatePasskeyRegistrationLink(context.Context, authuser.Info, *identityv1alpha1.PasskeyRegistrationLink, *metav1.CreateOptions) (*identityv1alpha1.PasskeyRegistrationLink, error) {
+	return &identityv1alpha1.PasskeyRegistrationLink{}, nil
+}
+
+func TestStorageProvider_PasskeyRegistrationLinksOnlyWhenBackendSet(t *testing.T) {
+	cases := map[string]struct {
+		provider identitystorage.StorageProvider
+		want     bool
+	}{
+		"backend set": {identitystorage.StorageProvider{PasskeyRegistrationLinks: fakePasskeyRegistrationLinksBackend{}}, true},
+		"backend nil": {identitystorage.StorageProvider{}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			info, err := tc.provider.NewRESTStorage(nil, nil)
+			if err != nil {
+				t.Fatalf("NewRESTStorage: %v", err)
+			}
+			_, got := info.VersionedResourcesStorageMap["v1alpha1"]["passkeyregistrationlinks"]
+			if got != tc.want {
+				t.Fatalf(`"passkeyregistrationlinks" registered = %v, want %v`, got, tc.want)
+			}
+		})
+	}
+}

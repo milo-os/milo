@@ -48,6 +48,7 @@ import (
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
+	passkeyregistrationlinksbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
 	passkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
@@ -214,8 +215,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.SessionsProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := sessionsbackend.NewDynamicProvider(cfg)
-		provider.Sessions = backend
+		backend, err := sessionsbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "Sessions disabled: provider not configured")
+		} else {
+			provider.Sessions = backend
+		}
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.UserIdentities) {
@@ -233,8 +238,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.UserIdentitiesProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := useridentitiesbackend.NewDynamicProvider(cfg)
-		provider.UserIdentities = backend
+		backend, err := useridentitiesbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "User identities disabled: provider not configured")
+		} else {
+			provider.UserIdentities = backend
+		}
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.ServiceAccountKeys) {
@@ -252,8 +261,12 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.ServiceAccountKeysProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := serviceaccountkeysbackend.NewDynamicProvider(cfg)
-		provider.ServiceAccountKeys = backend
+		backend, err := serviceaccountkeysbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "Service account keys disabled: provider not configured")
+		} else {
+			provider.ServiceAccountKeys = backend
+		}
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.Passkeys) {
@@ -271,8 +284,27 @@ func newIdentityStorageProvider(c *CompletedConfig) controlplaneapiserver.RESTSt
 			Retries:        c.ExtraConfig.PasskeysProvider.Retries,
 			ExtrasAllow:    allow,
 		}
-		backend, _ := passkeysbackend.NewDynamicProvider(cfg)
-		provider.Passkeys = backend
+		backend, err := passkeysbackend.NewDynamicProvider(cfg)
+		if err != nil {
+			klog.ErrorS(err, "Passkeys disabled: provider not configured")
+		} else {
+			provider.Passkeys = backend
+		}
+
+		linksBackend, err := passkeyregistrationlinksbackend.NewDynamicProvider(passkeyregistrationlinksbackend.Config{
+			BaseConfig:     cfg.BaseConfig,
+			ProviderURL:    cfg.ProviderURL,
+			CAFile:         cfg.CAFile,
+			ClientCertFile: cfg.ClientCertFile,
+			ClientKeyFile:  cfg.ClientKeyFile,
+			Timeout:        cfg.Timeout,
+			ExtrasAllow:    cfg.ExtrasAllow,
+		})
+		if err != nil {
+			klog.ErrorS(err, "Passkey registration links disabled: provider not configured")
+		} else {
+			provider.PasskeyRegistrationLinks = linksBackend
+		}
 	}
 
 	return provider
@@ -358,6 +390,10 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		)
 		registry.RegisterStatic(
 			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeys"},
+			discoveryctx.ContextUser,
+		)
+		registry.RegisterStatic(
+			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeyregistrationlinks"},
 			discoveryctx.ContextUser,
 		)
 	}
