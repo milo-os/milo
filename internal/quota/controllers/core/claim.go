@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mccontroller "sigs.k8s.io/multicluster-runtime/pkg/controller"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
@@ -28,8 +29,9 @@ import (
 // ResourceClaimController reconciles a ResourceClaim object and is
 // responsible for evaluating resource claims against available quota.
 type ResourceClaimController struct {
-	Scheme  *runtime.Scheme
-	Manager mcmanager.Manager
+	Scheme                  *runtime.Scheme
+	Manager                 mcmanager.Manager
+	MaxConcurrentReconciles int
 }
 
 // +kubebuilder:rbac:groups=quota.miloapis.com,resources=resourceclaims,verbs=get;list;watch;create;update;patch;delete
@@ -180,5 +182,6 @@ func (r *ResourceClaimController) SetupWithManager(mgr mcmanager.Manager) error 
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(true)).
 		Named("resource-claim").
+		WithOptions(mccontroller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Complete(r)
 }
