@@ -3,7 +3,6 @@ package projectstorage
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
 
 	generic "k8s.io/apiserver/pkg/registry/generic"
 
@@ -12,18 +11,18 @@ import (
 
 // Wrap the upstream RESTOptionsGetter to install a per-project decorator.
 func WithProjectAwareDecorator(inner generic.RESTOptionsGetter) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, loopbackConfig: nil}
+	return roGetter{inner: inner}
 }
 
-// WithProjectAwareDecoratorAndConfig wraps the RESTOptionsGetter with project-aware storage
-// and provides a loopback config for bootstrapping project namespaces.
-func WithProjectAwareDecoratorAndConfig(inner generic.RESTOptionsGetter, loopbackConfig *rest.Config) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, loopbackConfig: loopbackConfig}
+// WithProjectAwareDecoratorAndBootstrapper wraps the RESTOptionsGetter with project-aware storage
+// and bootstraps project namespaces through the shared bootstrapper.
+func WithProjectAwareDecoratorAndBootstrapper(inner generic.RESTOptionsGetter, bootstrapper *NamespaceBootstrapper) generic.RESTOptionsGetter {
+	return roGetter{inner: inner, bootstrapper: bootstrapper}
 }
 
 type roGetter struct {
-	inner          generic.RESTOptionsGetter
-	loopbackConfig *rest.Config
+	inner        generic.RESTOptionsGetter
+	bootstrapper *NamespaceBootstrapper
 }
 
 // NOTE: matches your two-arg signature (GroupResource, runtime.Object).
@@ -38,6 +37,6 @@ func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object
 	}
 
 	// Ensure we always wrap with our project-aware decorator.
-	opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.loopbackConfig)
+	opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.bootstrapper)
 	return opts, nil
 }
