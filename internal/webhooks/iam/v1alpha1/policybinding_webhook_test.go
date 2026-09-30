@@ -176,6 +176,25 @@ func orgContextSuperuserRequest(orgID string) context.Context {
 	return admission.NewContextWithRequest(context.Background(), req)
 }
 
+// projectContextRequest returns a context whose admission request carries a
+// project parent context, as a future project control plane would inject it.
+// The PolicyBinding webhook is not yet wired for project scope and fails closed
+// on it, so this is used to assert that safeguard.
+func projectContextRequest(projectName string) context.Context {
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UserInfo: authenticationv1.UserInfo{
+				Extra: map[string]authenticationv1.ExtraValue{
+					iamv1alpha1.ParentNameExtraKey:     {projectName},
+					iamv1alpha1.ParentKindExtraKey:     {"Project"},
+					iamv1alpha1.ParentAPIGroupExtraKey: {resourcemanagerv1alpha1.GroupVersion.Group},
+				},
+			},
+		},
+	}
+	return admission.NewContextWithRequest(context.Background(), req)
+}
+
 func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 	orgA := "acme"
 	orgB := "globex"
@@ -393,6 +412,12 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			},
 			expectError: false,
 		},
+		"project context fails closed on create": {
+			ctx:         projectContextRequest("project-a"),
+			binding:     projectBinding("project-a"),
+			expectError: true,
+			contains:    "project-context PolicyBindings are not yet supported",
+		},
 		"system:masters in org context bypasses the restrictions even with a user subject and foreign target": {
 			preObjects: []client.Object{projectB},
 			ctx:        orgContextSuperuserRequest(orgA),
@@ -488,17 +513,20 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 	}
 
 	tests := map[string]struct {
+		ctx         context.Context
 		oldPB       *iamv1alpha1.PolicyBinding
 		newPB       *iamv1alpha1.PolicyBinding
 		expectError bool
 		contains    string
 	}{
 		"update keeps serviceaccount subjects and is allowed": {
+			ctx:         orgContextRequest(orgA),
 			oldPB:       saBinding,
 			newPB:       saBinding,
 			expectError: false,
 		},
 		"update that swaps in a user subject is allowed": {
+			ctx:   orgContextRequest(orgA),
 			oldPB: saBinding,
 			newPB: func() *iamv1alpha1.PolicyBinding {
 				b := saBinding.DeepCopy()
@@ -508,6 +536,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			expectError: false,
 		},
 		"update that retargets to an organization-wide grant in the request org is allowed": {
+			ctx:   orgContextRequest(orgA),
 			oldPB: saBinding,
 			newPB: func() *iamv1alpha1.PolicyBinding {
 				b := saBinding.DeepCopy()
@@ -522,6 +551,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			expectError: false,
 		},
 		"update that retargets to an organization-wide grant in another org is denied": {
+			ctx:   orgContextRequest(orgA),
 			oldPB: saBinding,
 			newPB: func() *iamv1alpha1.PolicyBinding {
 				b := saBinding.DeepCopy()
@@ -536,6 +566,13 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			expectError: true,
 			contains:    "does not match the request organization",
 		},
+		"project context fails closed on update": {
+			ctx:         projectContextRequest("project-a"),
+			oldPB:       saBinding,
+			newPB:       saBinding,
+			expectError: true,
+			contains:    "project-context PolicyBindings are not yet supported",
+		},
 	}
 
 	for name, tc := range tests {
@@ -543,7 +580,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA).Build()
 			validator := &PolicyBindingValidator{client: cl}
 
-			_, err := validator.ValidateUpdate(orgContextRequest(orgA), tc.oldPB, tc.newPB)
+			_, err := validator.ValidateUpdate(tc.ctx, tc.oldPB, tc.newPB)
 
 			if tc.expectError {
 				require.Error(t, err)
@@ -554,7 +591,6 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 		})
 	}
 }
-
 func TestPolicyBindingValidator_ValidateDelete(t *testing.T) {
 	orgA := "acme"
 
@@ -612,6 +648,12 @@ func TestPolicyBindingValidator_ValidateDelete(t *testing.T) {
 			ctx:         orgContextSuperuserRequest(orgA),
 			binding:     bindingIn("default"),
 			expectError: false,
+		},
+		"project context fails closed on delete": {
+			ctx:         projectContextRequest("project-a"),
+			binding:     bindingIn("default"),
+			expectError: true,
+			contains:    "project-context PolicyBindings are not yet supported",
 		},
 	}
 

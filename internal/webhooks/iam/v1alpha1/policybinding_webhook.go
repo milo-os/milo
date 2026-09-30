@@ -259,8 +259,23 @@ func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (str
 	}
 
 	if parentKind[0] != "Organization" || parentAPIGroup[0] != resourcemanagerv1alpha1.GroupVersion.Group {
-		// A different scope (e.g. the future project control plane). Not the
-		// org context this webhook guards.
+		// A different scope. The project control plane is a known future scope
+		// but is not wired up yet, so fail closed: reject any project-context
+		// PolicyBinding. A developer enabling that scope is forced to extend this
+		// webhook before any binding can slip through. Any other scope (there is
+		// none today) passes through unchanged.
+		if parentKind[0] == "Project" {
+			return "", false, errors.NewInvalid(
+				iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(),
+				parentName[0],
+				field.ErrorList{
+					field.InternalError(
+						field.NewPath("metadata", "namespace"),
+						fmt.Errorf("project-context PolicyBindings are not yet supported; extend PolicyBindingValidator before enabling the project control plane"),
+					),
+				},
+			)
+		}
 		return "", false, nil
 	}
 
