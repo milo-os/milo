@@ -11,6 +11,9 @@ request user. In that context the webhook enforces:
   referenced as a resourceRef. Kind-level (resourceKind) targets are
   rejected.
 - The binding must live in the organization's namespace.
+- The bound role (roleRef) must be an assignable role in the assignable-roles
+  namespace (the controller-manager --assignable-roles-namespace flag,
+  "datum-cloud") and must actually exist there.
 - Subjects are unrestricted: an org holder may grant a role to a User,
   Group, or ServiceAccount. What keeps those grants inside the organization
   is the namespace and target containment above, not a subject-kind
@@ -31,6 +34,11 @@ This test verifies:
 - Kind-level (resourceKind) targets are denied.
 - A binding created in a namespace other than the organization's namespace
   is denied.
+- A roleRef pointing outside the assignable-roles namespace, or at a
+  non-existent role there, is denied (covered by the unit tests; the shared
+  datum-cloud some-role fixture lets the allow-* steps pass).
+- A roleRef whose namespace is not the assignable-roles namespace is denied
+  even when the target and binding namespace are otherwise valid.
 
 The PolicyBinding steps run as test-user (system:authenticated), who is
 granted RBAC to create PolicyBindings in each organization namespace by the
@@ -46,20 +54,22 @@ and user webhooks), which would let every denied binding through.
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup-organizations](#step-setup-organizations) | 0 | 4 | 0 | 0 | 0 |
 | 2 | [grant-policybinding-rbac](#step-grant-policybinding-rbac) | 0 | 1 | 0 | 0 | 0 |
-| 3 | [create-user](#step-create-user) | 0 | 2 | 0 | 0 | 0 |
-| 4 | [create-project-a](#step-create-project-a) | 0 | 2 | 0 | 0 | 0 |
-| 5 | [create-project-b](#step-create-project-b) | 0 | 2 | 0 | 0 | 0 |
-| 6 | [create-service-account-a](#step-create-service-account-a) | 0 | 2 | 0 | 0 | 0 |
-| 7 | [create-service-account-b](#step-create-service-account-b) | 0 | 2 | 0 | 0 | 0 |
-| 8 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
-| 9 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
-| 10 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
-| 11 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
-| 12 | [allow-org-wide-grant](#step-allow-org-wide-grant) | 0 | 2 | 0 | 0 | 0 |
-| 13 | [deny-cross-org-wide-grant](#step-deny-cross-org-wide-grant) | 0 | 1 | 0 | 0 | 0 |
-| 14 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
-| 15 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
-| 16 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 3 | [create-assignable-role](#step-create-assignable-role) | 0 | 2 | 0 | 0 | 0 |
+| 4 | [create-user](#step-create-user) | 0 | 2 | 0 | 0 | 0 |
+| 5 | [create-project-a](#step-create-project-a) | 0 | 2 | 0 | 0 | 0 |
+| 6 | [create-project-b](#step-create-project-b) | 0 | 2 | 0 | 0 | 0 |
+| 7 | [create-service-account-a](#step-create-service-account-a) | 0 | 2 | 0 | 0 | 0 |
+| 8 | [create-service-account-b](#step-create-service-account-b) | 0 | 2 | 0 | 0 | 0 |
+| 9 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
+| 10 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
+| 11 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
+| 12 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
+| 13 | [deny-role-outside-assignable-namespace](#step-deny-role-outside-assignable-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 14 | [allow-org-wide-grant](#step-allow-org-wide-grant) | 0 | 2 | 0 | 0 | 0 |
+| 15 | [deny-cross-org-wide-grant](#step-deny-cross-org-wide-grant) | 0 | 1 | 0 | 0 | 0 |
+| 16 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
+| 17 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
+| 18 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organizations`
 
@@ -83,6 +93,17 @@ Authorize test-user to create PolicyBindings in both org namespaces
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
+
+### Step: `create-assignable-role`
+
+Create the datum-cloud assignable-roles namespace and the some-role the test bindings require
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `create-user`
 
@@ -174,6 +195,16 @@ A ServiceAccount that lives in a different project may be granted a role targeti
 ### Step: `deny-resourcekind-target`
 
 A kind-level (resourceKind) target is denied in organization context
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
+
+### Step: `deny-role-outside-assignable-namespace`
+
+A roleRef pointing outside the assignable-roles namespace is denied
 
 #### Try
 

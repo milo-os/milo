@@ -6,7 +6,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # The ServiceAccount subject lives in a different project's control plane
   # than the target, but the binding is accepted: an organization admin may
   # grant a ServiceAccount access outside of its own project.

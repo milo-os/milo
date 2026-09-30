@@ -15,6 +15,9 @@ spec:
       referenced as a resourceRef. Kind-level (resourceKind) targets are
       rejected.
     - The binding must live in the organization's namespace.
+    - The bound role (roleRef) must be an assignable role in the assignable-roles
+      namespace (the controller-manager --assignable-roles-namespace flag,
+      "datum-cloud") and must actually exist there.
     - Subjects are unrestricted: an org holder may grant a role to a User,
       Group, or ServiceAccount. What keeps those grants inside the organization
       is the namespace and target containment above, not a subject-kind
@@ -35,6 +38,11 @@ spec:
     - Kind-level (resourceKind) targets are denied.
     - A binding created in a namespace other than the organization's namespace
       is denied.
+    - A roleRef pointing outside the assignable-roles namespace, or at a
+      non-existent role there, is denied (covered by the unit tests; the shared
+      datum-cloud some-role fixture lets the allow-* steps pass).
+    - A roleRef whose namespace is not the assignable-roles namespace is denied
+      even when the target and binding namespace are otherwise valid.
 
     The PolicyBinding steps run as test-user (system:authenticated), who is
     granted RBAC to create PolicyBindings in each organization namespace by the
@@ -98,6 +106,22 @@ spec:
       try:
         - apply:
             file: 06-rbac-policybinding-creator.yaml
+
+    - name: create-assignable-role
+      description: Create the datum-cloud assignable-roles namespace and the some-role the test bindings require
+      cluster: main
+      try:
+        - apply:
+            file: 07-role.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: datum-cloud
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
 
     - name: create-user
       description: Create the User used by the denied User-subject binding
@@ -218,6 +242,17 @@ spec:
             - check:
                 ($error != null): true
                 (contains($error, 'resourceKind')): true
+
+    - name: deny-role-outside-assignable-namespace
+      description: A roleRef pointing outside the assignable-roles namespace is denied
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-wrong-role-namespace.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'spec.roleRef.namespace')): true
 
     - name: allow-org-wide-grant
       description: An organization-wide grant to the request organization is accepted

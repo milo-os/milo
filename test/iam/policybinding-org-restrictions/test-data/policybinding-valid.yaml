@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # The ServiceAccount subject carries a static uid. The mutating webhook leaves
   # subjects with a uid untouched (it cannot resolve project-local ServiceAccounts
   # through the root client), and the validating webhook confirms the

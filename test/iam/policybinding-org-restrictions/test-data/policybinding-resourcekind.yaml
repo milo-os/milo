@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # Kind-level (resourceKind) targets are not allowed in organization context:
   # they grant at a scope wider than the organization.
   subjects:

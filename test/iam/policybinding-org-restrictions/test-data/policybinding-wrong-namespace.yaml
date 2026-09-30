@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-b
+    namespace: datum-cloud
   subjects:
     - kind: ServiceAccount
       name: pb-robot-a

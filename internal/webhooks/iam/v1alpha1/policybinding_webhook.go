@@ -22,20 +22,21 @@ import (
 // backing object and therefore no uid to resolve.
 const systemGroupPrefix = "system:"
 
-func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager) error {
+func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager, assignableRolesNamespace string) error {
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.PolicyBinding{}).
 		WithDefaulter(&PolicyBindingMutator{
 			client: mgr.GetClient(),
 		}).
 		WithValidator(&PolicyBindingValidator{
-			client: mgr.GetClient(),
+			client:                   mgr.GetClient(),
+			assignableRolesNamespace: assignableRolesNamespace,
 		}).
 		Complete()
 }
 
 // +kubebuilder:webhook:path=/mutate-iam-miloapis-com-v1alpha1-policybinding,mutating=true,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=policybindings,verbs=create;update,versions=v1alpha1,name=mpolicybinding.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=users;groups;serviceaccounts,verbs=get;list;watch
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=users;groups;serviceaccounts;roles,verbs=get;list;watch
 
 // +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-policybinding,mutating=false,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=policybindings,verbs=create;update,versions=v1alpha1,name=vpolicybinding.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
@@ -157,6 +158,11 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 //     the only check, since a binding reachable in the org's namespace was
 //     already constrained to the organization at create/update time.
 //
+//   - The bound role (roleRef) must be an assignable role in the assignable
+//     roles namespace and must actually exist there. This stops an org holder
+//     from referencing an arbitrary or dangling role; the namespace is driven
+//     by a flag so it can change over time.
+//
 // A ServiceAccount subject is not required to live in the target Project's
 // control plane: an organization admin may grant a ServiceAccount access
 // outside of its own project (for example, IAM admin access across the whole
@@ -170,6 +176,11 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 // the organization and user webhooks.
 type PolicyBindingValidator struct {
 	client client.Client
+
+	// assignableRolesNamespace is the namespace that contains the assignable
+	// roles an org holder may bind. It is configurable so the location of the
+	// assignable-role catalog can change in the future.
+	assignableRolesNamespace string
 }
 
 func (v *PolicyBindingValidator) ValidateCreate(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
@@ -375,6 +386,12 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 			"resourceKind (kind-level) targets are not allowed in organization context; bind to a specific Project or the Organization instead",
 		))
 	}
+
+	// The bound role must be an assignable role in the assignable-roles
+	// namespace, and must actually exist there. This stops an org holder from
+	// referencing an arbitrary or dangling role. See validateAssignableRole.
+	roleRef := pb.Spec.RoleRef
+	errs = append(errs, validateAssignableRole(ctx, v.client, roleRef.Name, roleRef.Namespace, v.assignableRolesNamespace, field.NewPath("spec", "roleRef"))...)
 
 	if len(errs) > 0 {
 		return nil, errors.NewInvalid(iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(), pb.Name, errs)

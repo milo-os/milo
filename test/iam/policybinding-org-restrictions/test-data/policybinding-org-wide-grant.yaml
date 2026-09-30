@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # An organization-wide grant targets the Organization itself. In organization
   # context the validating webhook allows this when the referenced Organization
   # is the request organization (matching its orgId by name).

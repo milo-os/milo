@@ -139,7 +139,7 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager)
 	if err := iamv1alpha1webhook.SetupPlatformAccessWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up platform access webhook: %w", err)
 	}
-	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr); err != nil {
+	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr, AssignableRolesNamespace); err != nil {
 		return fmt.Errorf("setting up policybinding webhook: %w", err)
 	}
 	return nil

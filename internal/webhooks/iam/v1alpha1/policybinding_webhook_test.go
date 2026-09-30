@@ -22,7 +22,7 @@ func policyBinding(subjects ...iamv1alpha1.Subject) *iamv1alpha1.PolicyBinding {
 	return &iamv1alpha1.PolicyBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: "organization-acme"},
 		Spec: iamv1alpha1.PolicyBindingSpec{
-			RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+			RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 			Subjects: subjects,
 			ResourceSelector: iamv1alpha1.ResourceSelector{
 				ResourceKind: &iamv1alpha1.ResourceKind{APIGroup: "resourcemanager.miloapis.com", Kind: "Organization"},
@@ -195,6 +195,19 @@ func projectContextRequest(projectName string) context.Context {
 	return admission.NewContextWithRequest(context.Background(), req)
 }
 
+// testAssignableRolesNamespace is the namespace that the PolicyBinding
+// validator requires org-context bindings to reference for their roleRef.
+const testAssignableRolesNamespace = "datum-cloud"
+
+// assignableRole returns the assignable Role that org-context bindings in these
+// tests reference, existing in the assignable-roles namespace.
+func assignableRole() *iamv1alpha1.Role {
+	return &iamv1alpha1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "viewer", Namespace: testAssignableRolesNamespace},
+		Spec:       iamv1alpha1.RoleSpec{LaunchStage: "Stable"},
+	}
+}
+
 func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 	orgA := "acme"
 	orgB := "globex"
@@ -211,7 +224,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 		return &iamv1alpha1.PolicyBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 			Spec: iamv1alpha1.PolicyBindingSpec{
-				RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+				RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 				Subjects: []iamv1alpha1.Subject{{Kind: "ServiceAccount", Name: "robot", UID: "sa-uid-1"}},
 				ResourceSelector: iamv1alpha1.ResourceSelector{
 					ResourceRef: &iamv1alpha1.ResourceReference{
@@ -255,7 +268,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*user},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -275,7 +288,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*group},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -295,7 +308,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*systemGroup},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -335,7 +348,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*sa},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -354,7 +367,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*sa},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -374,7 +387,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*sa},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceKind: &iamv1alpha1.ResourceKind{APIGroup: resourcemanagerv1alpha1.GroupVersion.Group, Kind: "Project"},
@@ -398,7 +411,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: "some-namespace"},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*user},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -418,13 +431,55 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			expectError: true,
 			contains:    "project-context PolicyBindings are not yet supported",
 		},
+		"org context denies a role in a non-assignable namespace": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+					Subjects: []iamv1alpha1.Subject{*user},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "project-a",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: true,
+			contains:    "spec.roleRef.namespace",
+		},
+		"org context denies a non-existent role in the assignable namespace": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "does-not-exist", Namespace: testAssignableRolesNamespace},
+					Subjects: []iamv1alpha1.Subject{*user},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "project-a",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: true,
+			contains:    "datum-cloud/does-not-exist",
+		},
 		"system:masters in org context bypasses the restrictions even with a user subject and foreign target": {
 			preObjects: []client.Object{projectB},
 			ctx:        orgContextSuperuserRequest(orgA),
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*user},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -443,7 +498,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: "wrong-namespace"},
 				Spec: iamv1alpha1.PolicyBindingSpec{
-					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 					Subjects: []iamv1alpha1.Subject{*user},
 					ResourceSelector: iamv1alpha1.ResourceSelector{
 						ResourceRef: &iamv1alpha1.ResourceReference{
@@ -471,8 +526,12 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 				testBinding.Namespace = "default"
 			}
 
-			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.preObjects...).Build()
-			validator := &PolicyBindingValidator{client: cl}
+			// Seed the assignable Role alongside each case's preObjects so the
+			// org-context role check passes everywhere it isn't the target of the
+			// test.
+			objects := append([]client.Object{assignableRole()}, tc.preObjects...)
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(objects...).Build()
+			validator := &PolicyBindingValidator{client: cl, assignableRolesNamespace: testAssignableRolesNamespace}
 
 			_, err := validator.ValidateCreate(tc.ctx, testBinding)
 
@@ -499,7 +558,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 	saBinding := &iamv1alpha1.PolicyBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
 		Spec: iamv1alpha1.PolicyBindingSpec{
-			RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+			RoleRef:  iamv1alpha1.RoleReference{Name: "viewer", Namespace: testAssignableRolesNamespace},
 			Subjects: []iamv1alpha1.Subject{{Kind: "ServiceAccount", Name: "robot", UID: "sa-uid-1"}},
 			ResourceSelector: iamv1alpha1.ResourceSelector{
 				ResourceRef: &iamv1alpha1.ResourceReference{
@@ -577,8 +636,8 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA).Build()
-			validator := &PolicyBindingValidator{client: cl}
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA, assignableRole()).Build()
+			validator := &PolicyBindingValidator{client: cl, assignableRolesNamespace: testAssignableRolesNamespace}
 
 			_, err := validator.ValidateUpdate(tc.ctx, tc.oldPB, tc.newPB)
 

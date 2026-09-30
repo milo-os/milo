@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # The subject is a ServiceAccount that belongs to the target Project. Only the
   # target check fails: the Project belongs to Organization B, not the request
   # Organization A, so the binding must be denied.

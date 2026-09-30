@@ -6,7 +6,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   subjects:
     - kind: User
       name: pb-user

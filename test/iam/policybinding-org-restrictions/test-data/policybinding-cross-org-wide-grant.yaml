@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # An organization-wide grant targeting a different Organization must be denied:
   # the webhook checks that the referenced organization's name matches the
   # request organization, closing the cross-tenant escalation where an org-A

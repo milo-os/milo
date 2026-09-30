@@ -1,0 +1,16 @@
+# The org-context PolicyBinding webhook requires every bound role to live in the
+# assignable-roles namespace (the controller-manager --assignable-roles-namespace
+# flag, default "datum-cloud") and to actually exist there. Create that namespace
+# and the some-role the test bindings reference so the allow-* steps pass.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: datum-cloud
+---
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: some-role
+  namespace: datum-cloud
+spec:
+  launchStage: Stable

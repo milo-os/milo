@@ -8,7 +8,7 @@ metadata:
 spec:
   roleRef:
     name: some-role
-    namespace: organization-pb-org-a
+    namespace: datum-cloud
   # The subject ServiceAccount (pb-robot-b) lives in pb-project-b's control
   # plane, while the target Project (pb-project-a) belongs to Organization A.
   # A ServiceAccount may be granted access outside of its own project, so this

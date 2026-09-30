@@ -1,12 +1,17 @@
 apiVersion: iam.miloapis.com/v1alpha1
 kind: PolicyBinding
 metadata:
-  name: pb-valid
+  name: pb-wrong-role-namespace
   namespace: organization-pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
 spec:
+  # The roleRef must live in the assignable-roles namespace (datum-cloud). A
+  # namespace outside it is rejected, even though the role otherwise targets a
+  # Project in the request organization.
   roleRef:
     name: some-role
-    namespace: datum-cloud
+    namespace: organization-pb-org-a
   subjects:
     - kind: ServiceAccount
       name: pb-robot-a
