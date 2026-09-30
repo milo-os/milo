@@ -7,25 +7,26 @@ An organization holder can reach PolicyBindings only through the
 organization control plane, which injects the org's parent context into the
 request user. In that context the webhook enforces:
 
-- Subjects must all be ServiceAccounts (no Users, no Groups, including
-  system groups, which are paths to granting humans).
 - The target must be a Project that belongs to the request organization,
   referenced as a resourceRef. Kind-level (resourceKind) targets are
   rejected.
-- ServiceAccounts may be granted roles to any Project in the organization
-  — an organization admin can grant a ServiceAccount access outside of its
-  own project (for example, IAM admin access across the whole org) — so a
-  ServiceAccount is not required to live in the target Project's control
-  plane.
+- The binding must live in the organization's namespace.
+- Subjects are unrestricted: an org holder may grant a role to a User,
+  Group, or ServiceAccount. What keeps those grants inside the organization
+  is the namespace and target containment above, not a subject-kind
+  restriction. A ServiceAccount also need not live in the target Project's
+  control plane — an organization admin can grant a ServiceAccount access
+  outside of its own project (for example, IAM admin access across the
+  whole org).
 
 This test verifies:
 - A ServiceAccount bound to a Project within the same organization and
   control plane is accepted.
 - A ServiceAccount that lives in a different project may be granted a role
   targeting a Project in the organization.
+- User and system-group subjects are accepted.
 - Binding a Project that belongs to another organization is denied.
 - Kind-level (resourceKind) targets are denied.
-- User and system-group subjects are denied.
 - A binding created in a namespace other than the organization's namespace
   is denied.
 
@@ -52,8 +53,8 @@ and user webhooks), which would let every denied binding through.
 | 9 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
 | 10 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
 | 11 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
-| 12 | [deny-user-subject](#step-deny-user-subject) | 0 | 1 | 0 | 0 | 0 |
-| 13 | [deny-system-group-subject](#step-deny-system-group-subject) | 0 | 1 | 0 | 0 | 0 |
+| 12 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
+| 13 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
 | 14 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organizations`
@@ -176,25 +177,27 @@ A kind-level (resourceKind) target is denied in organization context
 |:-:|---|:-:|:-:|---|
 | 1 | `create` | 0 | 0 | *No description* |
 
-### Step: `deny-user-subject`
+### Step: `allow-user-subject`
 
-A User subject resolving to a real uid is denied in organization context
-
-#### Try
-
-| # | Operation | Bindings | Outputs | Description |
-|:-:|---|:-:|:-:|---|
-| 1 | `create` | 0 | 0 | *No description* |
-
-### Step: `deny-system-group-subject`
-
-A system group subject is denied in organization context
+A User subject binding targeting a Project in the organization is accepted
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `create` | 0 | 0 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `allow-system-group-subject`
+
+A system group subject binding targeting a Project in the organization is accepted
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `deny-binding-outside-org-namespace`
 

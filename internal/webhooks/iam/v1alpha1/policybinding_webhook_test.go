@@ -230,26 +230,65 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			binding:     projectBinding("project-a"),
 			expectError: false,
 		},
-		"org context denies a user subject": {
-			preObjects:  []client.Object{projectA},
-			ctx:         orgContextRequest(orgA),
-			binding:     projectBinding("project-a"),
-			expectError: true,
-			contains:    "organization-context policybindings may only grant roles to ServiceAccounts",
+		"org context allows a user subject": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*user},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "project-a",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: false,
 		},
-		"org context denies a group subject": {
-			preObjects:  []client.Object{projectA},
-			ctx:         orgContextRequest(orgA),
-			binding:     projectBinding("project-a"),
-			expectError: true,
-			contains:    "may only grant roles to ServiceAccounts",
+		"org context allows a group subject": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*group},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "project-a",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: false,
 		},
-		"org context denies a system group subject": {
-			preObjects:  []client.Object{projectA},
-			ctx:         orgContextRequest(orgA),
-			binding:     projectBinding("project-a"),
-			expectError: true,
-			contains:    "may only grant roles to ServiceAccounts",
+		"org context allows a system group subject": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*systemGroup},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Project",
+							Name:     "project-a",
+							UID:      "project-uid-1",
+						},
+					},
+				},
+			},
+			expectError: false,
 		},
 		"org context denies a project in another org": {
 			preObjects:  []client.Object{projectB},
@@ -379,14 +418,11 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			testBinding := tc.binding
-			// Apply subject overrides per case so table entries stay readable.
+			// Apply target/namespace overrides per case so table entries stay
+			// readable. Subject overrides are no longer needed: subject-kind is
+			// unrestricted in organization context, so each binding carries its
+			// subjects inline.
 			switch name {
-			case "org context denies a user subject":
-				testBinding.Spec.Subjects = []iamv1alpha1.Subject{*user}
-			case "org context denies a group subject":
-				testBinding.Spec.Subjects = []iamv1alpha1.Subject{*group}
-			case "org context denies a system group subject":
-				testBinding.Spec.Subjects = []iamv1alpha1.Subject{*systemGroup}
 			case "org context denies a binding in the wrong namespace":
 				testBinding.Namespace = "default"
 			}
@@ -443,15 +479,14 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			newPB:       saBinding,
 			expectError: false,
 		},
-		"update that swaps in a user subject is denied": {
+		"update that swaps in a user subject is allowed": {
 			oldPB: saBinding,
 			newPB: func() *iamv1alpha1.PolicyBinding {
 				b := saBinding.DeepCopy()
 				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "User", Name: "alice", UID: "user-uid-1"}}
 				return b
 			}(),
-			expectError: true,
-			contains:    "may only grant roles to ServiceAccounts",
+			expectError: false,
 		},
 	}
 

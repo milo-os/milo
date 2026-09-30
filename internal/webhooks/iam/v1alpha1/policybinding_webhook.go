@@ -144,11 +144,6 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 // When the request comes from an organization context (the parent-context
 // extras for an Organization are present in the request user), it enforces:
 //
-//   - Subjects must all be ServiceAccounts: organization holders may attach
-//     roles to the org's service accounts, but not to Users or Groups (either
-//     of which is a route to granting humans). This is what makes an org's
-//     PolicyBindings safe to let service accounts act within the org.
-//
 //   - The resourceSelector must target a Project that belongs to the request
 //     organization: cross-org targets (another Organization, or a Project in
 //     another org) are rejected, closing the cross-tenant privilege escalation
@@ -292,24 +287,6 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
-	// Subjects: only ServiceAccounts may be bound in organization context. An
-	// organization admin may grant a ServiceAccount access to any Project in the
-	// organization, including outside the ServiceAccount's own project's control
-	// plane — for example IAM admin access across the whole org — so there is no
-	// requirement that the ServiceAccount live in the target Project.
-	for i := range pb.Spec.Subjects {
-		subject := &pb.Spec.Subjects[i]
-
-		if subject.Kind != "ServiceAccount" {
-			notSupported := field.NotSupported(
-				field.NewPath("spec", "subjects").Index(i).Child("kind"),
-				subject.Kind,
-				[]string{"ServiceAccount"},
-			)
-			notSupported.Detail = fmt.Sprintf("organization-context policybindings may only grant roles to ServiceAccounts, not to Subject kind %q", subject.Kind)
-			errs = append(errs, notSupported)
-		}
-	}
 
 	if len(errs) > 0 {
 		return nil, errors.NewInvalid(iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(), pb.Name, errs)

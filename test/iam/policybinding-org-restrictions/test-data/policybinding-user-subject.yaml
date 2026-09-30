@@ -9,8 +9,9 @@ spec:
   roleRef:
     name: some-role
     namespace: organization-pb-org-a
-  # A User subject resolving to a real uid is still denied in organization
-  # context: organization holders may only grant roles to ServiceAccounts.
+  # A User subject is allowed in organization context: the org-containment
+  # checks (namespace + in-org Project target) keep the grant inside the org,
+  # so the subject kind is unrestricted.
   subjects:
     - kind: User
       name: pb-user

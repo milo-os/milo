@@ -9,8 +9,9 @@ spec:
   roleRef:
     name: some-role
     namespace: organization-pb-org-a
-  # A system group subject (no backing object, no uid) is also denied in
-  # organization context: such bindings grant all authenticated users.
+  # A system group subject (no backing object, no uid) is allowed in
+  # organization context: the org-containment checks keep the grant inside the
+  # org, so the subject kind is unrestricted.
   subjects:
     - kind: Group
       name: system:authenticated-users

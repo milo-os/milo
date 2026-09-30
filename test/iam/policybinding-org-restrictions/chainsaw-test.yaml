@@ -11,25 +11,26 @@ spec:
     organization control plane, which injects the org's parent context into the
     request user. In that context the webhook enforces:
 
-    - Subjects must all be ServiceAccounts (no Users, no Groups, including
-      system groups, which are paths to granting humans).
     - The target must be a Project that belongs to the request organization,
       referenced as a resourceRef. Kind-level (resourceKind) targets are
       rejected.
-    - ServiceAccounts may be granted roles to any Project in the organization
-      — an organization admin can grant a ServiceAccount access outside of its
-      own project (for example, IAM admin access across the whole org) — so a
-      ServiceAccount is not required to live in the target Project's control
-      plane.
+    - The binding must live in the organization's namespace.
+    - Subjects are unrestricted: an org holder may grant a role to a User,
+      Group, or ServiceAccount. What keeps those grants inside the organization
+      is the namespace and target containment above, not a subject-kind
+      restriction. A ServiceAccount also need not live in the target Project's
+      control plane — an organization admin can grant a ServiceAccount access
+      outside of its own project (for example, IAM admin access across the
+      whole org).
 
     This test verifies:
     - A ServiceAccount bound to a Project within the same organization and
       control plane is accepted.
     - A ServiceAccount that lives in a different project may be granted a role
       targeting a Project in the organization.
+    - User and system-group subjects are accepted.
     - Binding a Project that belongs to another organization is denied.
     - Kind-level (resourceKind) targets are denied.
-    - User and system-group subjects are denied.
     - A binding created in a namespace other than the organization's namespace
       is denied.
 
@@ -216,27 +217,35 @@ spec:
                 ($error != null): true
                 (contains($error, 'resourceKind')): true
 
-    - name: deny-user-subject
-      description: A User subject resolving to a real uid is denied in organization context
+    - name: allow-user-subject
+      description: A User subject binding targeting a Project in the organization is accepted
       cluster: orgAUser
       try:
-        - create:
+        - apply:
             file: test-data/policybinding-user-subject.yaml
-            expect:
-            - check:
-                ($error != null): true
-                (contains($error, 'may only grant roles to ServiceAccounts')): true
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: PolicyBinding
+              metadata:
+                name: pb-user-subject
+                namespace: organization-pb-org-a
 
-    - name: deny-system-group-subject
-      description: A system group subject is denied in organization context
+    - name: allow-system-group-subject
+      description: A system group subject binding targeting a Project in the organization is accepted
       cluster: orgAUser
       try:
-        - create:
+        - apply:
             file: test-data/policybinding-system-group-subject.yaml
-            expect:
-            - check:
-                ($error != null): true
-                (contains($error, 'may only grant roles to ServiceAccounts')): true
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: PolicyBinding
+              metadata:
+                name: pb-system-group-subject
+                namespace: organization-pb-org-a
 
     - name: deny-binding-outside-org-namespace
       description: A binding created outside the organization's namespace is denied
