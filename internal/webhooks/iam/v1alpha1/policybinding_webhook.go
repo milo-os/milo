@@ -38,7 +38,7 @@ func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager, assignableRolesName
 
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users;groups;serviceaccounts;roles,verbs=get;list;watch
 
-// +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-policybinding,mutating=false,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=policybindings,verbs=create;update,versions=v1alpha1,name=vpolicybinding.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
+// +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-policybinding,mutating=false,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=policybindings,verbs=create;update;delete,versions=v1alpha1,name=vpolicybinding.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects,verbs=get
 

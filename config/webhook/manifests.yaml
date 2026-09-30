@@ -410,6 +410,7 @@ webhooks:
     operations:
     - CREATE
     - UPDATE
+    - DELETE
     resources:
     - policybindings
   sideEffects: None
