@@ -144,12 +144,13 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 // When the request comes from an organization context (the parent-context
 // extras for an Organization are present in the request user), it enforces:
 //
-//   - The resourceSelector must target a Project that belongs to the request
-//     organization: cross-org targets (another Organization, or a Project in
-//     another org) are rejected, closing the cross-tenant privilege escalation
-//     where an org holder could bind a role to any other org's resources.
-//     Kind-level (resourceKind / Root) targets are rejected too, since they
-//     grant at a scope wider than the org.
+//   - The resourceSelector must stay inside the request organization. It may
+//     target either the Organization itself (an organization-wide grant), or a
+//     Project within it. Cross-org targets (the Organization by another name, or
+//     a Project in another org) are rejected, closing the cross-tenant privilege
+//     escalation where an org holder could bind a role to any other org's
+//     resources. Kind-level (resourceKind / Root) targets are rejected too,
+//     since they grant at a scope wider than the org.
 //
 //   - The binding's namespace must match the organization's namespace.
 //
@@ -244,49 +245,73 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
-	// Target: only a Project within the request organization may be referenced.
+	// Target: the grant must stay inside the request organization. It may
+	// reference the Organization itself (an organization-wide grant) or a
+	// Project within it, but nothing in another organization and no kind-level
+	// selector.
 	selector := pb.Spec.ResourceSelector
 	switch {
 	case selector.ResourceRef != nil:
 		ref := selector.ResourceRef
-		if ref.APIGroup != resourcemanagerv1alpha1.GroupVersion.Group || ref.Kind != "Project" {
+		if ref.APIGroup != resourcemanagerv1alpha1.GroupVersion.Group {
 			errs = append(errs, field.NotSupported(
-				field.NewPath("spec", "resourceSelector", "resourceRef", "kind"),
-				ref.Kind,
-				[]string{fmt.Sprintf("%s Project", resourcemanagerv1alpha1.GroupVersion.Group)},
+				field.NewPath("spec", "resourceSelector", "resourceRef", "apiGroup"),
+				ref.APIGroup,
+				[]string{resourcemanagerv1alpha1.GroupVersion.Group},
 			))
 			break
 		}
 
-		project := &resourcemanagerv1alpha1.Project{}
-		if err := v.client.Get(ctx, client.ObjectKey{Name: ref.Name}, project); err != nil {
-			if errors.IsNotFound(err) {
-				errs = append(errs, field.NotFound(
+		switch ref.Kind {
+		case "Project":
+			// A specific Project: it must belong to the request organization.
+			project := &resourcemanagerv1alpha1.Project{}
+			if err := v.client.Get(ctx, client.ObjectKey{Name: ref.Name}, project); err != nil {
+				if errors.IsNotFound(err) {
+					errs = append(errs, field.NotFound(
+						field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
+						ref.Name,
+					))
+				} else {
+					errs = append(errs, field.InternalError(
+						field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
+						fmt.Errorf("failed to get project %q: %w", ref.Name, err),
+					))
+				}
+				break
+			}
+
+			if project.Labels[resourcemanagerv1alpha1.OrganizationNameLabel] != orgID {
+				errs = append(errs, field.Forbidden(
 					field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
-					ref.Name,
-				))
-			} else {
-				errs = append(errs, field.InternalError(
-					field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
-					fmt.Errorf("failed to get project %q: %w", ref.Name, err),
+					fmt.Sprintf("project %q does not belong to organization %q", ref.Name, orgID),
 				))
 			}
-			break
-		}
-
-		if project.Labels[resourcemanagerv1alpha1.OrganizationNameLabel] != orgID {
-			errs = append(errs, field.Forbidden(
-				field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
-				fmt.Sprintf("project %q does not belong to organization %q", ref.Name, orgID),
+		case "Organization":
+			// An organization-wide grant: the referenced organization must be
+			// the request organization itself.
+			if ref.Name != orgID {
+				errs = append(errs, field.Forbidden(
+					field.NewPath("spec", "resourceSelector", "resourceRef", "name"),
+					fmt.Sprintf("organization %q does not match the request organization %q", ref.Name, orgID),
+				))
+			}
+		default:
+			errs = append(errs, field.NotSupported(
+				field.NewPath("spec", "resourceSelector", "resourceRef", "kind"),
+				ref.Kind,
+				[]string{
+					fmt.Sprintf("%s Project", resourcemanagerv1alpha1.GroupVersion.Group),
+					fmt.Sprintf("%s Organization", resourcemanagerv1alpha1.GroupVersion.Group),
+				},
 			))
 		}
 	case selector.ResourceKind != nil:
 		errs = append(errs, field.Forbidden(
 			field.NewPath("spec", "resourceSelector", "resourceKind"),
-			"resourceKind (kind-level) targets are not allowed in organization context; bind to a specific Project instead",
+			"resourceKind (kind-level) targets are not allowed in organization context; bind to a specific Project or the Organization instead",
 		))
 	}
-
 
 	if len(errs) > 0 {
 		return nil, errors.NewInvalid(iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(), pb.Name, errs)

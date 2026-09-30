@@ -24,6 +24,8 @@ This test verifies:
   control plane is accepted.
 - A ServiceAccount that lives in a different project may be granted a role
   targeting a Project in the organization.
+- An organization-wide grant (targeting the request organization) is
+  accepted; one targeting another organization is denied.
 - User and system-group subjects are accepted.
 - Binding a Project that belongs to another organization is denied.
 - Kind-level (resourceKind) targets are denied.
@@ -53,9 +55,11 @@ and user webhooks), which would let every denied binding through.
 | 9 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
 | 10 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
 | 11 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
-| 12 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
-| 13 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
-| 14 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 12 | [allow-org-wide-grant](#step-allow-org-wide-grant) | 0 | 2 | 0 | 0 | 0 |
+| 13 | [deny-cross-org-wide-grant](#step-deny-cross-org-wide-grant) | 0 | 1 | 0 | 0 | 0 |
+| 14 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
+| 15 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
+| 16 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organizations`
 
@@ -170,6 +174,27 @@ A ServiceAccount that lives in a different project may be granted a role targeti
 ### Step: `deny-resourcekind-target`
 
 A kind-level (resourceKind) target is denied in organization context
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
+
+### Step: `allow-org-wide-grant`
+
+An organization-wide grant to the request organization is accepted
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `deny-cross-org-wide-grant`
+
+An organization-wide grant to another organization is denied
 
 #### Try
 

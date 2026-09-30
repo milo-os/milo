@@ -310,7 +310,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			expectError: true,
 			contains:    "does not belong to organization",
 		},
-		"org context denies an organization target": {
+		"org context allows an organization-wide grant to the request organization": {
 			preObjects: []client.Object{projectA},
 			ctx:        orgContextRequest(orgA),
 			binding: &iamv1alpha1.PolicyBinding{
@@ -328,8 +328,27 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 					},
 				},
 			},
+			expectError: false,
+		},
+		"org context denies an organization-wide grant to another organization": {
+			ctx: orgContextRequest(orgA),
+			binding: &iamv1alpha1.PolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
+				Spec: iamv1alpha1.PolicyBindingSpec{
+					RoleRef:  iamv1alpha1.RoleReference{Name: "viewer"},
+					Subjects: []iamv1alpha1.Subject{*sa},
+					ResourceSelector: iamv1alpha1.ResourceSelector{
+						ResourceRef: &iamv1alpha1.ResourceReference{
+							APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+							Kind:     "Organization",
+							Name:     orgB,
+							UID:      "org-uid-2",
+						},
+					},
+				},
+			},
 			expectError: true,
-			contains:    "Unsupported value",
+			contains:    "does not match the request organization",
 		},
 		"org context denies a resourceKind target": {
 			ctx: orgContextRequest(orgA),
@@ -487,6 +506,35 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 				return b
 			}(),
 			expectError: false,
+		},
+		"update that retargets to an organization-wide grant in the request org is allowed": {
+			oldPB: saBinding,
+			newPB: func() *iamv1alpha1.PolicyBinding {
+				b := saBinding.DeepCopy()
+				b.Spec.ResourceSelector.ResourceRef = &iamv1alpha1.ResourceReference{
+					APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+					Kind:     "Organization",
+					Name:     orgA,
+					UID:      "org-uid-1",
+				}
+				return b
+			}(),
+			expectError: false,
+		},
+		"update that retargets to an organization-wide grant in another org is denied": {
+			oldPB: saBinding,
+			newPB: func() *iamv1alpha1.PolicyBinding {
+				b := saBinding.DeepCopy()
+				b.Spec.ResourceSelector.ResourceRef = &iamv1alpha1.ResourceReference{
+					APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+					Kind:     "Organization",
+					Name:     "globex",
+					UID:      "org-uid-2",
+				}
+				return b
+			}(),
+			expectError: true,
+			contains:    "does not match the request organization",
 		},
 	}
 
