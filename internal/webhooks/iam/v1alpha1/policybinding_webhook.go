@@ -152,7 +152,10 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 //     resources. Kind-level (resourceKind / Root) targets are rejected too,
 //     since they grant at a scope wider than the org.
 //
-//   - The binding's namespace must match the organization's namespace.
+//   - The binding's namespace must match the organization's namespace. On
+//     create and update this is checked alongside the target; on delete it is
+//     the only check, since a binding reachable in the org's namespace was
+//     already constrained to the organization at create/update time.
 //
 // A ServiceAccount subject is not required to live in the target Project's
 // control plane: an organization admin may grant a ServiceAccount access
@@ -181,23 +184,54 @@ func (v *PolicyBindingValidator) ValidateUpdate(ctx context.Context, oldPB, newP
 }
 
 func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
+	orgID, isOrgContext, err := v.orgContextFromRequest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !isOrgContext {
+		return nil, nil
+	}
+
+	// A binding may only be deleted from its own organization's namespace. The
+	// bindings that live there were already constrained to the organization at
+	// create/update time, so this single check is enough to stop an org holder
+	// from deleting a binding in another organization's namespace.
+	if pb.Namespace != resourcemanagerv1alpha1.OrganizationNamespace(orgID) {
+		return nil, errors.NewInvalid(iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(), pb.Name, field.ErrorList{
+			field.Forbidden(
+				field.NewPath("metadata", "namespace"),
+				fmt.Sprintf("policybindings in organization scope may only be deleted from the organization's namespace %q", resourcemanagerv1alpha1.OrganizationNamespace(orgID)),
+			),
+		})
+	}
+
 	return nil, nil
 }
 
-// validateOrgContextRestrictions applies the organization-context restrictions
-// to a PolicyBinding. When the request is not made in an organization context it
-// returns nil, nil so platform-scope and internal-controller bindings pass
-// through unchanged.
-func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
+// orgContextFromRequest extracts the request organization id when the request
+// is made in the organization context this webhook guards.
+//
+// It returns:
+//   - (orgID, true, nil) when the request carries the parent-context extras
+//     injected by OrganizationContextAuthorizationDecorator for an
+//     Organization (the org scope this webhook guards).
+//   - ("", false, nil) when the request is not in that context (platform scope,
+//     an internal controller, a different scope, or system:masters, which
+//     bypasses the platform validation), so callers pass the object through
+//     unchanged.
+//   - ("", false, err) on webhook-infrastructure failures (a missing admission
+//     request or malformed parent extras), which callers surface as an internal
+//     error rather than a validation denial.
+func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (string, bool, error) {
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		// A missing admission request indicates a webhook-infrastructure
 		// failure, not a validation failure: surface it as an internal error
 		// (reason InternalError, HTTP 500) rather than a Forbidden denial.
-		return nil, errors.NewInternalError(fmt.Errorf("failed to get request from context: %w", err))
+		return "", false, errors.NewInternalError(fmt.Errorf("failed to get request from context: %w", err))
 	}
 
-	// Superusers may create PolicyBindings in organization context without the
+	// Superusers may use PolicyBindings in organization context without the
 	// org-restrictions, mirroring the organization and user webhooks
 	// (system:masters bypasses platform validation). This lets the system
 	// itself route a binding through an org control plane when needed. Internal
@@ -205,7 +239,7 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	// already bypass the restrictions via the early return below; this bypass
 	// covers the org-scoped superuser path explicitly.
 	if slices.Contains(req.UserInfo.Groups, "system:masters") {
-		return nil, nil
+		return "", false, nil
 	}
 
 	// Determine whether this is an organization-scoped request by looking for
@@ -217,20 +251,34 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	if !parentNameOk || !parentKindOk || !parentAPIGroupOk {
 		// Not an org-scoped request (e.g. platform scope or an internal
 		// controller). No organization restrictions apply.
-		return nil, nil
+		return "", false, nil
 	}
 
 	if len(parentKind) != 1 || len(parentName) != 1 || len(parentAPIGroup) != 1 {
-		return nil, errors.NewInternalError(fmt.Errorf("request context has malformed parent information"))
+		return "", false, errors.NewInternalError(fmt.Errorf("request context has malformed parent information"))
 	}
 
 	if parentKind[0] != "Organization" || parentAPIGroup[0] != resourcemanagerv1alpha1.GroupVersion.Group {
 		// A different scope (e.g. the future project control plane). Not the
 		// org context this webhook guards.
-		return nil, nil
+		return "", false, nil
 	}
 
-	orgID := parentName[0]
+	return parentName[0], true, nil
+}
+
+// validateOrgContextRestrictions applies the organization-context restrictions
+// to a PolicyBinding. When the request is not made in an organization context it
+// returns nil, nil so platform-scope and internal-controller bindings pass
+// through unchanged.
+func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
+	orgID, isOrgContext, err := v.orgContextFromRequest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !isOrgContext {
+		return nil, nil
+	}
 
 	var errs field.ErrorList
 

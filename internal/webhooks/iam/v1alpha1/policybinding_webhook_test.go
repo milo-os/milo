@@ -554,3 +554,80 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyBindingValidator_ValidateDelete(t *testing.T) {
+	orgA := "acme"
+
+	bindingIn := func(namespace string) *iamv1alpha1.PolicyBinding {
+		return &iamv1alpha1.PolicyBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: namespace},
+			Spec: iamv1alpha1.PolicyBindingSpec{
+				RoleRef: iamv1alpha1.RoleReference{Name: "viewer"},
+				Subjects: []iamv1alpha1.Subject{
+					{Kind: "ServiceAccount", Name: "robot", UID: "sa-uid-1"},
+				},
+				ResourceSelector: iamv1alpha1.ResourceSelector{
+					ResourceRef: &iamv1alpha1.ResourceReference{
+						APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+						Kind:     "Project",
+						Name:     "project-a",
+						UID:      "project-uid-1",
+					},
+				},
+			},
+		}
+	}
+
+	tests := map[string]struct {
+		ctx         context.Context
+		binding     *iamv1alpha1.PolicyBinding
+		expectError bool
+		contains    string
+	}{
+		"org context can delete a binding in the organization's namespace": {
+			ctx:         orgContextRequest(orgA),
+			binding:     bindingIn(resourcemanagerv1alpha1.OrganizationNamespace(orgA)),
+			expectError: false,
+		},
+		"org context cannot delete a binding in another namespace": {
+			ctx:         orgContextRequest(orgA),
+			binding:     bindingIn("default"),
+			expectError: true,
+			contains:    "may only be deleted from the organization's namespace",
+		},
+		"org context cannot delete a binding in another organization's namespace": {
+			ctx:         orgContextRequest(orgA),
+			binding:     bindingIn(resourcemanagerv1alpha1.OrganizationNamespace("globex")),
+			expectError: true,
+			contains:    "may only be deleted from the organization's namespace",
+		},
+		"not in org context can delete a binding in any namespace": {
+			ctx: admission.NewContextWithRequest(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{},
+			}),
+			binding:     bindingIn("default"),
+			expectError: false,
+		},
+		"system:masters in org context bypasses the deletion restriction": {
+			ctx:         orgContextSuperuserRequest(orgA),
+			binding:     bindingIn("default"),
+			expectError: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).Build()
+			validator := &PolicyBindingValidator{client: cl}
+
+			_, err := validator.ValidateDelete(tc.ctx, tc.binding)
+
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.contains)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
