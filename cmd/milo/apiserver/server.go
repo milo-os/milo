@@ -87,6 +87,7 @@ var (
 	eventsProviderRetries                int
 	eventsForwardExtras                  []string
 	sharedETCDClientPoolSize             int
+	projectNamespaceBootstrapTimeout     time.Duration
 )
 
 // NewCommand creates a *cobra.Command object with default parameters
@@ -212,6 +213,7 @@ func NewCommand() *cobra.Command {
 	fs.IntVar(&eventsProviderRetries, "events-provider-retries", 3, "Activity provider request retries")
 	fs.StringSliceVar(&eventsForwardExtras, "events-forward-extras", []string{"iam.miloapis.com/parent-api-group", "iam.miloapis.com/parent-type", "iam.miloapis.com/parent-name"}, "User extras keys to forward to Activity for events")
 	fs.IntVar(&sharedETCDClientPoolSize, "shared-etcd-client-pool-size", 32, "Number of etcd client connections opened per transport and round-robined across all project control plane watch caches. Higher values spread watch progress traffic across more gRPC streams at the cost of more connections. Minimum 1.")
+	fs.DurationVar(&projectNamespaceBootstrapTimeout, "project-namespace-bootstrap-timeout", projectstorage.DefaultNamespaceBootstrapTimeout, "Maximum time to wait for the milo-system namespace to be ensured in a project control plane on first use. Requests for that project wait at most this long; other projects are never blocked.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
@@ -327,13 +329,13 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 
-	loopbackConfig := config.ControlPlane.Generic.LoopbackClientConfig
+	bootstrapper := projectstorage.NewNamespaceBootstrapper(config.ControlPlane.Generic.LoopbackClientConfig, projectNamespaceBootstrapTimeout)
 
 	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.GenericConfig.RESTOptionsGetter, loopbackConfig)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, bootstrapper)
 
 	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, loopbackConfig)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, bootstrapper)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
