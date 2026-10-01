@@ -160,7 +160,8 @@ spec:
                     namespace:
                       description: |-
                         Namespace of the referenced object.
-                        If not specified for a Group, User or ServiceAccount, it is ignored.
+                        Required for a non-system Group (which is namespaced); ignored for the
+                        cluster-scoped User and ServiceAccount subjects.
                       type: string
                     uid:
                       description: UID of the referenced object. Optional for system
@@ -172,9 +173,11 @@ spec:
                   type: object
                   x-kubernetes-validations:
                   - message: UID is required for all subjects except system groups
-                      (groups with names starting with 'system:')
+                      (groups with names starting with 'system:'); a non-system Group
+                      subject must also specify its namespace
                     rule: (self.kind == 'Group' && has(self.name) && self.name.startsWith('system:'))
-                      || (has(self.uid) && size(self.uid) > 0)
+                      || (has(self.uid) && size(self.uid) > 0 && (self.kind != 'Group'
+                      || (has(self.namespace) && size(self.namespace) > 0)))
                 minItems: 1
                 type: array
             required:

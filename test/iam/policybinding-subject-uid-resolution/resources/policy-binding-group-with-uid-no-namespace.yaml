@@ -1,0 +1,21 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: group-with-uid-no-namespace-binding
+  namespace: ($namespace)
+spec:
+  roleRef:
+    name: resolve-me-role
+    namespace: ($namespace)
+  # The Group subject carries a uid but no namespace. A non-system Group is
+  # namespaced, so the validating CEL rule on the Subject must reject it:
+  # without its namespace the binding would be stored yet never grant the
+  # role (the authorization provider cannot look the Group up).
+  subjects:
+    - kind: Group
+      name: resolve-me-group
+      uid: 11111111-2222-3333-4444-555555555555
+  resourceSelector:
+    resourceKind:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization

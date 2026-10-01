@@ -78,6 +78,12 @@ func TestPolicyBindingMutator_Default(t *testing.T) {
 				assert.Empty(t, s[0].UID)
 			},
 		},
+		"leaves a namespaced group with an already-set uid untouched": {
+			subjects: []iamv1alpha1.Subject{{Kind: "Group", Name: "loaders", Namespace: "organization-acme", UID: "preset-uid"}},
+			assertUID: func(t *testing.T, s []iamv1alpha1.Subject) {
+				assert.Equal(t, "preset-uid", s[0].UID)
+			},
+		},
 		"resolves multiple subjects": {
 			preObjects: []client.Object{user, group},
 			subjects: []iamv1alpha1.Subject{
