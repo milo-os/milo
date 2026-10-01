@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -76,6 +78,8 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 		projectRestConfig: opts.ProjectRestConfig,
 		projects:          map[string]cluster.Cluster{},
 		cancelFns:         map[string]context.CancelFunc{},
+		snapshotReader:    localMgr.GetCache(),
+		waitForCacheSync:  localMgr.GetCache().WaitForCacheSync,
 	}
 
 	if p.projectRestConfig == nil {
@@ -138,6 +142,37 @@ type Provider struct {
 	projects  map[string]cluster.Cluster
 	cancelFns map[string]context.CancelFunc
 	indexers  []index
+
+	snapshotReader   client.Reader
+	waitForCacheSync func(context.Context) bool
+
+	initialSync initialSync
+}
+
+type initialSync struct {
+	synced atomic.Bool
+
+	mu            sync.Mutex
+	startedAt     time.Time
+	snapshotTaken bool
+	snapshotSize  int
+	processed     map[string]struct{}
+	pending       map[string]struct{}
+}
+
+// HasSynced reports whether every project in the provider's initial project
+// list has been processed once. A project counts as processed once it is
+// engaged, found not Ready, found deleted, fails registration, or fails its
+// Get. Failures still return an error so the controller retries them. Projects
+// created after the initial list do not hold readiness back. Once true, it
+// stays true for the life of the provider.
+//
+// HasSynced stays false until Start runs. When multicluster-runtime's manager
+// wires Start itself, it runs as a leader-only runnable, so on a replica that
+// is not the leader HasSynced stays false unless Start is wired through
+// EngageAlways. Consumers should only consult it where their controllers run.
+func (p *Provider) HasSynced() bool {
+	return p.initialSync.synced.Load()
 }
 
 // Get returns the cluster with the given name, if it is known.
@@ -148,7 +183,7 @@ func (p *Provider) Get(_ context.Context, clusterName multicluster.ClusterName) 
 		return cl, nil
 	}
 
-	return nil, fmt.Errorf("cluster %s not found", clusterName)
+	return nil, fmt.Errorf("cluster %s: %w", clusterName, multicluster.ErrClusterNotFound)
 }
 
 // Start implements multicluster.ProviderRunnable and blocks until ctx is cancelled.
@@ -158,6 +193,12 @@ func (p *Provider) Start(ctx context.Context, aware multicluster.Aware) error {
 	p.lock.Lock()
 	p.mcMgr = aware
 	p.lock.Unlock()
+
+	p.markStarted(time.Now())
+
+	if err := p.takeInitialSnapshot(ctx); err != nil {
+		return err
+	}
 
 	<-ctx.Done()
 
@@ -189,11 +230,13 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 				log.Info("Removing previously registered cluster for project", "key", key)
 			}
 			p.disengageProject(key)
+			p.markProcessed(key)
 
 			return ctrl.Result{}, nil
 		}
 
 		log.Error(err, "Failed to get project, will retry", "key", key)
+		p.markProcessed(key)
 		return ctrl.Result{}, fmt.Errorf("failed to get project: %w", err)
 	}
 
@@ -208,6 +251,8 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 		log.Info("Multicluster manager not yet started, requeueing", "key", key)
 		return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 	}
+
+	defer p.markProcessed(key)
 
 	// ready and provisioned?
 	conditions, err := extractUnstructuredConditions(project.Object)
@@ -325,6 +370,126 @@ func (p *Provider) disengageProject(key string) {
 		delete(p.cancelFns, key)
 	}
 	delete(p.projects, key)
+}
+
+func (p *Provider) markStarted(now time.Time) {
+	p.initialSync.mu.Lock()
+	defer p.initialSync.mu.Unlock()
+	if p.initialSync.startedAt.IsZero() {
+		p.initialSync.startedAt = now
+	}
+}
+
+func (p *Provider) takeInitialSnapshot(ctx context.Context) error {
+	if p.waitForCacheSync != nil && !p.waitForCacheSync(ctx) {
+		return ctx.Err()
+	}
+
+	var names []string
+	attempts := 0
+	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		attempts++
+		listed, err := p.listProjectNames(ctx)
+		if err != nil {
+			p.log.Error(err, "Failed to list projects for initial sync, will retry", "attempt", attempts)
+			return false, nil
+		}
+		names = listed
+		return true, nil
+	})
+	if err != nil {
+		return ctx.Err()
+	}
+
+	p.recordSnapshot(names)
+	return nil
+}
+
+func (p *Provider) listProjectNames(ctx context.Context) ([]string, error) {
+	var list unstructured.UnstructuredList
+	if p.opts.InternalServiceDiscovery {
+		list.SetGroupVersionKind(projectControlPlaneGVK.GroupVersion().WithKind(projectControlPlaneGVK.Kind + "List"))
+	} else {
+		list.SetGroupVersionKind(projectGVK.GroupVersion().WithKind(projectGVK.Kind + "List"))
+	}
+
+	var listOpts []client.ListOption
+	if p.opts.LabelSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(p.opts.LabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create selector from label selector: %w", err)
+		}
+		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
+	}
+
+	if err := p.snapshotReader.List(ctx, &list, listOpts...); err != nil {
+		return nil, fmt.Errorf("failed to list projects: %w", err)
+	}
+
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		names = append(names, list.Items[i].GetName())
+	}
+	return names, nil
+}
+
+func (p *Provider) recordSnapshot(names []string) {
+	s := &p.initialSync
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapshotTaken {
+		return
+	}
+
+	snapshot := make(map[string]struct{}, len(names))
+	s.pending = make(map[string]struct{}, len(names))
+	for _, name := range names {
+		snapshot[name] = struct{}{}
+		if _, done := s.processed[name]; !done {
+			s.pending[name] = struct{}{}
+		}
+	}
+	s.snapshotTaken = true
+	s.snapshotSize = len(snapshot)
+	s.processed = nil
+
+	p.completeIfDoneLocked()
+}
+
+func (p *Provider) markProcessed(key string) {
+	s := &p.initialSync
+	if s.synced.Load() {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.snapshotTaken {
+		if s.processed == nil {
+			s.processed = map[string]struct{}{}
+		}
+		s.processed[key] = struct{}{}
+		return
+	}
+
+	delete(s.pending, key)
+	p.completeIfDoneLocked()
+}
+
+func (p *Provider) completeIfDoneLocked() {
+	s := &p.initialSync
+	if len(s.pending) > 0 || s.synced.Load() {
+		return
+	}
+
+	s.pending = nil
+	s.synced.Store(true)
+
+	var elapsed time.Duration
+	if !s.startedAt.IsZero() {
+		elapsed = time.Since(s.startedAt)
+	}
+	p.log.Info("Initial project sync complete", "projects", s.snapshotSize, "elapsed", elapsed.String())
 }
 
 func (p *Provider) IndexField(ctx context.Context, obj client.Object, field string, extractValue client.IndexerFunc) error {
