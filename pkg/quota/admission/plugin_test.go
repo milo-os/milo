@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/apis/audit"
+	auditctx "k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
@@ -960,23 +961,27 @@ func TestClaimWaitScenarios(t *testing.T) {
 		claimBehavior string
 		expectError   bool
 		errorSubstr   string
+		outcome       string
 	}{
 		{
 			name:          "claim granted",
 			claimBehavior: "granted",
 			expectError:   false,
+			outcome:       "granted",
 		},
 		{
 			name:          "claim denied",
 			claimBehavior: "denied",
 			expectError:   true,
 			errorSubstr:   "You've reached your quota for this resource type",
+			outcome:       "denied",
 		},
 		{
 			name:          "claim timeout",
 			claimBehavior: "timeout",
 			expectError:   true,
 			errorSubstr:   "Your request took too long",
+			outcome:       "timeout",
 		},
 	}
 
@@ -1105,7 +1110,8 @@ func TestClaimWaitScenarios(t *testing.T) {
 				dryRun: false,
 			}
 
-			err = plugin.Validate(context.Background(), attrs, nil)
+			ctx := auditctx.WithAuditContext(context.Background())
+			err = plugin.Validate(ctx, attrs, nil)
 
 			if tt.expectError {
 				if err == nil {
@@ -1117,6 +1123,11 @@ func TestClaimWaitScenarios(t *testing.T) {
 				if err != nil {
 					t.Errorf("Unexpected error: %v", err)
 				}
+			}
+
+			got, ok := auditctx.AuditContextFrom(ctx).GetEventAnnotation(OutcomeAuditAnnotation)
+			if !ok || got != tt.outcome {
+				t.Errorf("Expected audit annotation %s=%q, got %q (present=%v)", OutcomeAuditAnnotation, tt.outcome, got, ok)
 			}
 		})
 	}
