@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/initializer"
+	"k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/apiserver/pkg/warning"
@@ -36,6 +37,12 @@ import (
 const (
 	// PluginName is the name of the admission plugin.
 	PluginName = "ResourceQuotaEnforcement"
+
+	// OutcomeAuditAnnotation records the quota decision on the request's audit
+	// event: "granted", or the failure label from admissionOutcomeFor (e.g.
+	// "denied" when the consumer has reached its quota). Activity policies
+	// match on it instead of the user-facing error text, which can change.
+	OutcomeAuditAnnotation = "quota.miloapis.com/outcome"
 
 	// ClaimWaitTimeout is the maximum time to wait for a ResourceClaim to be granted
 	ClaimWaitTimeout = 30 * time.Second
@@ -550,6 +557,7 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 		}
 
 		outcome := admissionOutcomeFor(failure.kind)
+		audit.AddAuditAnnotation(ctx, OutcomeAuditAnnotation, outcome)
 		admissionResultTotal.WithLabelValues(outcome, policy.Name, policy.Namespace,
 			evalContext.GVK.Group, evalContext.GVK.Kind).Inc()
 
@@ -568,6 +576,7 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 	}
 
 	// Record granted admission decision with full context
+	audit.AddAuditAnnotation(ctx, OutcomeAuditAnnotation, "granted")
 	admissionResultTotal.WithLabelValues("granted", policy.Name, policy.Namespace,
 		evalContext.GVK.Group, evalContext.GVK.Kind).Inc()
 
