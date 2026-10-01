@@ -25,21 +25,21 @@ spec:
 
   auditRules:
     - name: create-with-userref
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef) && has(audit.requestObject.spec.groupRef)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef) && has(audit.requestObject.spec.groupRef) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} added {{ audit.requestObject.spec.userRef.name }} to group {{ audit.requestObject.spec.groupRef.name }}"
 
     - name: create-fallback
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} added a member to the group"
 
     - name: delete-with-userref
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.userRef) && has(audit.responseObject.spec.groupRef)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.userRef) && has(audit.responseObject.spec.groupRef) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} removed {{ audit.responseObject.spec.userRef.name }} from group {{ audit.responseObject.spec.groupRef.name }}"
 
     - name: delete-fallback
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} removed a member from the group"
 
     - name: update
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} updated group membership {{ link(audit.objectRef.name, audit.objectRef) }}"
