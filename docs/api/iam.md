@@ -1860,6 +1860,18 @@ parent to the resource. Permissions may be bound to a parent resource so
 they can be inherited down the resource hierarchy.<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b><a href="#protectedresourcespecsubresourcesindex">subresources</a></b></td>
+        <td>[]object</td>
+        <td>
+          Subresources declares permissions for individual subresources, such as status.
+With subresource authorization enabled in the authorization provider, these
+permissions are independent of the resource's Permissions. Permission names
+have the form service/resource/subresource.verb, using ServiceRef.Name and
+Plural for service and resource. Without that feature enabled, authorization
+continues to use the base resource's permissions.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -1923,6 +1935,44 @@ If APIGroup is not specified, the specified Kind must be in the core API group.
 For any other third-party types, APIGroup is required.<br/>
         </td>
         <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProtectedResource.spec.subresources[index]
+<sup><sup>[↩ Parent](#protectedresourcespec)</sup></sup>
+
+
+
+SubresourceDefinition declares the verbs available on one resource subresource.
+A subresource shares the owning resource's identity and parent hierarchy.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name is a single subresource name, such as status or scale.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>permissions</b></td>
+        <td>[]string</td>
+        <td>
+          Permissions lists the verbs supported by this subresource. Each verb is
+granted separately: patch does not imply update, and update does not imply
+patch. For example, status with the patch verb defines the permission
+service/resource/status.patch.<br/>
+        </td>
+        <td>true</td>
       </tr></tbody>
 </table>
 
@@ -2127,8 +2177,12 @@ Alpha, Beta, Stable, Deprecated.<br/>
         <td>[]string</td>
         <td>
           The names of the permissions this role grants when bound in an IAM policy.
-All permissions must be in the format: `{service}.{resource}.{action}`
-(e.g. compute.workloads.create).<br/>
+Permissions use the format service/resource.verb, for example
+compute.example.com/workloads.create. When subresource authorization is
+enabled in the authorization provider, registered subresource permissions
+use service/resource/subresource.verb, for example
+compute.example.com/workloads/status.patch. Subresource verbs are granted
+independently of base resource verbs; patch and update are distinct.<br/>
         </td>
         <td>false</td>
       </tr><tr>
