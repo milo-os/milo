@@ -102,6 +102,45 @@ spec:
                   The singular form for the resource type, e.g. 'workload'. Must follow
                   camelCase format.
                 type: string
+              subresources:
+                description: |-
+                  Subresources declares permissions for individual subresources, such as status.
+                  With subresource authorization enabled in the authorization provider, these
+                  permissions are independent of the resource's Permissions. Permission names
+                  have the form service/resource/subresource.verb, using ServiceRef.Name and
+                  Plural for service and resource. Without that feature enabled, authorization
+                  continues to use the base resource's permissions.
+                items:
+                  description: |-
+                    SubresourceDefinition declares the verbs available on one resource subresource.
+                    A subresource shares the owning resource's identity and parent hierarchy.
+                  properties:
+                    name:
+                      description: Name is a single subresource name, such as status
+                        or scale.
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    permissions:
+                      description: |-
+                        Permissions lists the verbs supported by this subresource. Each verb is
+                        granted separately: patch does not imply update, and update does not imply
+                        patch. For example, status with the patch verb defines the permission
+                        service/resource/status.patch.
+                      items:
+                        pattern: ^[a-z][a-z0-9-]*$
+                        type: string
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - name
+                  - permissions
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             required:
             - kind
             - permissions
