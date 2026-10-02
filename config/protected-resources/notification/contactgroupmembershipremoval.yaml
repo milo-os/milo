@@ -8,6 +8,12 @@ spec:
   kind: ContactGroupMembershipRemoval
   plural: contactgroupmembershipremovals
   singular: contactgroupmembershipremoval
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

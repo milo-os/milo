@@ -8,6 +8,12 @@ spec:
   kind: EmailTemplate
   plural: emailtemplates
   singular: emailtemplate
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

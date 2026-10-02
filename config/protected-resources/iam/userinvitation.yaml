@@ -8,6 +8,12 @@ spec:
   kind: UserInvitation
   plural: userinvitations
   singular: userinvitation
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get
