@@ -8,6 +8,12 @@ spec:
   kind: ResourceClaim
   plural: resourceclaims
   singular: resourceclaim
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

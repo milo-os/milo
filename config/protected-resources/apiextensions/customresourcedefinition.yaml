@@ -8,6 +8,12 @@ spec:
   kind: CustomResourceDefinition
   plural: customresourcedefinitions
   singular: customresourcedefinition
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

@@ -8,6 +8,12 @@ spec:
   kind: User
   plural: users
   singular: user
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

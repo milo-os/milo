@@ -8,6 +8,12 @@ spec:
   kind: Email
   plural: emails
   singular: email
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

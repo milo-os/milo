@@ -8,6 +8,12 @@ spec:
   kind: PlatformAccess
   plural: platformaccesses
   singular: platformaccess
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

@@ -8,6 +8,12 @@ spec:
   kind: Note
   plural: notes
   singular: note
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

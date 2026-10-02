@@ -8,6 +8,12 @@ spec:
   kind: UserDeactivation
   plural: userdeactivations
   singular: userdeactivation
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

@@ -8,6 +8,12 @@ spec:
   kind: Organization
   plural: organizations
   singular: organization
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

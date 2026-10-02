@@ -8,6 +8,12 @@ spec:
   kind: Namespace
   plural: namespaces
   singular: namespace
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

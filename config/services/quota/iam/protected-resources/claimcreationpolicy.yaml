@@ -8,6 +8,12 @@ spec:
   kind: ClaimCreationPolicy
   plural: claimcreationpolicies
   singular: claimcreationpolicy
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get
