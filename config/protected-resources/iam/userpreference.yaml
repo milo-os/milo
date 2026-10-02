@@ -21,4 +21,4 @@ spec:
     - update
     - delete
     - patch
-    - watch 
+    - watch
