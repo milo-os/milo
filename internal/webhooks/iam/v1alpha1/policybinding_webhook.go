@@ -3,7 +3,6 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -15,6 +14,7 @@ import (
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/webhook"
 )
 
 // systemGroupPrefix identifies Group subjects that are synthesized by the
@@ -220,7 +220,11 @@ func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1al
 }
 
 // orgContextFromRequest extracts the request organization id when the request
-// is made in the organization context this webhook guards.
+// is made in the organization context this webhook guards, layering the
+// PolicyBinding-specific project-context fail-closed behavior on top of the
+// shared detection in pkg/webhook. The shared detection already handles the
+// missing-request, system:masters, and malformed-parent cases; this method only
+// adds the Project-scope rejection, whose error message names PolicyBinding.
 //
 // It returns:
 //   - (orgID, true, nil) when the request carries the parent-context extras
@@ -234,63 +238,34 @@ func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1al
 //     request or malformed parent extras), which callers surface as an internal
 //     error rather than a validation denial.
 func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (string, bool, error) {
-	req, err := admission.RequestFromContext(ctx)
+	orgID, isOrgContext, err := webhook.OrgContextFromRequest(ctx)
+	if err != nil || isOrgContext {
+		return orgID, isOrgContext, err
+	}
+
+	// Not an organization context. The project control plane is a known future
+	// scope but is not wired up yet, so fail closed: reject any project-context
+	// PolicyBinding. A developer enabling that scope is forced to extend this
+	// webhook before any binding can slip through. Any other scope (there is
+	// none today) passes through unchanged.
+	projectName, isProjectContext, err := webhook.ProjectContextFromRequest(ctx)
 	if err != nil {
-		// A missing admission request indicates a webhook-infrastructure
-		// failure, not a validation failure: surface it as an internal error
-		// (reason InternalError, HTTP 500) rather than a Forbidden denial.
-		return "", false, errors.NewInternalError(fmt.Errorf("failed to get request from context: %w", err))
+		return "", false, err
+	}
+	if isProjectContext {
+		return "", false, errors.NewInvalid(
+			iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(),
+			projectName,
+			field.ErrorList{
+				field.InternalError(
+					field.NewPath("metadata", "namespace"),
+					fmt.Errorf("project-context PolicyBindings are not yet supported; extend PolicyBindingValidator before enabling the project control plane"),
+				),
+			},
+		)
 	}
 
-	// Superusers may use PolicyBindings in organization context without the
-	// org-restrictions, mirroring the organization and user webhooks
-	// (system:masters bypasses platform validation). This lets the system
-	// itself route a binding through an org control plane when needed. Internal
-	// controllers normally write at platform scope (no parent extras) and
-	// already bypass the restrictions via the early return below; this bypass
-	// covers the org-scoped superuser path explicitly.
-	if slices.Contains(req.UserInfo.Groups, "system:masters") {
-		return "", false, nil
-	}
-
-	// Determine whether this is an organization-scoped request by looking for
-	// the parent-context extras injected by OrganizationContextAuthorizationDecorator.
-	parentName, parentNameOk := req.UserInfo.Extra[iamv1alpha1.ParentNameExtraKey]
-	parentKind, parentKindOk := req.UserInfo.Extra[iamv1alpha1.ParentKindExtraKey]
-	parentAPIGroup, parentAPIGroupOk := req.UserInfo.Extra[iamv1alpha1.ParentAPIGroupExtraKey]
-
-	if !parentNameOk || !parentKindOk || !parentAPIGroupOk {
-		// Not an org-scoped request (e.g. platform scope or an internal
-		// controller). No organization restrictions apply.
-		return "", false, nil
-	}
-
-	if len(parentKind) != 1 || len(parentName) != 1 || len(parentAPIGroup) != 1 {
-		return "", false, errors.NewInternalError(fmt.Errorf("request context has malformed parent information"))
-	}
-
-	if parentKind[0] != "Organization" || parentAPIGroup[0] != resourcemanagerv1alpha1.GroupVersion.Group {
-		// A different scope. The project control plane is a known future scope
-		// but is not wired up yet, so fail closed: reject any project-context
-		// PolicyBinding. A developer enabling that scope is forced to extend this
-		// webhook before any binding can slip through. Any other scope (there is
-		// none today) passes through unchanged.
-		if parentKind[0] == "Project" {
-			return "", false, errors.NewInvalid(
-				iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(),
-				parentName[0],
-				field.ErrorList{
-					field.InternalError(
-						field.NewPath("metadata", "namespace"),
-						fmt.Errorf("project-context PolicyBindings are not yet supported; extend PolicyBindingValidator before enabling the project control plane"),
-					),
-				},
-			)
-		}
-		return "", false, nil
-	}
-
-	return parentName[0], true, nil
+	return "", false, nil
 }
 
 // validateOrgContextRestrictions applies the organization-context restrictions

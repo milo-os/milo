@@ -1,0 +1,12 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: OrganizationMembership
+metadata:
+  name: membership-cross-org
+  namespace: organization-om-context-a
+  labels:
+    test.miloapis.com/scenario: "organizationmembership-org-context"
+spec:
+  organizationRef:
+    name: some-other-org
+  userRef:
+    name: om-person
