@@ -18,7 +18,7 @@ type RoleReference struct {
 // Subject contains a reference to the object or user identities a role binding applies to.
 // This can be a User, Group, or ServiceAccount.
 // +k8s:deepcopy-gen=true
-// +kubebuilder:validation:XValidation:rule="(self.kind == 'Group' && has(self.name) && self.name.startsWith('system:')) || (has(self.uid) && size(self.uid) > 0)",message="UID is required for all subjects except system groups (groups with names starting with 'system:')"
+// +kubebuilder:validation:XValidation:rule="(self.kind == 'Group' && has(self.name) && self.name.startsWith('system:')) || (has(self.uid) && size(self.uid) > 0 && (self.kind != 'Group' || (has(self.namespace) && size(self.namespace) > 0)))",message="UID is required for all subjects except system groups (groups with names starting with 'system:'); a non-system Group subject must also specify its namespace"
 type Subject struct {
 	// Kind of object being referenced. Values defined in Kind constants.
 	// +kubebuilder:validation:Required
@@ -30,7 +30,8 @@ type Subject struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
 	// Namespace of the referenced object.
-	// If not specified for a Group, User or ServiceAccount, it is ignored.
+	// Required for a non-system Group (which is namespaced); ignored for the
+	// cluster-scoped User and ServiceAccount subjects.
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
 	// UID of the referenced object. Optional for system groups (groups with names starting with "system:").

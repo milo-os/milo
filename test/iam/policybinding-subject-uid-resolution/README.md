@@ -7,6 +7,8 @@ This test verifies:
 - A PolicyBinding referencing a Group by name (no uid) has the Group's
   metadata.uid stamped into the stored subject.
 - A PolicyBinding referencing a non-existent Group is rejected at admission.
+- A PolicyBinding whose Group subject has a uid but no namespace is rejected
+  at admission.
 - A system group subject (name starting with "system:") is accepted and
   left without a uid.
 
@@ -17,7 +19,8 @@ This test verifies:
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [resolve-group-uid](#step-resolve-group-uid) | 0 | 3 | 0 | 0 | 0 |
 | 2 | [reject-missing-group](#step-reject-missing-group) | 0 | 1 | 0 | 0 | 0 |
-| 3 | [allow-system-group-without-uid](#step-allow-system-group-without-uid) | 0 | 2 | 0 | 0 | 0 |
+| 3 | [reject-group-with-uid-but-no-namespace](#step-reject-group-with-uid-but-no-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 4 | [allow-system-group-without-uid](#step-allow-system-group-without-uid) | 0 | 2 | 0 | 0 | 0 |
 
 ### Step: `resolve-group-uid`
 
@@ -34,6 +37,16 @@ A name-only Group subject gets its uid resolved by the webhook
 ### Step: `reject-missing-group`
 
 A subject naming a non-existent Group is rejected at admission
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+
+### Step: `reject-group-with-uid-but-no-namespace`
+
+A Group subject with a uid but no namespace is rejected at admission
 
 #### Try
 
