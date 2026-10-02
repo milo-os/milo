@@ -1,0 +1,18 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-org-wide-grant
+  namespace: organization-pb-org-a
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  subjects:
+    - kind: User
+      name: pb-user
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization
+      name: pb-org-a
+      uid: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa

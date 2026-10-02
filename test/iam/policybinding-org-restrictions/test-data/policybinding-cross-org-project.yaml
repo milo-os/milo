@@ -1,0 +1,24 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-cross-org-project
+  namespace: organization-pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  # The subject is a ServiceAccount that belongs to the target Project. Only the
+  # target check fails: the Project belongs to Organization B, not the request
+  # Organization A, so the binding must be denied.
+  subjects:
+    - kind: ServiceAccount
+      name: pb-robot-b
+      uid: 22222222-2222-2222-2222-222222222222
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Project
+      name: pb-project-b
+      uid: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb

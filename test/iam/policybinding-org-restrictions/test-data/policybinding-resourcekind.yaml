@@ -1,0 +1,21 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-resourcekind
+  namespace: organization-pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  # Kind-level (resourceKind) targets are not allowed in organization context:
+  # they grant at a scope wider than the organization.
+  subjects:
+    - kind: ServiceAccount
+      name: pb-robot-a
+      uid: 11111111-1111-1111-1111-111111111111
+  resourceSelector:
+    resourceKind:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization

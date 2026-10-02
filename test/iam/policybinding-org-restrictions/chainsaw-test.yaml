@@ -1,0 +1,319 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: policybinding-org-restrictions
+spec:
+  description: |
+    Tests the PolicyBinding validating webhook's organization-context
+    restrictions.
+
+    An organization holder can reach PolicyBindings only through the
+    organization control plane, which injects the org's parent context into the
+    request user. In that context the webhook enforces:
+
+    - The target must be a Project that belongs to the request organization,
+      referenced as a resourceRef. Kind-level (resourceKind) targets are
+      rejected.
+    - The binding must live in the organization's namespace.
+    - The bound role (roleRef) must be an assignable role in the assignable-roles
+      namespace (the controller-manager --assignable-roles-namespace flag,
+      "datum-cloud") and must actually exist there.
+    - Subjects are unrestricted: an org holder may grant a role to a User,
+      Group, or ServiceAccount. What keeps those grants inside the organization
+      is the namespace and target containment above, not a subject-kind
+      restriction. A ServiceAccount also need not live in the target Project's
+      control plane — an organization admin can grant a ServiceAccount access
+      outside of its own project (for example, IAM admin access across the
+      whole org).
+
+    This test verifies:
+    - A ServiceAccount bound to a Project within the same organization and
+      control plane is accepted.
+    - A ServiceAccount that lives in a different project may be granted a role
+      targeting a Project in the organization.
+    - An organization-wide grant (targeting the request organization) is
+      accepted; one targeting another organization is denied.
+    - User and system-group subjects are accepted.
+    - Binding a Project that belongs to another organization is denied.
+    - Kind-level (resourceKind) targets are denied.
+    - A binding created in a namespace other than the organization's namespace
+      is denied.
+    - A roleRef pointing outside the assignable-roles namespace, or at a
+      non-existent role there, is denied (covered by the unit tests; the shared
+      datum-cloud some-role fixture lets the allow-* steps pass).
+    - A roleRef whose namespace is not the assignable-roles namespace is denied
+      even when the target and binding namespace are otherwise valid.
+
+    The PolicyBinding steps run as test-user (system:authenticated), who is
+    granted RBAC to create PolicyBindings in each organization namespace by the
+    setup. They cannot run as the admin user: the validating webhook is bypassed
+    for system:masters (so the controller manager and other system components
+    can create bindings through an org control plane, matching the organization
+    and user webhooks), which would let every denied binding through.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    orgA:
+      kubeconfig: kubeconfig-org-a
+    orgB:
+      kubeconfig: kubeconfig-org-b
+    # The PolicyBinding steps run as test-user (system:authenticated), not the
+    # admin user, so the org-context restrictions are exercised: the validating
+    # webhook is bypassed for system:masters (the controller manager and other
+    # system components), matching the organization and user webhooks, so a
+    # superuser would see every denied binding allowed.
+    orgAUser:
+      kubeconfig: kubeconfig-org-a-user
+    orgBUser:
+      kubeconfig: kubeconfig-org-b-user
+    projectA:
+      kubeconfig: kubeconfig-project-a
+    projectB:
+      kubeconfig: kubeconfig-project-b
+
+  steps:
+    - name: setup-organizations
+      description: Create the two test organizations and wait for their namespaces
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization-a.yaml
+        - apply:
+            file: 02-organization-b.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-pb-org-a
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-pb-org-b
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: grant-policybinding-rbac
+      description: Authorize test-user to create PolicyBindings in both org namespaces
+      cluster: main
+      try:
+        - apply:
+            file: 06-rbac-policybinding-creator.yaml
+
+    - name: create-assignable-role
+      description: Create the datum-cloud assignable-roles namespace and the some-role the test bindings require
+      cluster: main
+      try:
+        - apply:
+            file: 07-role.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: datum-cloud
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-user
+      description: Create the User used by the denied User-subject binding
+      cluster: main
+      try:
+        - apply:
+            file: 05-user.yaml
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: User
+            name: pb-user
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: create-project-a
+      description: Create the Project that belongs to Organization A and wait for its control plane
+      cluster: orgA
+      try:
+        - apply:
+            file: 03-project-a.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: pb-project-a
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: create-project-b
+      description: Create the Project that belongs to Organization B and wait for its control plane
+      cluster: orgB
+      try:
+        - apply:
+            file: 04-project-b.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: pb-project-b
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: create-service-account-a
+      description: Create a ServiceAccount in Project A's control plane
+      cluster: projectA
+      try:
+        - apply:
+            file: test-data/service-account-a.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: ServiceAccount
+              metadata:
+                name: pb-robot-a
+              spec:
+                state: Active
+
+    - name: create-service-account-b
+      description: Create a ServiceAccount in Project B's control plane
+      cluster: projectB
+      try:
+        - apply:
+            file: test-data/service-account-b.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: ServiceAccount
+              metadata:
+                name: pb-robot-b
+              spec:
+                state: Active
+
+    - name: allow-serviceaccount-bound-to-in-project
+      description: A ServiceAccount bound to a Project in its own organization and control plane is accepted
+      cluster: orgAUser
+      try:
+        - apply:
+            file: test-data/policybinding-valid.yaml
+        - assert:
+            file: assertions/assert-policybinding-valid.yaml
+
+    - name: deny-project-from-another-organization
+      description: Binding a Project owned by another organization is denied
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-cross-org-project.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'does not belong to organization')): true
+
+    - name: allow-serviceaccount-from-another-project
+      description: A ServiceAccount that lives in a different project may be granted a role targeting a Project in the organization
+      cluster: orgAUser
+      try:
+        - apply:
+            file: test-data/policybinding-cross-project-sa.yaml
+        - assert:
+            file: assertions/assert-policybinding-cross-project-sa.yaml
+
+    - name: deny-resourcekind-target
+      description: A kind-level (resourceKind) target is denied in organization context
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-resourcekind.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'resourceKind')): true
+
+    - name: deny-role-outside-assignable-namespace
+      description: A roleRef pointing outside the assignable-roles namespace is denied
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-wrong-role-namespace.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'spec.roleRef.namespace')): true
+
+    - name: allow-org-wide-grant
+      description: An organization-wide grant to the request organization is accepted
+      cluster: orgAUser
+      try:
+        - apply:
+            file: test-data/policybinding-org-wide-grant.yaml
+        - assert:
+            file: assertions/assert-policybinding-org-wide-grant.yaml
+
+    - name: deny-cross-org-wide-grant
+      description: An organization-wide grant to another organization is denied
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-cross-org-wide-grant.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'does not match the request organization')): true
+
+    - name: allow-user-subject
+      description: A User subject binding targeting a Project in the organization is accepted
+      cluster: orgAUser
+      try:
+        - apply:
+            file: test-data/policybinding-user-subject.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: PolicyBinding
+              metadata:
+                name: pb-user-subject
+                namespace: organization-pb-org-a
+
+    - name: allow-system-group-subject
+      description: A system group subject binding targeting a Project in the organization is accepted
+      cluster: orgAUser
+      try:
+        - apply:
+            file: test-data/policybinding-system-group-subject.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: PolicyBinding
+              metadata:
+                name: pb-system-group-subject
+                namespace: organization-pb-org-a
+
+    - name: deny-binding-outside-org-namespace
+      description: A binding created outside the organization's namespace is denied
+      cluster: orgAUser
+      try:
+        # The request namespace must already match the organization's namespace
+        # for the request to be authorized on the organization control plane, so
+        # the authorizer rejects this before the binding webhook runs (defense
+        # in depth is still present in the webhook itself and is unit tested).
+        - create:
+            file: test-data/policybinding-wrong-namespace.yaml
+            expect:
+            - check:
+                ($error != null): true
