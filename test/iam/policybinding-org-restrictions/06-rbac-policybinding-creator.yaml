@@ -1,0 +1,54 @@
+# Grants test-user (system:authenticated, NOT system:masters) the permissions to
+# create PolicyBindings through each organization's control plane, so the
+# org-context validation webhook is exercised by a non-superuser. The controller
+# manager and other system components run as system:masters and bypass the
+# org-context restrictions (matching the organization and user webhooks), so the
+# validation cases in chainsaw-test.yaml must run as a non-superuser identity or
+# the bypass lets every denied binding through.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: policybinding-creator
+  namespace: organization-pb-org-a
+rules:
+  - apiGroups: ["iam.miloapis.com"]
+    resources: ["policybindings"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: policybinding-creator
+  namespace: organization-pb-org-b
+rules:
+  - apiGroups: ["iam.miloapis.com"]
+    resources: ["policybindings"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: policybinding-creator
+  namespace: organization-pb-org-a
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: policybinding-creator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: policybinding-creator
+  namespace: organization-pb-org-b
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: policybinding-creator
+  apiGroup: rbac.authorization.k8s.io

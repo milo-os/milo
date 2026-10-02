@@ -1,0 +1,23 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-org-wide-grant
+  namespace: organization-pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  # An organization-wide grant targets the Organization itself. In organization
+  # context the validating webhook allows this when the referenced Organization
+  # is the request organization (matching its orgId by name).
+  subjects:
+    - kind: User
+      name: pb-user
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Organization
+      name: pb-org-a
+      uid: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
