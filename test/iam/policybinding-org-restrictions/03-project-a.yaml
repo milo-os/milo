@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: pb-project-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  ownerRef:
+    kind: Organization
+    name: pb-org-a

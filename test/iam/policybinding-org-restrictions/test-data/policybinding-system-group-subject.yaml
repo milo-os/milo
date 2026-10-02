@@ -1,0 +1,23 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-system-group-subject
+  namespace: organization-pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  # A system group subject (no backing object, no uid) is allowed in
+  # organization context: the org-containment checks keep the grant inside the
+  # org, so the subject kind is unrestricted.
+  subjects:
+    - kind: Group
+      name: system:authenticated-users
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Project
+      name: pb-project-a
+      uid: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
