@@ -1,0 +1,30 @@
+# Grants test-user (system:authenticated, NOT system:masters) the permissions to
+# manage OrganizationMemberships through the organization's control plane, so the
+# org-context membership restriction is exercised by a non-superuser. The
+# controller manager and other system components run as system:masters and
+# bypass the org-context restriction (matching the organization, user, and
+# policybinding webhooks), so the validation cases in chainsaw-test.yaml must run
+# as a non-superuser identity or the bypass lets every denied membership through.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: membership-creator
+  namespace: organization-om-context-a
+rules:
+  - apiGroups: ["resourcemanager.miloapis.com"]
+    resources: ["organizationmemberships"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: membership-creator
+  namespace: organization-om-context-a
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: membership-creator
+  apiGroup: rbac.authorization.k8s.io
