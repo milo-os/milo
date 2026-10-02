@@ -34,6 +34,37 @@ type ProtectedResourceSpec struct {
 	// A list of permissions that are associated with the resource.
 	// +kubebuilder:validation:Required
 	Permissions []string `json:"permissions"`
+
+	// Subresources declares permissions for individual subresources, such as status.
+	// With subresource authorization enabled in the authorization provider, these
+	// permissions are independent of the resource's Permissions. Permission names
+	// have the form service/resource/subresource.verb, using ServiceRef.Name and
+	// Plural for service and resource. Without that feature enabled, authorization
+	// continues to use the base resource's permissions.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=name
+	Subresources []SubresourceDefinition `json:"subresources,omitempty"`
+}
+
+// SubresourceDefinition declares the verbs available on one resource subresource.
+// A subresource shares the owning resource's identity and parent hierarchy.
+type SubresourceDefinition struct {
+	// Name is a single subresource name, such as status or scale.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Permissions lists the verbs supported by this subresource. Each verb is
+	// granted separately: patch does not imply update, and update does not imply
+	// patch. For example, status with the patch verb defines the permission
+	// service/resource/status.patch.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:items:Pattern=`^[a-z][a-z0-9-]*$`
+	// +listType=set
+	Permissions []string `json:"permissions"`
 }
 
 // ProtectedResourceStatus defines the observed state of ProtectedResource
