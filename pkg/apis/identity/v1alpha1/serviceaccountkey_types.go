@@ -44,6 +44,14 @@ type ServiceAccountKeySpec struct {
 
 // ServiceAccountKeyStatus defines the observed state of ServiceAccountKey
 type ServiceAccountKeyStatus struct {
+	// ClientID is the stable, non-secret identifier the authentication provider
+	// uses for the ServiceAccount. Clients use this value as the OAuth client_id
+	// and as the issuer and subject of private-key JWT assertions.
+	//
+	// This field is populated for both provider-generated and client-managed keys.
+	// +kubebuilder:validation:Optional
+	ClientID string `json:"clientID,omitempty"`
+
 	// AuthProviderKeyID is the unique identifier for the key in the auth provider.
 	// This field is populated by the controller after the key is created in the auth provider.
 	// For example, when using Zitadel, a typical value might be: "326102453042806786"
