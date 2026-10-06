@@ -19,7 +19,7 @@ const (
 	UserInvitationInviteeUserFieldSelector = "status.inviteeUser.name"
 )
 
-// UserUserInvitationListConstraintDecorator intercepts requests to list
+// UserUserInvitationListConstraintDecorator intercepts requests to list or watch
 // user invitations, which are a user scoped resource, and injects a field
 // selector to limit user invitations to the user provided in the request
 // context.
