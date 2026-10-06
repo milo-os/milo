@@ -40,6 +40,12 @@ type ServiceAccountSpec struct {
 
 // ServiceAccountStatus defines the observed state of ServiceAccount
 type ServiceAccountStatus struct {
+	// ClientID is the stable, non-secret identifier assigned to this service
+	// account by the authentication provider. Clients use this value as the OAuth
+	// client_id and as the issuer and subject of private-key JWT assertions.
+	// +kubebuilder:validation:Optional
+	ClientID string `json:"clientID,omitempty"`
+
 	// The computed email of the service account following the pattern:
 	// {metadata.name}@{metadata.namespace}.{project.metadata.name}.{global-suffix}
 	Email string `json:"email,omitempty"`

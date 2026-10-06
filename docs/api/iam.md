@@ -2469,6 +2469,15 @@ ServiceAccountStatus defines the observed state of ServiceAccount
         </tr>
     </thead>
     <tbody><tr>
+        <td><b>clientID</b></td>
+        <td>string</td>
+        <td>
+          ClientID is the stable, non-secret identifier assigned to this service
+account by the authentication provider. Clients use this value as the OAuth
+client_id and as the issuer and subject of private-key JWT assertions.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#serviceaccountstatusconditionsindex">conditions</a></b></td>
         <td>[]object</td>
         <td>
