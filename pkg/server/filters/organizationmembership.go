@@ -142,7 +142,7 @@ func UserContextAuthorizationDecorator(handler http.Handler) http.Handler {
 	})
 }
 
-// UserOrganizationListConstraintDecorator intercepts requests to list
+// UserOrganizationListConstraintDecorator intercepts requests to list or watch
 // organization memberships, which are an organization scoped resource, and
 // injects a field selector to limit organization memberships to the user
 // provided in the request context.
@@ -158,7 +158,7 @@ func UserOrganizationMembershipListConstraintDecorator(handler http.Handler) htt
 			return
 		}
 
-		if info.APIGroup == resourcemanagerv1alpha1.GroupVersion.Group && info.Resource == "organizationmemberships" && info.Verb == "list" {
+		if info.APIGroup == resourcemanagerv1alpha1.GroupVersion.Group && info.Resource == "organizationmemberships" && (info.Verb == "list" || info.Verb == "watch") {
 			userID, ok := ctx.Value(UserIDContextKey).(string)
 			if ok {
 				currentSelector, err := fields.ParseSelector(info.FieldSelector)
