@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/spf13/pflag"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientset "k8s.io/client-go/kubernetes"
@@ -130,7 +132,7 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 	gcSink := &gccontroller.GCSink{
 		GC:                gc,
 		RootRESTMapper:    controllerContext.RESTMapper, // same API surface across projects
-		Ignored:           ignored,
+		Ignored:           projectIgnoredResources(ignored, projectGCIgnoredResources),
 		InformersStarted:  controllerContext.InformersStarted,
 		InitialSyncPeriod: 30 * time.Second,
 	}
@@ -141,4 +143,30 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 	go prov.Run(ctx)
 
 	return gc, true, nil
+}
+
+var projectGCIgnoredResources = []string{
+	"flowschemas.flowcontrol.apiserver.k8s.io",
+	"prioritylevelconfigurations.flowcontrol.apiserver.k8s.io",
+}
+
+func addProjectGarbageCollectorFlags(fs *pflag.FlagSet) {
+	fs.StringSliceVar(&projectGCIgnoredResources, "project-gc-ignored-resources", projectGCIgnoredResources,
+		"Resources, as resource.group (core resources as resource), that the garbage collector does not watch in project control planes. "+
+			"Each entry saves one watch per project. Only list resources whose objects in a project control plane never carry ownerReferences and are never named as owners.")
+}
+
+func projectIgnoredResources(base map[schema.GroupResource]struct{}, extra []string) map[schema.GroupResource]struct{} {
+	out := make(map[schema.GroupResource]struct{}, len(base)+len(extra))
+	for gr := range base {
+		out[gr] = struct{}{}
+	}
+	for _, entry := range extra {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		out[schema.ParseGroupResource(entry)] = struct{}{}
+	}
+	return out
 }

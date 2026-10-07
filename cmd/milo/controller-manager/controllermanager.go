@@ -302,6 +302,7 @@ func NewCommand() *cobra.Command {
 	s.Authorization.AddFlags(namedFlagSets.FlagSet("authorization"))
 	// s.CSRSigningController.AddFlags(fss.FlagSet(names.CertificateSigningRequestSigningController))
 	s.GarbageCollectorController.AddFlags(namedFlagSets.FlagSet(names.GarbageCollectorController))
+	addProjectGarbageCollectorFlags(namedFlagSets.FlagSet(names.GarbageCollectorController))
 	s.NamespaceController.AddFlags(namedFlagSets.FlagSet(names.NamespaceController))
 	s.ValidatingAdmissionPolicyStatusController.AddFlags(namedFlagSets.FlagSet(names.ValidatingAdmissionPolicyStatusController))
 	s.Metrics.AddFlags(namedFlagSets.FlagSet("metrics"))
