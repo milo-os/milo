@@ -38,8 +38,8 @@ spec:
   eventRules:
     - name: suspended
       match: "event.reason == 'Suspended'"
-      summary: "Project {{ event.involvedObject.name }} was suspended"
+      summary: "Project {{ event.regarding.name }} was suspended"
 
     - name: reinstated
       match: "event.reason == 'Reinstated'"
-      summary: "Project {{ event.involvedObject.name }} was reinstated"
+      summary: "Project {{ event.regarding.name }} was reinstated"

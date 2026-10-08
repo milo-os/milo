@@ -16,6 +16,7 @@ spec:
           expr: resourcemanager_miloapis_com:organizationmemberships:not_ready > 0
           for: 5m
           labels:
+            expected_no_match: "true"
             severity: warning
             category: readiness
             team: platform

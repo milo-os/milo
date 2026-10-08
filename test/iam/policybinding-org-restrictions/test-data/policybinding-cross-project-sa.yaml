@@ -1,0 +1,26 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-cross-project-sa
+  namespace: organization-pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  # The subject ServiceAccount (pb-robot-b) lives in pb-project-b's control
+  # plane, while the target Project (pb-project-a) belongs to Organization A.
+  # A ServiceAccount may be granted access outside of its own project, so this
+  # cross-project binding is accepted: an organization admin can grant a
+  # ServiceAccount roles on any Project in the organization.
+  subjects:
+    - kind: ServiceAccount
+      name: pb-robot-b
+      uid: 22222222-2222-2222-2222-222222222222
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Project
+      name: pb-project-a
+      uid: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa

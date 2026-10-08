@@ -1,0 +1,139 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: organizationmembership-org-context
+spec:
+  description: |
+    Tests the OrganizationMembership validating webhook's organization-context
+    restriction.
+
+    An organization holder can reach OrganizationMemberships only through the
+    organization control plane, which injects the org's parent context into the
+    request user. This closes an escalation where an org admin holds update
+    rights on memberships (granted so they can manage roles) and could
+    otherwise repoint an existing membership's organizationRef at another
+    organization, or create a new membership in their org's namespace that
+    references another organization.
+
+    In organization context the webhook enforces:
+    - The membership must live in the organization's namespace.
+    - spec.organizationRef.name must be the request organization itself, on
+      creation and update.
+
+    Requests that carry no organization parent context (platform scope,
+    internal controllers) are unaffected; requests made by system:masters (the
+    platform superuser) bypass the restriction entirely, matching the
+    organization, user, and policybinding webhooks.
+
+    This test verifies (all steps run as test-user, system:authenticated, who is
+    granted RBAC to create and update memberships in the organization namespace
+    by the setup — not the admin user, since the webhook is bypassed for
+    system:masters):
+    - Creating a membership referencing the request organization is accepted.
+    - Creating a membership referencing another organization is denied.
+    - Updating a membership while keeping organizationRef is accepted.
+    - Updating a membership to repoint organizationRef at another organization
+      is denied.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    orgAUser:
+      kubeconfig: kubeconfig-org-a-user
+
+  steps:
+    - name: setup-organization
+      description: Create the test organization and wait for its namespace
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-om-context-a
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: grant-membership-rbac
+      description: Authorize test-user to create and update memberships in the org namespace
+      cluster: main
+      try:
+        - apply:
+            file: 03-rbac-membership-creator.yaml
+
+    - name: create-user
+      description: Create the User referenced by the test memberships and wait for it to be ready
+      cluster: main
+      try:
+        - apply:
+            file: 02-user.yaml
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: User
+            name: om-person
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: allow-create-matching-org
+      description: A membership referencing the request organization is accepted
+      cluster: orgAUser
+      try:
+        - apply:
+            file: membership-matching.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: OrganizationMembership
+              metadata:
+                name: membership-matching
+                namespace: organization-om-context-a
+              spec:
+                organizationRef:
+                  name: om-context-a
+
+    - name: deny-create-cross-org
+      description: A membership referencing another organization is denied at admission
+      cluster: orgAUser
+      try:
+        - create:
+            file: membership-cross-org.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'does not match the request organization')): true
+
+    - name: allow-update-keeps-orgref
+      description: An update that keeps organizationRef is accepted
+      cluster: orgAUser
+      try:
+        - apply:
+            file: membership-update-matching.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: OrganizationMembership
+              metadata:
+                name: membership-matching
+                namespace: organization-om-context-a
+                labels:
+                  test.miloapis.com/update: keeps-orgref
+
+    - name: deny-update-repoints-orgref
+      description: An update that repoints organizationRef to another organization is denied
+      cluster: orgAUser
+      try:
+        - apply:
+            file: membership-repoint.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'does not match the request organization')): true

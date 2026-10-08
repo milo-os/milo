@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: test-service-account-contract-org
+  labels:
+    test.miloapis.com/scenario: "service-account-contract"
+  annotations:
+    kubernetes.io/description: "Organization for testing the ServiceAccount API contract"
+    kubernetes.io/display-name: "Test Service Account Contract Organization"
+spec:
+  type: Standard

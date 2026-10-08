@@ -8,6 +8,12 @@ spec:
   kind: PlatformAccessRejection
   plural: platformaccessrejections
   singular: platformaccessrejection
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

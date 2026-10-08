@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: pb-user
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  email: policybinding-user@test.local
+  givenName: PolicyBinding
+  familyName: User

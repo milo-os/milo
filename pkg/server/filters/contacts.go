@@ -19,7 +19,7 @@ const (
 	ContactSubjectKindFieldSelector = "spec.subject.kind"
 )
 
-// UserContactListConstraintDecorator intercepts requests to list
+// UserContactListConstraintDecorator intercepts requests to list or watch
 // contacts, and injects a field selector to limit them to the user provided in the request context.
 //
 // This is done so that end users can execute `kubectl get contacts`
@@ -33,7 +33,7 @@ func UserContactListConstraintDecorator(handler http.Handler) http.Handler {
 			return
 		}
 
-		if info.APIGroup == notificationv1alpha1.SchemeGroupVersion.Group && info.Resource == "contacts" && info.Verb == "list" {
+		if info.APIGroup == notificationv1alpha1.SchemeGroupVersion.Group && info.Resource == "contacts" && (info.Verb == "list" || info.Verb == "watch") {
 			userID, ok := ctx.Value(UserIDContextKey).(string)
 			if ok {
 				currentSelector, err := fields.ParseSelector(info.FieldSelector)

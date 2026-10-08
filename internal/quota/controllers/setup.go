@@ -30,7 +30,8 @@ import (
 //   - mgr: Multicluster controller manager
 //   - dynamicClient: Dynamic client for resource type validation
 //   - logger: Logger for quota controller operations
-func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interface, logger logr.Logger) error {
+//   - maxConcurrentReconciles: Parallel reconciles for the AllowanceBucket and ResourceClaim controllers
+func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interface, logger logr.Logger, maxConcurrentReconciles int) error {
 	logger.Info("Setting up quota controllers with multicluster support")
 
 	// Get the local manager for accessing shared components like EventRecorder
@@ -78,8 +79,9 @@ func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interfac
 	// 3. ResourceClaim controller (all clusters)
 	logger.V(1).Info("Setting up ResourceClaim controller (all clusters)")
 	if err := (&core.ResourceClaimController{
-		Scheme:  standardMgr.GetScheme(),
-		Manager: mgr,
+		Scheme:                  standardMgr.GetScheme(),
+		Manager:                 mgr,
+		MaxConcurrentReconciles: maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("failed to setup ResourceClaimController: %w", err)
 	}
@@ -87,8 +89,9 @@ func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interfac
 	// 4. AllowanceBucket controller (aggregates quota data - all clusters)
 	logger.V(1).Info("Setting up AllowanceBucket controller (all clusters)")
 	if err := (&core.AllowanceBucketController{
-		Scheme:  standardMgr.GetScheme(),
-		Manager: mgr,
+		Scheme:                  standardMgr.GetScheme(),
+		Manager:                 mgr,
+		MaxConcurrentReconciles: maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("failed to setup AllowanceBucketController: %w", err)
 	}
@@ -122,7 +125,7 @@ func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interfac
 	// 7. Grant Creation controller (automatic grant creation - core cluster only)
 	logger.V(1).Info("Setting up Grant Creation controller (core cluster only)")
 	templateEngine := engine.NewTemplateEngine(celEngine, logger)
-	parentContextResolver := policy.NewParentContextResolver(standardMgr.GetClient(), standardMgr.GetConfig(), standardMgr.GetScheme(), policy.ParentContextResolverOptions{})
+	parentContextResolver := policy.NewParentContextResolver(standardMgr.GetConfig(), standardMgr.GetScheme(), policy.ParentContextResolverOptions{})
 
 	informerManager, err := informer.NewManagerFromManager(standardMgr)
 	if err != nil {

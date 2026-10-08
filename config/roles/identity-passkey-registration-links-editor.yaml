@@ -1,0 +1,13 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: identity-passkey-registration-links-editor
+  annotations:
+    kubernetes.io/display-name: Identity Passkey Registration Links Editor
+    kubernetes.io/description: "Allows sending a passkey registration (account recovery) link to a user's verified address."
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: identity-passkey-registration-links-viewer
+  includedPermissions:
+    - identity.miloapis.com/passkeyregistrationlinks.create

@@ -166,6 +166,8 @@ var (
 	// window; only the customer-facing warning e-mail is suppressed.
 	ProjectSuspensionWarningExcludedReasons []string
 
+	QuotaMaxConcurrentReconciles int
+
 	// WaitlistRelatedResourcesNamespace is the namespace that contains the waitlist related resources.
 	WaitlistRelatedResourcesNamespace string
 
@@ -326,6 +328,7 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailTemplate, "project-suspension-deletion-warning-email-template", "emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarningemailtemplate", "The name of the template used to warn a suspended project's organization about upcoming deletion.")
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailNamespace, "project-suspension-deletion-warning-email-namespace", "milo-system", "The namespace suspension deletion warning Email resources are created in, kept as a stable, centralized audit trail.")
 	fs.StringSliceVar(&ProjectSuspensionWarningExcludedReasons, "project-suspension-warning-excluded-reasons", []string{"Fraud", "Abuse"}, "Comma-separated suspension reasons for which countdown deletion warning e-mails are NOT sent (e.g. Fraud,Abuse). Projects suspended for these reasons still auto-delete after the retention window.")
+	fs.IntVar(&QuotaMaxConcurrentReconciles, "quota-max-concurrent-reconciles", 1, "The number of AllowanceBuckets and the number of ResourceClaims the quota controllers reconcile in parallel.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
 	fs.StringVar(&PlatformInvitationEmailVariableActionUrl, "platform-invitation-email-variable-action-url", "https://cloud.datum.net", "The action url for the platform invitation email.")
 	fs.StringVar(&OrganizationMembershipSelfDeleteRoleName, "organization-membership-self-delete-role-name", "organizationmembership-self-delete", "The name of the role that will be used to grant organization membership self delete actions.")
@@ -430,6 +433,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 	if c.SecureServing != nil {
 		unsecuredMux = genericcontrollermanager.NewBaseHandler(&c.ComponentConfig.Generic.Debugging, healthzHandler)
 		slis.SLIMetricsWithReset{}.Install(unsecuredMux)
+		installMetricsHandler(unsecuredMux)
 
 		handler := genericcontrollermanager.BuildHandlerChain(unsecuredMux, &c.Authorization, &c.Authentication)
 		// TODO: handle stoppedCh and listenerStoppedCh returned by c.SecureServing.Serve
@@ -671,7 +675,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			if err := quotacontroller.SetupQuotaControllers(mcMgr, dynamicClient, logger.WithName("quota")); err != nil {
+			if err := quotacontroller.SetupQuotaControllers(mcMgr, dynamicClient, logger.WithName("quota"), QuotaMaxConcurrentReconciles); err != nil {
 				logger.Error(err, "Error setting up quota controllers")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}

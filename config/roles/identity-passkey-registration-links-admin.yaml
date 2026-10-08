@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: identity-passkey-registration-links-admin
+  annotations:
+    kubernetes.io/display-name: Identity Passkey Registration Links Admin
+    kubernetes.io/description: "Full access to passkey registration links."
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: identity-passkey-registration-links-editor

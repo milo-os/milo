@@ -11,6 +11,7 @@ import (
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -141,6 +142,96 @@ func TestUserInvitationValidator_ValidateCreate(t *testing.T) {
 			expectError:    true,
 			errorSubstring: "organizationRef",
 		},
+		"error when existing invitation is live pending with a future expiration": {
+			invitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "duplicate-invitation"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "duplicate@example.com",
+					State:           "Pending",
+					ExpirationDate:  &future,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			existing: []client.Object{
+				&iamv1alpha1.UserInvitation{
+					ObjectMeta: metav1.ObjectMeta{Name: "existing-invitation"},
+					Spec: iamv1alpha1.UserInvitationSpec{
+						Email:           "duplicate@example.com",
+						State:           "Pending",
+						ExpirationDate:  &future,
+						OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+					},
+				},
+			},
+			expectError:    true,
+			errorSubstring: "organizationRef",
+		},
+		"success when duplicate invitation has expired": {
+			invitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "duplicate-invitation"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "duplicate@example.com",
+					State:           "Pending",
+					ExpirationDate:  &future,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			existing: []client.Object{
+				&iamv1alpha1.UserInvitation{
+					ObjectMeta: metav1.ObjectMeta{Name: "existing-invitation"},
+					Spec: iamv1alpha1.UserInvitationSpec{
+						Email:           "duplicate@example.com",
+						State:           "Pending",
+						ExpirationDate:  &past,
+						OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+					},
+				},
+			},
+			expectError: false,
+		},
+		"success when duplicate invitation has been declined": {
+			invitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "duplicate-invitation"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "duplicate@example.com",
+					State:           "Pending",
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			existing: []client.Object{
+				&iamv1alpha1.UserInvitation{
+					ObjectMeta: metav1.ObjectMeta{Name: "existing-invitation"},
+					Spec: iamv1alpha1.UserInvitationSpec{
+						Email:           "duplicate@example.com",
+						State:           "Declined",
+						OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+					},
+				},
+			},
+			expectError: false,
+		},
+		"success when duplicate invitation was accepted but never granted membership": {
+			invitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "duplicate-invitation"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "duplicate@example.com",
+					State:           "Pending",
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			existing: []client.Object{
+				&iamv1alpha1.UserInvitation{
+					ObjectMeta: metav1.ObjectMeta{Name: "existing-invitation"},
+					Spec: iamv1alpha1.UserInvitationSpec{
+						Email:           "duplicate@example.com",
+						State:           "Accepted",
+						ExpirationDate:  &past,
+						OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+					},
+				},
+			},
+			expectError: false,
+		},
 		"error when user is already a member of organization": {
 			invitation: &iamv1alpha1.UserInvitation{
 				ObjectMeta: metav1.ObjectMeta{Name: "already-member"},
@@ -246,6 +337,177 @@ func TestUserInvitationValidator_ValidateCreate(t *testing.T) {
 			warnings, err := validator.ValidateCreate(ctx, tc.invitation)
 			if tc.expectError {
 				assert.Error(t, err)
+				if tc.errorSubstring != "" {
+					assert.Contains(t, err.Error(), tc.errorSubstring)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Empty(t, warnings)
+		})
+	}
+}
+
+// TestUserInvitationValidator_ValidateUpdate verifies that accepting an invitation
+// whose expiration date has passed is rejected so the invitee is told the link is
+// no longer valid, while all other updates (including unrelated metadata-only
+// updates on an expired invitation) remain allowed.
+func TestUserInvitationValidator_ValidateUpdate(t *testing.T) {
+	now := time.Now().UTC()
+	past := metav1.NewTime(now.Add(-1 * time.Hour))
+	future := metav1.NewTime(now.Add(1 * time.Hour))
+
+	tests := map[string]struct {
+		oldInvitation  *iamv1alpha1.UserInvitation
+		newInvitation  *iamv1alpha1.UserInvitation
+		expectError    bool
+		errorSubstring string
+	}{
+		"reject accepting an expired invitation": {
+			oldInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Pending",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			newInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Accepted",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			expectError:    true,
+			errorSubstring: "the invitation has expired and can no longer be accepted; ask the inviter to send a new invitation",
+		},
+		"allow accepting a live invitation with a future expiration": {
+			oldInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Pending",
+					ExpirationDate:  &future,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			newInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Accepted",
+					ExpirationDate:  &future,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			expectError: false,
+		},
+		"allow accepting an invitation with no expiration date": {
+			oldInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Pending",
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			newInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Accepted",
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			expectError: false,
+		},
+		"allow unrelated metadata-only update on an expired invitation": {
+			oldInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Pending",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			newInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv", Labels: map[string]string{"note": "updated"}},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Pending",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			expectError: false,
+		},
+		"allow declining an expired invitation": {
+			oldInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Pending",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			newInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Declined",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			expectError: false,
+		},
+		"allow an expired Accepted invitation to be updated (controller finalizer/metadata pass)": {
+			oldInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Accepted",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			newInvitation: &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv", Finalizers: []string{"iam.miloapis.com/userinvitation"}},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "test@example.com",
+					State:           "Accepted",
+					ExpirationDate:  &past,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	validator := &UserInvitationValidator{}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := admission.NewContextWithRequest(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Namespace: "organization-testorg",
+					UserInfo:  authenticationv1.UserInfo{Username: "tester"},
+				},
+			})
+
+			warnings, err := validator.ValidateUpdate(ctx, tc.oldInvitation, tc.newInvitation)
+			if tc.expectError {
+				assert.Error(t, err)
+				// The rejection must surface as an API-fatal Invalid error (the
+				// same shape ValidateCreate uses), not a plain error, so callers
+				// see an admission denial rather than a transient failure.
+				assert.True(t, kerrors.IsInvalid(err), "expected an Invalid API error, got: %v", err)
 				if tc.errorSubstring != "" {
 					assert.Contains(t, err.Error(), tc.errorSubstring)
 				}

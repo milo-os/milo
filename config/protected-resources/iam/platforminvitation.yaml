@@ -8,6 +8,12 @@ spec:
   kind: PlatformInvitation
   plural: platforminvitations
   singular: platforminvitation
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

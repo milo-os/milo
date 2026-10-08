@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: pb-org-a
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+  annotations:
+    kubernetes.io/description: "Organization A for testing PolicyBinding organization-context restrictions"
+    kubernetes.io/display-name: "PolicyBinding Org A"
+spec:
+  type: Standard

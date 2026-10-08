@@ -34,7 +34,7 @@ This test verifies, for the two places project resources live:
 | 9 | [verify-namespace-outlives-its-contents](#step-verify-namespace-outlives-its-contents) | 0 | 2 | 1 | 0 | 0 |
 | 10 | [release-finalizers](#step-release-finalizers) | 0 | 1 | 1 | 0 | 0 |
 | 11 | [verify-projects-delete-promptly](#step-verify-projects-delete-promptly) | 0 | 2 | 1 | 0 | 0 |
-| 12 | [cleanup-organization](#step-cleanup-organization) | 0 | 2 | 1 | 0 | 0 |
+| 12 | [cleanup-organization](#step-cleanup-organization) | 0 | 3 | 1 | 0 | 0 |
 
 ### Step: `clear-previous-run`
 
@@ -176,8 +176,9 @@ Remove the organization and user the test created
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `delete` | 0 | 0 | *No description* |
+| 1 | `script` | 0 | 0 | *No description* |
 | 2 | `delete` | 0 | 0 | *No description* |
+| 3 | `delete` | 0 | 0 | *No description* |
 
 ---
 

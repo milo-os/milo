@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: GroupMembership
+metadata:
+  name: gm-bob-eng
+  namespace: ($namespace)
+spec:
+  userRef:
+    name: bob
+  groupRef:
+    name: eng
+    namespace: ($namespace)

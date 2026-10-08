@@ -2,7 +2,6 @@ package projectstorage
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"strings"
 	"sync"
@@ -10,13 +9,8 @@ import (
 
 	"go.miloapis.com/milo/pkg/request"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	generic "k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/storage"
@@ -24,7 +18,6 @@ import (
 	factory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	k8smetrics "k8s.io/component-base/metrics"
 	k8slegacy "k8s.io/component-base/metrics/legacyregistry"
-	"k8s.io/klog/v2"
 
 	"k8s.io/client-go/tools/cache"
 )
@@ -51,6 +44,26 @@ var (
 		[]string{"resource_group", "resource_kind"},
 	)
 
+	childLockHold = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Name:           "projectstorage_child_lock_hold_seconds",
+			Help:           "Time the per-resource storage lock is held to create a project child storage",
+			Buckets:        []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"resource_group", "resource_kind"},
+	)
+
+	namespaceBootstrapDuration = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Name:           "projectstorage_namespace_bootstrap_duration_seconds",
+			Help:           "Time to ensure the milo-system namespace exists in a project control plane",
+			Buckets:        []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"result"},
+	)
+
 	reinitErrors = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "projectstorage_reinitializing_errors_total",
@@ -62,7 +75,7 @@ var (
 )
 
 func init() {
-	k8slegacy.MustRegister(childCreations, firstReady, reinitErrors)
+	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration, reinitErrors)
 }
 
 func isReinitErr(err error) bool {
@@ -199,10 +212,10 @@ type projectMux struct {
 	children  map[string]*child
 	versioner storage.Versioner
 
-	inner          generic.StorageDecorator
-	cfg            storagebackend.ConfigForResource
-	args           decoratorArgs
-	loopbackConfig *rest.Config
+	inner        generic.StorageDecorator
+	cfg          storagebackend.ConfigForResource
+	args         decoratorArgs
+	bootstrapper *NamespaceBootstrapper
 }
 
 func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
@@ -220,6 +233,10 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	if c, ok := m.children[project]; ok {
 		return c.s, nil
 	}
+	start := time.Now()
+	defer func() {
+		childLockHold.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Observe(time.Since(start).Seconds())
+	}()
 
 	cfg2 := m.cfg // copy
 	cfg2.Config.Prefix = "/" + path.Join("projects", project)
@@ -257,11 +274,6 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	m.children[project] = c
 	childCreations.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Inc()
 
-	// Bootstrap system namespace synchronously to prevent resource creation failures
-	if project != "" && m.loopbackConfig != nil {
-		m.bootstrapMiloSystemNamespace(project)
-	}
-
 	return c.s, nil
 }
 
@@ -276,48 +288,14 @@ func (m *projectMux) destroyAll() {
 	}
 }
 
-// bootstrapMiloSystemNamespace ensures milo-system namespace exists in the project control plane.
-// Called synchronously during storage initialization to prevent quota resource creation failures.
-func (m *projectMux) bootstrapMiloSystemNamespace(projectName string) {
-	cfg := rest.CopyConfig(m.loopbackConfig)
-	cfg.Host = strings.TrimSuffix(cfg.Host, "/") + fmt.Sprintf("/apis/resourcemanager.miloapis.com/v1alpha1/projects/%s/control-plane", projectName)
-
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		klog.Errorf("Failed to create client for project %s: %v", projectName, err)
-		return
-	}
-
-	ctx := context.Background()
-
-	_, err = clientset.CoreV1().Namespaces().Get(ctx, "milo-system", metav1.GetOptions{})
-	if err == nil {
-		return
-	}
-	if !apierrors.IsNotFound(err) {
-		klog.Errorf("Failed to check for milo-system namespace in project %s: %v", projectName, err)
-		return
-	}
-
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "milo-system",
-			Labels: map[string]string{
-				"miloapis.com/system": "true",
-			},
-		},
-	}
-
-	_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		klog.Errorf("Failed to create milo-system namespace in project %s: %v", projectName, err)
-		return
-	}
-}
-
 func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
 	if proj, ok := request.ProjectID(ctx); ok && proj != "" {
-		return m.childForProject(proj)
+		s, err := m.childForProject(proj)
+		if err != nil {
+			return nil, err
+		}
+		m.bootstrapper.Ensure(ctx, proj)
+		return s, nil
 	}
 	return m.childForProject("")
 }

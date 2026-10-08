@@ -3,7 +3,6 @@ package projectstorage
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
 
 	generic "k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/storage"
@@ -14,8 +13,11 @@ import (
 )
 
 // ProjectAwareDecorator builds per-project storage isolation using etcd prefix separation.
-// When loopbackConfig is provided, automatically bootstraps milo-system namespace in project control planes.
-func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, loopbackConfig *rest.Config) generic.StorageDecorator {
+// When bootstrapper is non-nil, it ensures the milo-system namespace exists in project control planes.
+func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, bootstrapper *NamespaceBootstrapper) generic.StorageDecorator {
+	if gr.Group == "" && gr.Resource == "namespaces" {
+		bootstrapper = nil
+	}
 	return func(
 		cfg *storagebackend.ConfigForResource,
 		resourcePrefix string,
@@ -34,9 +36,9 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 		}
 
 		mux := &projectMux{
-			inner:          inner,
-			cfg:            *cfg, // copy
-			loopbackConfig: loopbackConfig,
+			inner:        inner,
+			cfg:          *cfg, // copy
+			bootstrapper: bootstrapper,
 			args: decoratorArgs{
 				resourceGroup:  gr.Group,    // "" means core
 				resourceKind:   gr.Resource, // plural

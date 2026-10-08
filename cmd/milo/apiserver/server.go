@@ -87,6 +87,7 @@ var (
 	eventsProviderRetries                int
 	eventsForwardExtras                  []string
 	sharedETCDClientPoolSize             int
+	projectNamespaceBootstrapTimeout     time.Duration
 )
 
 // NewCommand creates a *cobra.Command object with default parameters
@@ -200,10 +201,10 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&serviceAccountKeysProviderCAFile, "serviceaccountkeys-provider-ca-file", "", "Path to CA file to validate serviceaccountkeys provider TLS")
 	fs.StringVar(&serviceAccountKeysProviderClientCert, "serviceaccountkeys-provider-client-cert", "", "Client certificate for mTLS to serviceaccountkeys provider")
 	fs.StringVar(&serviceAccountKeysProviderClientKey, "serviceaccountkeys-provider-client-key", "", "Client private key for mTLS to serviceaccountkeys provider")
-	fs.StringVar(&passkeysProviderURL, "passkeys-provider-url", "", "Direct provider base URL for passkeys (e.g., https://zitadel-apiserver:8443)")
-	fs.StringVar(&passkeysProviderCAFile, "passkeys-provider-ca-file", "", "Path to CA file to validate passkeys provider TLS")
-	fs.StringVar(&passkeysProviderClientCert, "passkeys-provider-client-cert", "", "Client certificate for mTLS to passkeys provider")
-	fs.StringVar(&passkeysProviderClientKey, "passkeys-provider-client-key", "", "Client private key for mTLS to passkeys provider")
+	fs.StringVar(&passkeysProviderURL, "passkeys-provider-url", "", "Direct provider base URL for passkeys and passkey registration links (e.g., https://zitadel-apiserver:8443)")
+	fs.StringVar(&passkeysProviderCAFile, "passkeys-provider-ca-file", "", "Path to CA file to validate the passkeys and passkey registration links provider TLS")
+	fs.StringVar(&passkeysProviderClientCert, "passkeys-provider-client-cert", "", "Client certificate for mTLS to the passkeys and passkey registration links provider")
+	fs.StringVar(&passkeysProviderClientKey, "passkeys-provider-client-key", "", "Client private key for mTLS to the passkeys and passkey registration links provider")
 	fs.StringVar(&eventsProviderURL, "events-provider-url", "", "Activity API server URL for events storage (e.g., https://activity-apiserver.activity-system.svc:443)")
 	fs.StringVar(&eventsProviderCAFile, "events-provider-ca-file", "", "Path to CA file to validate Activity provider TLS")
 	fs.StringVar(&eventsProviderClientCert, "events-provider-client-cert", "", "Client certificate for mTLS to Activity provider")
@@ -212,6 +213,7 @@ func NewCommand() *cobra.Command {
 	fs.IntVar(&eventsProviderRetries, "events-provider-retries", 3, "Activity provider request retries")
 	fs.StringSliceVar(&eventsForwardExtras, "events-forward-extras", []string{"iam.miloapis.com/parent-api-group", "iam.miloapis.com/parent-type", "iam.miloapis.com/parent-name"}, "User extras keys to forward to Activity for events")
 	fs.IntVar(&sharedETCDClientPoolSize, "shared-etcd-client-pool-size", 32, "Number of etcd client connections opened per transport and round-robined across all project control plane watch caches. Higher values spread watch progress traffic across more gRPC streams at the cost of more connections. Minimum 1.")
+	fs.DurationVar(&projectNamespaceBootstrapTimeout, "project-namespace-bootstrap-timeout", projectstorage.DefaultNamespaceBootstrapTimeout, "Maximum time to wait for the milo-system namespace to be ensured in a project control plane on first use. Requests for that project wait at most this long; other projects are never blocked.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
@@ -327,13 +329,13 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 
-	loopbackConfig := config.ControlPlane.Generic.LoopbackClientConfig
+	bootstrapper := projectstorage.NewNamespaceBootstrapper(config.ControlPlane.Generic.LoopbackClientConfig, projectNamespaceBootstrapTimeout)
 
 	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.GenericConfig.RESTOptionsGetter, loopbackConfig)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, bootstrapper)
 
 	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndConfig(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, loopbackConfig)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, bootstrapper)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {

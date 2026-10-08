@@ -1,0 +1,21 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pb-wrong-namespace
+  namespace: organization-pb-org-b
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"
+spec:
+  roleRef:
+    name: some-role
+    namespace: datum-cloud
+  subjects:
+    - kind: ServiceAccount
+      name: pb-robot-a
+      uid: 11111111-1111-1111-1111-111111111111
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Project
+      name: pb-project-a
+      uid: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa

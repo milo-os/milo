@@ -147,6 +147,13 @@ spec:
                   - type
                   type: object
                 type: array
+              emailVerification:
+                description: EmailVerification is the auth provider's view of whether
+                  the user's email address is verified. See EmailVerificationState.
+                enum:
+                - Verified
+                - Unverified
+                type: string
               lastLoginProvider:
                 allOf:
                 - enum:
@@ -198,6 +205,7 @@ spec:
         type: object
     selectableFields:
     - jsonPath: .status.platformAccess
+    - jsonPath: .status.emailVerification
     - jsonPath: .spec.email
     served: true
     storage: true

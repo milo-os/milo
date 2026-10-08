@@ -14,19 +14,24 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Passkey":                 schema_pkg_apis_identity_v1alpha1_Passkey(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyList":             schema_pkg_apis_identity_v1alpha1_PasskeyList(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyStatus":           schema_pkg_apis_identity_v1alpha1_PasskeyStatus(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey":       schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyList":   schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec":   schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus": schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyStatus(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session":                 schema_pkg_apis_identity_v1alpha1_Session(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionList":             schema_pkg_apis_identity_v1alpha1_SessionList(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus":           schema_pkg_apis_identity_v1alpha1_SessionStatus(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity":            schema_pkg_apis_identity_v1alpha1_UserIdentity(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityList":        schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref),
-		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus":      schema_pkg_apis_identity_v1alpha1_UserIdentityStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Passkey":                              schema_pkg_apis_identity_v1alpha1_Passkey(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyList":                          schema_pkg_apis_identity_v1alpha1_PasskeyList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLink":              schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLink(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkList":          schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkSpec":          schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkSpec(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkStatus":        schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkUserReference": schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkUserReference(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyStatus":                        schema_pkg_apis_identity_v1alpha1_PasskeyStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKey":                    schema_pkg_apis_identity_v1alpha1_ServiceAccountKey(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyList":                schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeySpec":                schema_pkg_apis_identity_v1alpha1_ServiceAccountKeySpec(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.ServiceAccountKeyStatus":              schema_pkg_apis_identity_v1alpha1_ServiceAccountKeyStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Session":                              schema_pkg_apis_identity_v1alpha1_Session(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionList":                          schema_pkg_apis_identity_v1alpha1_SessionList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.SessionStatus":                        schema_pkg_apis_identity_v1alpha1_SessionStatus(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentity":                         schema_pkg_apis_identity_v1alpha1_UserIdentity(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityList":                     schema_pkg_apis_identity_v1alpha1_UserIdentityList(ref),
+		"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.UserIdentityStatus":                   schema_pkg_apis_identity_v1alpha1_UserIdentityStatus(ref),
 	}
 }
 
@@ -117,6 +122,197 @@ func schema_pkg_apis_identity_v1alpha1_PasskeyList(ref common.ReferenceCallback)
 		},
 		Dependencies: []string{
 			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.Passkey", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLink(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyRegistrationLink asks the authentication provider to issue a single-use passkey registration code for a user and mails it, through the notification pipeline, to that user's VERIFIED email address. It is how support recovers an account whose passkeys are all lost (passkey program Phase C, the admin backstop).\n\nCreate-only virtual resource served by zitadel-provider's identity apiserver: milo does not persist it, there is no update, and there is no delete because the provider cannot revoke an issued code — it expires. The durable record is the notification Email the create produces (see Status.EmailName), labeled with the user, requester and reason.\n\nmetadata.name is assigned by the server.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkSpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkSpec", "go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkStatus", "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyRegistrationLinkList is a list of PasskeyRegistrationLink resources.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLink"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLink", "io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyRegistrationLinkSpec is what support asks for.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"userRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UserRef names the iam.miloapis.com User (metadata.name is the provider user ID) who receives the link. The link only ever goes to that user's verified address.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkUserReference"),
+						},
+					},
+					"requestedBy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RequestedBy is the metadata.name of the staff User asking. Recorded for audit; the server rejects a value that does not match the authenticated caller.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"reason": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Reason is why the link is being sent (ticket reference, customer request). Required.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"userRef", "requestedBy", "reason"},
+			},
+		},
+		Dependencies: []string{
+			"go.miloapis.com/milo/pkg/apis/identity/v1alpha1.PasskeyRegistrationLinkUserReference"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyRegistrationLinkStatus is filled by the server on create.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"userUID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UserUID is the UID of the User the link was sent to.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"emailName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "EmailName is the notification.miloapis.com Email resource that carries the link.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"expiresAt": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ExpiresAt is when the issued code stops working (the provider's configured lifetime).",
+							Ref:         ref("io.k8s.apimachinery.pkg.apis.meta.v1.Time"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"io.k8s.apimachinery.pkg.apis.meta.v1.Time"},
+	}
+}
+
+func schema_pkg_apis_identity_v1alpha1_PasskeyRegistrationLinkUserReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PasskeyRegistrationLinkUserReference points at a User by name.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
 	}
 }
 

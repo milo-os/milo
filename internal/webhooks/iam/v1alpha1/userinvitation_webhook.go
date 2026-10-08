@@ -103,7 +103,7 @@ func (m *UserInvitationMutator) Default(ctx context.Context, ui *iamv1alpha1.Use
 	return nil
 }
 
-// +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-userinvitation,mutating=false,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=userinvitations,verbs=create,versions=v1alpha1,name=vuserinvitation.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
+// +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-userinvitation,mutating=false,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=userinvitations,verbs=create;update,versions=v1alpha1,name=vuserinvitation.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
 // UserInvitationValidator validates UserInvitation resources.
 type UserInvitationValidator struct {
@@ -137,18 +137,23 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 		errs = append(errs, field.Invalid(field.NewPath("spec").Child("organizationRef"), ui.Spec.OrganizationRef.Name, "organizationRef must be the same as the requesting user's organization"))
 	}
 
-	// Ensure there is no existing UserInvitation for the same email and organization
+	// Ensure there is no live, pending UserInvitation for the same email and organization.
+	// Terminal invitations (declined, expired, or accepted-but-stale) do not block a
+	// fresh invite: re-inviting someone whose invitation lapsed is ordinary onboarding.
 	var existing iamv1alpha1.UserInvitationList
 	if err := v.client.List(ctx, &existing,
 		client.MatchingFields{userInvitationCompositeKey: buildUserInvitationCompositeKey(*ui)}); err != nil {
 		userinvitationlog.Error(err, "failed to list existing UserInvitations by email", "email", ui.Spec.Email)
 		return nil, errors.NewInternalError(fmt.Errorf("failed to list existing UserInvitations: %w", err))
 	}
-	if len(existing.Items) > 0 {
-		errs = append(errs, field.Duplicate(
-			field.NewPath("spec").Child("organizationRef"),
-			ui.Spec.OrganizationRef.Name,
-		))
+	for i := range existing.Items {
+		if existing.Items[i].Spec.State == iamv1alpha1.UserInvitationStatePending && !existing.Items[i].IsExpired() {
+			errs = append(errs, field.Duplicate(
+				field.NewPath("spec").Child("organizationRef"),
+				ui.Spec.OrganizationRef.Name,
+			))
+			break
+		}
 	}
 
 	for i, role := range ui.Spec.Roles {
@@ -190,6 +195,24 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 }
 
 func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.UserInvitation) (admission.Warnings, error) {
+	// Reject accepting an invitation whose expiration date has already passed.
+	// Accepting an expired invitation used to silently succeed while granting no
+	// membership, which left a stale "Accepted" record that blocked every future
+	// invite to the same address. Rejecting here tells the invitee immediately
+	// that the link is no longer valid so they can request a new invitation.
+	if oldObj.Spec.State == iamv1alpha1.UserInvitationStatePending && newObj.Spec.State == iamv1alpha1.UserInvitationStateAccepted && newObj.IsExpired() {
+		return nil, errors.NewInvalid(
+			iamv1alpha1.SchemeGroupVersion.WithKind("UserInvitation").GroupKind(),
+			newObj.Name,
+			field.ErrorList{
+				field.Invalid(
+					field.NewPath("spec").Child("state"),
+					newObj.Spec.State,
+					"the invitation has expired and can no longer be accepted; ask the inviter to send a new invitation",
+				),
+			},
+		)
+	}
 	return nil, nil
 }
 

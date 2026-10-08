@@ -3,7 +3,9 @@ kind: Test
 metadata:
   name: crm-note-contact-lifecycle
 spec:
-  skip: true
+  # Re-enabled: notes on platform-scoped subjects (Contact, User) no longer hit the
+  # project notes quota policy. See config/services/quota/claim-policies/.
+  skip: false
   description: |
     End-to-end tests for CRM Notes.
 

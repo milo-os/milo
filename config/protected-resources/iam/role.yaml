@@ -8,6 +8,12 @@ spec:
   kind: Role
   plural: roles
   singular: role
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

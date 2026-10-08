@@ -100,6 +100,9 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager)
 	if err := iamv1alpha1webhook.SetupUserDeactivationWebhooksWithManager(mgr, SystemNamespace); err != nil {
 		return fmt.Errorf("setting up userdeactivation webhook: %w", err)
 	}
+	if err := iamv1alpha1webhook.SetupGroupMembershipWebhooksWithManager(mgr); err != nil {
+		return fmt.Errorf("setting up groupmembership webhook: %w", err)
+	}
 	if err := identityv1alpha1webhook.SetupUserIdentityWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up useridentity webhook: %w", err)
 	}
@@ -136,7 +139,7 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager)
 	if err := iamv1alpha1webhook.SetupPlatformAccessWebhooksWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up platform access webhook: %w", err)
 	}
-	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr); err != nil {
+	if err := iamv1alpha1webhook.SetupPolicyBindingWebhooksWithManager(mgr, AssignableRolesNamespace); err != nil {
 		return fmt.Errorf("setting up policybinding webhook: %w", err)
 	}
 	return nil
@@ -165,6 +168,12 @@ func newWebhookRESTMapper(ctx context.Context, rootClientBuilder clientbuilder.C
 // startCoreControlPlaneWebhooks starts the admission webhook server on every replica.
 // It is invoked before leader election when leader election is enabled so followers
 // also listen on the webhook port and Service endpoints remain healthy.
+//
+// This is the dedicated, non-leader-election webhook manager: admission stays
+// available even when leadership has not been (or cannot be) acquired, so it is
+// independent of the leader-gated reconcile loops. Do NOT add a separate webhook
+// Deployment to "decouple" it — that is already done here. To harden webhook
+// availability, run the controller-manager with >=2 replicas.
 func startCoreControlPlaneWebhooks(
 	ctx context.Context,
 	opts *Options,

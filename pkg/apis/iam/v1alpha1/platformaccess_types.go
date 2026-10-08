@@ -79,7 +79,8 @@ type PlatformAccess struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   PlatformAccessSpec   `json:"spec,omitempty"`
+	// +kubebuilder:validation:Required
+	Spec   PlatformAccessSpec   `json:"spec"`
 	Status PlatformAccessStatus `json:"status,omitempty"`
 }
 

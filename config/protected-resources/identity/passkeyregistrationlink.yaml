@@ -1,0 +1,20 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: identity.miloapis.com-passkeyregistrationlink
+spec:
+  serviceRef:
+    name: "identity.miloapis.com"
+  kind: PasskeyRegistrationLink
+  plural: passkeyregistrationlinks
+  singular: passkeyregistrationlink
+  # Create-only by design (spec §4.2): a link is issued, never edited or revoked —
+  # Zitadel has no revoke for an issued registration code; expiry is the mitigation.
+  permissions:
+    - list
+    - get
+    - watch
+    - create
+  parentResources:
+    - apiGroup: iam.miloapis.com
+      kind: User

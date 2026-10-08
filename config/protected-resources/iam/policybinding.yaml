@@ -8,6 +8,12 @@ spec:
   kind: PolicyBinding
   plural: policybindings
   singular: policybinding
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

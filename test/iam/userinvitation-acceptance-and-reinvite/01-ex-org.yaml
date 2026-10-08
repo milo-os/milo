@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: ui-ex-test-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-acceptance-and-reinvite"
+  annotations:
+    kubernetes.io/display-name: "UserInvitation Expiry Acceptance Test Organization"
+spec:
+  type: Standard

@@ -18,7 +18,8 @@ type UserPreference struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   UserPreferenceSpec   `json:"spec,omitempty"`
+	// +kubebuilder:validation:Required
+	Spec   UserPreferenceSpec   `json:"spec"`
 	Status UserPreferenceStatus `json:"status,omitempty"`
 }
 

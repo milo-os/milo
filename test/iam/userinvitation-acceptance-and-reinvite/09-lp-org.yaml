@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: ui-lp-test-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-acceptance-and-reinvite"
+  annotations:
+    kubernetes.io/display-name: "UserInvitation Live Pending Test Organization"
+spec:
+  type: Standard

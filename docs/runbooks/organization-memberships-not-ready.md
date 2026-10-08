@@ -90,9 +90,21 @@ further:
 kubectl rollout restart deploy/milo-controller-manager -n <namespace>
 ```
 
+## Why This Rule Selects Nothing When Healthy
+
+The recording rule counts only memberships whose `Ready` condition is not
+`True`, so a healthy fleet produces no series at all rather than a zero. On
+production it reads 547 membership series and emits nothing.
+
+That is indistinguishable from a rule whose metric was renamed or never
+shipped, so the rule carries `expected_no_match: "true"`. The alert-compliance
+exporter reads that label and stops reporting the rule as dead. Remove the
+label if the expression ever changes to one that selects series while healthy.
+
 ## Related
 
 - [policy-bindings-not-ready.md](policy-bindings-not-ready.md) — the
   membership's owned PolicyBinding shows up here too until the membership
   self-deletes.
 - [controller-manager-crash-looping.md](controller-manager-crash-looping.md)
+

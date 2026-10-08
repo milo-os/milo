@@ -17,7 +17,7 @@ const (
 	ContactGroupVisibilityFieldSelector = "spec.visibility"
 )
 
-// ContactGroupVisibilityWithoutPrivateDecorator intercepts requests to list
+// ContactGroupVisibilityWithoutPrivateDecorator intercepts requests to list or watch
 // contact groups, and injects a field selector to only include public contact groups.
 //
 // This is done so that end users can execute `kubectl get contactgroups`
@@ -31,7 +31,7 @@ func ContactGroupVisibilityWithoutPrivateDecorator(handler http.Handler) http.Ha
 			return
 		}
 
-		if info.APIGroup == notificationv1alpha1.SchemeGroupVersion.Group && info.Resource == "contactgroups" && info.Verb == "list" {
+		if info.APIGroup == notificationv1alpha1.SchemeGroupVersion.Group && info.Resource == "contactgroups" && (info.Verb == "list" || info.Verb == "watch") {
 			_, ok := ctx.Value(UserIDContextKey).(string)
 			if ok {
 				currentSelector, err := fields.ParseSelector(info.FieldSelector)

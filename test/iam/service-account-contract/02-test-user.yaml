@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: user-service-account-contract
+  labels:
+    test.miloapis.com/scenario: "service-account-contract"
+spec:
+  email: service-account-contract-admin@test.local
+  givenName: ServiceAccountTest
+  familyName: Admin
