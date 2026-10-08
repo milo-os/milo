@@ -160,12 +160,24 @@ func (r *ProjectSuspensionEscalationController) Reconcile(ctx context.Context, r
 	daysRemaining := int32(math.Ceil(remaining.Hours() / 24))
 
 	if sendWarningEmails {
+		// A single reconcile can find the project already past more than one
+		// checkpoint — after a controller gap, or when a project is first seen
+		// deep into its window. Collect every now-crossed checkpoint and send
+		// ONE e-mail quoted at the true days remaining (never the checkpoint
+		// value), so an organization is never handed conflicting countdowns
+		// (e.g. both "7 days remaining" and "3 days remaining"). The
+		// checkpoints are only recorded as notified once the e-mail is actually
+		// sent, so a skipped or errored send is retried on a later reconcile.
+		var dueCheckpoints []int32
 		for _, checkpoint := range r.notificationCheckpoints {
 			if daysRemaining > checkpoint || containsInt32(project.Status.SuspensionEscalation.NotifiedDaysRemaining, checkpoint) {
 				continue
 			}
+			dueCheckpoints = append(dueCheckpoints, checkpoint)
+		}
 
-			if err := r.sendEscalationWarningEmail(ctx, &project, checkpoint, deletionAt); err != nil {
+		if len(dueCheckpoints) > 0 {
+			if err := r.sendEscalationWarningEmail(ctx, &project, daysRemaining, deletionAt, dueCheckpoints); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to send suspension deletion warning email: %w", err)
 			}
 		}
@@ -215,9 +227,11 @@ func (r *ProjectSuspensionEscalationController) cancelEscalation(ctx context.Con
 }
 
 // sendEscalationWarningEmail notifies the project's organization contact that
-// the project will be deleted in daysRemaining days, then records the
-// checkpoint as notified so it is not sent again.
-func (r *ProjectSuspensionEscalationController) sendEscalationWarningEmail(ctx context.Context, project *resourcemanagerv1alpha.Project, daysRemaining int32, deletionAt time.Time) error {
+// the project will be deleted in daysRemaining days. checkpoints lists every
+// "days until deletion" threshold that is now crossed; they are recorded as
+// notified only once the e-mail has actually been sent, so a skipped (no
+// contact e-mail) or errored send is retried on a later reconcile.
+func (r *ProjectSuspensionEscalationController) sendEscalationWarningEmail(ctx context.Context, project *resourcemanagerv1alpha.Project, daysRemaining int32, deletionAt time.Time, checkpoints []int32) error {
 	logger := log.FromContext(ctx)
 
 	var org resourcemanagerv1alpha.Organization
@@ -280,7 +294,7 @@ func (r *ProjectSuspensionEscalationController) sendEscalationWarningEmail(ctx c
 		}
 	}
 
-	project.Status.SuspensionEscalation.NotifiedDaysRemaining = append(project.Status.SuspensionEscalation.NotifiedDaysRemaining, daysRemaining)
+	project.Status.SuspensionEscalation.NotifiedDaysRemaining = append(project.Status.SuspensionEscalation.NotifiedDaysRemaining, checkpoints...)
 	sort.Slice(project.Status.SuspensionEscalation.NotifiedDaysRemaining, func(i, j int) bool {
 		return project.Status.SuspensionEscalation.NotifiedDaysRemaining[i] > project.Status.SuspensionEscalation.NotifiedDaysRemaining[j]
 	})
