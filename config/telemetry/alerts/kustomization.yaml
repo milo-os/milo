@@ -5,3 +5,4 @@ components:
   - ./resources-manager
   - ./controller-manager
   - ./iam
+  - ./quota

@@ -1,0 +1,70 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: quota.miloapis.com-alerting-rules
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: quota.evaluation
+      interval: 30s
+      rules:
+        - alert: QuotaClaimsStalled
+          expr: |
+            count by (cluster) (
+              count_over_time(
+                milo_quota_claim_status_condition{
+                  condition="Granted",
+                  reason="PendingEvaluation"
+                }[3m]
+              ) >= 5
+            ) > 0
+          labels:
+            severity: warning
+            category: availability
+            team: platform
+            service: milo
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-evaluation-stalled.md"
+            summary: "{{ $value }} quota claims have waited over two minutes for a decision"
+            description: |
+              {{ $value }} ResourceClaims have stayed PendingEvaluation for more
+              than two minutes. Quota admission gives up after 30 seconds, so
+              creates that need quota are being refused with "Your request took
+              too long to be checked against your quota" until the quota
+              controllers evaluate claims again.
+
+              Usual cause: milo-controller-manager lost its leader lease and the
+              new leader is still syncing its caches.
+
+        - alert: QuotaAdmissionFailing
+          expr: |
+            (
+              sum by (cluster, job) (
+                increase(milo_quota_admission_result_total{result=~"timeout|internal_error"}[5m])
+              )
+              /
+              sum by (cluster, job) (
+                increase(milo_quota_admission_result_total[5m])
+              )
+            ) > 0.10
+            and
+            sum by (cluster, job) (
+              increase(milo_quota_admission_result_total{result=~"timeout|internal_error"}[5m])
+            ) >= 5
+          labels:
+            severity: warning
+            category: availability
+            team: platform
+            service: milo
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-evaluation-stalled.md"
+            summary: "{{ $value | humanizePercentage }} of quota checks on {{ $labels.job }} are timing out or failing"
+            description: |
+              Over the last 5 minutes, {{ $value | humanizePercentage }} of quota
+              admission checks on {{ $labels.job }} ended in a timeout or an
+              internal error. Each one is a create refused to a user even though
+              their quota may have plenty of room.
