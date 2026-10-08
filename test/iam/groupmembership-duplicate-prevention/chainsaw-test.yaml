@@ -19,6 +19,7 @@ spec:
     - Creating a membership referencing a non-existent user is rejected at admission.
     - Changing an existing membership's group pointer is rejected because the spec is immutable.
     - A metadata-only update to an existing membership is accepted.
+    - Adding and removing a finalizer is accepted.
 
   steps:
   - name: setup-users-and-groups
@@ -101,4 +102,20 @@ spec:
     - assert:
         file: resources/membership-alice-eng-labeled.yaml
 
-
+  - name: allow-finalizer-add-and-remove
+    description: Adding and then dropping a finalizer is accepted. This is the path the OpenFGA controller takes when it claims a new membership and releases it on delete; rejecting it leaves the membership without an authorization tuple and stuck in Terminating.
+    try:
+    - apply:
+        file: resources/membership-alice-eng-finalized.yaml
+    - assert:
+        file: resources/membership-alice-eng-finalized.yaml
+    - apply:
+        file: resources/membership-alice-eng-labeled.yaml
+    - assert:
+        resource:
+          apiVersion: iam.miloapis.com/v1alpha1
+          kind: GroupMembership
+          metadata:
+            name: gm-alice-eng
+            namespace: ($namespace)
+          (metadata.finalizers == null): true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,6 +154,27 @@ func TestGroupMembership_Update_MetadataOnlyAllowed(t *testing.T) {
 
 	_, err := v.ValidateUpdate(context.Background(), oldMembership, newMembership)
 	require.NoError(t, err, "metadata-only updates such as the OpenFGA controller adding its finalizer must be allowed")
+}
+
+func TestGroupMembership_Update_FinalizerRemovalAllowed(t *testing.T) {
+	oldMembership := newGroupMembership("gm-1", "ns1", "alice", "eng", "ns1")
+	oldMembership.Finalizers = []string{"iam.miloapis.com/groupmembership"}
+	newMembership := newGroupMembership("gm-1", "ns1", "alice", "eng", "ns1")
+	newMembership.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	v := newTestValidator()
+
+	_, err := v.ValidateUpdate(context.Background(), oldMembership, newMembership)
+	require.NoError(t, err, "dropping the finalizer must be allowed or a deleted membership stays in Terminating forever")
+}
+
+func TestGroupMembership_Update_AnnotationsOnlyAllowed(t *testing.T) {
+	oldMembership := newGroupMembership("gm-1", "ns1", "alice", "eng", "ns1")
+	newMembership := newGroupMembership("gm-1", "ns1", "alice", "eng", "ns1")
+	newMembership.Annotations = map[string]string{"iam.miloapis.com/user-email": "alice@example.com"}
+	v := newTestValidator()
+
+	_, err := v.ValidateUpdate(context.Background(), oldMembership, newMembership)
+	require.NoError(t, err, "annotation-only updates must be allowed")
 }
 
 func TestGroupMembership_Update_ChangeGroupRejected(t *testing.T) {

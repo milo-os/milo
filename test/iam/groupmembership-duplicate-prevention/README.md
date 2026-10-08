@@ -15,6 +15,7 @@ This test verifies:
 - Creating a membership referencing a non-existent user is rejected at admission.
 - Changing an existing membership's group pointer is rejected because the spec is immutable.
 - A metadata-only update to an existing membership is accepted.
+- Adding and removing a finalizer is accepted.
 
 
 ## Steps
@@ -30,6 +31,7 @@ This test verifies:
 | 7 | [reject-nonexistent-user](#step-reject-nonexistent-user) | 0 | 1 | 0 | 0 | 0 |
 | 8 | [reject-reference-update](#step-reject-reference-update) | 0 | 1 | 0 | 0 | 0 |
 | 9 | [allow-metadata-only-update](#step-allow-metadata-only-update) | 0 | 2 | 0 | 0 | 0 |
+| 10 | [allow-finalizer-add-and-remove](#step-allow-finalizer-add-and-remove) | 0 | 4 | 0 | 0 | 0 |
 
 ### Step: `setup-users-and-groups`
 
@@ -127,6 +129,19 @@ A metadata-only update is accepted because only the spec is immutable. This is t
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `allow-finalizer-add-and-remove`
+
+Adding and then dropping a finalizer is accepted. This is the path the OpenFGA controller takes when it claims a new membership and releases it on delete; rejecting it leaves the membership without an authorization tuple and stuck in Terminating.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `assert` | 0 | 0 | *No description* |
+| 3 | `apply` | 0 | 0 | *No description* |
+| 4 | `assert` | 0 | 0 | *No description* |
 
 ---
 
