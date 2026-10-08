@@ -349,12 +349,18 @@ func (r *UserContactController) syncContactWithUser(ctx context.Context, contact
 
 	// Update the Contact
 	before := contact.DeepCopy()
-	contact.Spec.SubjectRef = &notificationv1alpha1.SubjectReference{
-		APIGroup: iamv1alpha1.SchemeGroupVersion.Group,
-		Kind:     "User",
-		Name:     user.Name,
-		// Namespace is omitted for cluster-scoped resources like User
+	
+	// Only update SubjectRef if it doesn't already point to this user.
+	// This avoids triggering the webhook's immutability check for minor corrections (like missing APIGroup).
+	if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Kind != "User" || contact.Spec.SubjectRef.Name != user.Name {
+		contact.Spec.SubjectRef = &notificationv1alpha1.SubjectReference{
+			APIGroup: iamv1alpha1.SchemeGroupVersion.Group,
+			Kind:     "User",
+			Name:     user.Name,
+			// Namespace is omitted for cluster-scoped resources like User
+		}
 	}
+	
 	contact.Spec.Email = user.Spec.Email
 	contact.Spec.GivenName = user.Spec.GivenName
 	contact.Spec.FamilyName = user.Spec.FamilyName

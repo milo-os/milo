@@ -253,7 +253,8 @@ func (v *ContactValidator) ValidateUpdate(ctx context.Context, contactOld, conta
 	// If the SubjectRef changed, reject the update.
 	if !reflect.DeepEqual(contactNew.Spec.SubjectRef, contactOld.Spec.SubjectRef) {
 		// Allow updating SubjectRef only if it was previously nil (e.g., user claiming a newsletter contact)
-		if contactOld.Spec.SubjectRef != nil {
+		// Or if it is being set to nil (e.g., controller cleaning up a dangling reference to a deleted user)
+		if contactOld.Spec.SubjectRef != nil && contactNew.Spec.SubjectRef != nil {
 			errs = append(errs, field.Invalid(field.NewPath("spec", "subjectRef"), contactNew.Spec.SubjectRef, "subjectRef is immutable once set"))
 		}
 	}
