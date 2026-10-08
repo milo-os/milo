@@ -27,8 +27,12 @@ type Role struct {
 // RoleSpec defines the desired state of Role
 type RoleSpec struct {
 	// The names of the permissions this role grants when bound in an IAM policy.
-	// All permissions must be in the format: `{service}.{resource}.{action}`
-	// (e.g. compute.workloads.create).
+	// Permissions use the format service/resource.verb, for example
+	// compute.example.com/workloads.create. When subresource authorization is
+	// enabled in the authorization provider, registered subresource permissions
+	// use service/resource/subresource.verb, for example
+	// compute.example.com/workloads/status.patch. Subresource verbs are granted
+	// independently of base resource verbs; patch and update are distinct.
 	// +kubebuilder:validation:Optional
 	IncludedPermissions []string `json:"includedPermissions,omitempty"`
 

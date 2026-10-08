@@ -91,6 +91,16 @@ func TestUserContactListConstraintDecorator(t *testing.T) {
 		{Name: "contact-3", SubjectName: "test-user", SubjectKind: "Group"}, // Should not match
 	}
 
+	// A watch must be constrained exactly like a list, or it streams every
+	// user's objects. Re-run each list case as a watch.
+	for _, tc := range testCases {
+		if tc.verb == "list" && tc.resource == "contacts" {
+			tc.name += " (watch)"
+			tc.verb = "watch"
+			testCases = append(testCases, tc)
+		}
+	}
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			var capturedFieldSelector string

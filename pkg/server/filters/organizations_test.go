@@ -3,10 +3,12 @@ package filters
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	milorequest "go.miloapis.com/milo/pkg/request"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/install"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -140,4 +142,98 @@ func TestOrganizationContextHandler(t *testing.T) {
 		})
 	}
 
+}
+
+func TestOrganizationProjectListConstraintDecorator(t *testing.T) {
+	const orgLabel = resourcemanagerv1alpha1.OrganizationNameLabel
+
+	tests := map[string]struct {
+		verb                  string
+		resource              string
+		organizationID        string
+		existingLabelSelector string
+		expectedLabelSelector string
+	}{
+		"list is constrained to the organization": {
+			verb:                  "list",
+			resource:              "projects",
+			organizationID:        "org-a",
+			expectedLabelSelector: orgLabel + "=org-a",
+		},
+		"watch is constrained to the organization": {
+			verb:                  "watch",
+			resource:              "projects",
+			organizationID:        "org-a",
+			expectedLabelSelector: orgLabel + "=org-a",
+		},
+		"watch replaces a caller supplied organization": {
+			verb:                  "watch",
+			resource:              "projects",
+			organizationID:        "org-a",
+			existingLabelSelector: orgLabel + "=org-b",
+			expectedLabelSelector: orgLabel + "=org-a",
+		},
+		"watch keeps other label requirements": {
+			verb:                  "watch",
+			resource:              "projects",
+			organizationID:        "org-a",
+			existingLabelSelector: "team=edge",
+			expectedLabelSelector: orgLabel + "=org-a,team=edge",
+		},
+		"get is not modified": {
+			verb:           "get",
+			resource:       "projects",
+			organizationID: "org-a",
+		},
+		"other resources are not modified": {
+			verb:           "watch",
+			resource:       "organizations",
+			organizationID: "org-a",
+		},
+		"requests without an organization are not modified": {
+			verb:     "watch",
+			resource: "projects",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var gotInfoSelector, gotQuerySelector string
+			handler := OrganizationProjectListConstraintDecorator(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				info, ok := request.RequestInfoFrom(req.Context())
+				if assert.True(t, ok) {
+					gotInfoSelector = info.LabelSelector
+				}
+				gotQuerySelector = req.URL.Query().Get("labelSelector")
+			}))
+
+			u := &url.URL{Path: "/apis/resourcemanager.miloapis.com/v1alpha1/projects"}
+			if tt.existingLabelSelector != "" {
+				u.RawQuery = url.Values{"labelSelector": {tt.existingLabelSelector}}.Encode()
+			}
+			req := httptest.NewRequest(http.MethodGet, u.String(), nil)
+
+			ctx := request.WithRequestInfo(req.Context(), &request.RequestInfo{
+				IsResourceRequest: true,
+				APIGroup:          resourcemanagerv1alpha1.GroupVersion.Group,
+				Resource:          tt.resource,
+				Verb:              tt.verb,
+				LabelSelector:     tt.existingLabelSelector,
+			})
+			if tt.organizationID != "" {
+				ctx = milorequest.WithOrganization(ctx, tt.organizationID)
+			}
+
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req.WithContext(ctx))
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			expected := tt.expectedLabelSelector
+			if expected == "" {
+				expected = tt.existingLabelSelector
+			}
+			assert.Equal(t, expected, gotInfoSelector)
+			assert.Equal(t, expected, gotQuerySelector)
+		})
+	}
 }

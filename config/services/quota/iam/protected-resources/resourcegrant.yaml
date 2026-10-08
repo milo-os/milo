@@ -8,6 +8,12 @@ spec:
   kind: ResourceGrant
   plural: resourcegrants
   singular: resourcegrant
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

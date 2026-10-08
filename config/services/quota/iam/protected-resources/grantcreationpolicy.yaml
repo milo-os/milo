@@ -8,6 +8,12 @@ spec:
   kind: GrantCreationPolicy
   plural: grantcreationpolicies
   singular: grantcreationpolicy
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

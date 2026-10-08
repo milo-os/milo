@@ -1,0 +1,11 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: om-context-a
+  labels:
+    test.miloapis.com/scenario: "organizationmembership-org-context"
+  annotations:
+    kubernetes.io/description: "Organization for validating the organization-context membership restriction"
+    kubernetes.io/display-name: "Org Context Membership Test Organization"
+spec:
+  type: Standard

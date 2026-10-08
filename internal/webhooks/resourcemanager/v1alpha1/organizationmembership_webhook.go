@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -15,6 +16,7 @@ import (
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/webhook"
 )
 
 var organizationmembershiplog = logf.Log.WithName("organizationmembership-resource")
@@ -47,6 +49,14 @@ type OrganizationMembershipValidator struct {
 func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership create", "name", membership.Name, "namespace", membership.Namespace)
 
+	// In organization context the membership must reference the request
+	// organization itself. This stops an org admin (who holds update rights to
+	// manage roles) from creating a membership in an organization that points at
+	// another organization.
+	if _, err := v.validateOrgContext(ctx, membership); err != nil {
+		return nil, err
+	}
+
 	// Validate roles if specified
 	if len(membership.Spec.Roles) > 0 {
 		if err := v.validateRoles(ctx, membership); err != nil {
@@ -59,6 +69,13 @@ func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, me
 
 func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, oldMembership, newMembership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
 	organizationmembershiplog.Info("Validating OrganizationMembership update", "name", newMembership.Name, "namespace", newMembership.Namespace)
+
+	// In organization context the membership must reference the request
+	// organization itself. Re-run on the new object so that an org admin cannot
+	// repoint an existing membership's organizationRef to another organization.
+	if _, err := v.validateOrgContext(ctx, newMembership); err != nil {
+		return nil, err
+	}
 
 	// Validate roles if specified
 	if len(newMembership.Spec.Roles) > 0 {
@@ -117,6 +134,53 @@ func (v *OrganizationMembershipValidator) ValidateDelete(ctx context.Context, me
 	}
 
 	return nil, v.lastOwnerForbiddenError(membership, "delete")
+}
+
+// validateOrgContext applies the organization-context restrictions to an
+// OrganizationMembership: the membership must live in the request
+// organization's namespace and must reference that same organization. When the
+// request is not made in an organization context it returns nil, nil so
+// platform-scope and internal-controller memberships pass through unchanged.
+//
+// This closes an escalation where an org admin holds update rights on the
+// membership (granted so they can manage roles) and could otherwise repoint an
+// existing membership's organizationRef at another organization, or create a
+// new membership in their org's namespace that references another organization.
+func (v *OrganizationMembershipValidator) validateOrgContext(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
+	orgID, isOrgContext, err := webhook.OrgContextFromRequest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !isOrgContext {
+		return nil, nil
+	}
+
+	var errs field.ErrorList
+
+	// The membership must live in the request organization's namespace. The
+	// authorizer already enforces this, so a mismatch means the direct client is
+	// trying to cross namespaces; fail closed regardless.
+	if membership.Namespace != resourcemanagerv1alpha1.OrganizationNamespace(orgID) {
+		errs = append(errs, field.Invalid(
+			field.NewPath("metadata", "namespace"),
+			membership.Namespace,
+			fmt.Sprintf("organizationmemberships in organization scope must be in the organization's namespace %q", resourcemanagerv1alpha1.OrganizationNamespace(orgID)),
+		))
+	}
+
+	// The referenced organization must be the request organization itself.
+	if membership.Spec.OrganizationRef.Name != orgID {
+		errs = append(errs, field.Forbidden(
+			field.NewPath("spec", "organizationRef", "name"),
+			fmt.Sprintf("organization %q does not match the request organization %q", membership.Spec.OrganizationRef.Name, orgID),
+		))
+	}
+
+	if len(errs) > 0 {
+		return nil, apierrors.NewInvalid(resourcemanagerv1alpha1.GroupVersion.WithKind("OrganizationMembership").GroupKind(), membership.Name, errs)
+	}
+
+	return nil, nil
 }
 
 // allowOwnerDeletionDuringTeardown returns true when the membership owner removal should be permitted because

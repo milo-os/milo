@@ -8,6 +8,12 @@ spec:
   kind: AllowanceBucket
   plural: allowancebuckets
   singular: allowancebucket
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
   permissions:
     - list
     - get

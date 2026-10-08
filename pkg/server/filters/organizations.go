@@ -134,9 +134,11 @@ func OrganizationContextAuthorizationDecorator(handler http.Handler) http.Handle
 	})
 }
 
-// OrganizationProjectListConstraintDecorator intercepts requests to list
-// projects, which are a cluster scoped resource, and injects a label selector
-// to limit projects to the organization provided in the request context.
+// OrganizationProjectListConstraintDecorator intercepts requests to list or
+// watch projects, which are a cluster scoped resource, and injects a label
+// selector to limit projects to the organization provided in the request
+// context. Watches must be constrained too, or they stream every
+// organization's projects.
 //
 // This is done so that end users can execute `kubectl get projects` and not
 // need to provide a label selector.
@@ -149,7 +151,7 @@ func OrganizationProjectListConstraintDecorator(handler http.Handler) http.Handl
 			return
 		}
 
-		if info.APIGroup == "resourcemanager.miloapis.com" && info.Resource == "projects" && info.Verb == "list" {
+		if info.APIGroup == "resourcemanager.miloapis.com" && info.Resource == "projects" && (info.Verb == "list" || info.Verb == "watch") {
 			organizationID, ok := milorequest.OrganizationID(ctx)
 			if ok {
 				requirements, err := labels.ParseToRequirements(info.LabelSelector)
@@ -181,6 +183,7 @@ func OrganizationProjectListConstraintDecorator(handler http.Handler) http.Handl
 				query, err := url.ParseQuery(req.URL.RawQuery)
 				if err != nil {
 					responsewriters.InternalError(w, req, fmt.Errorf("failed to parse url query: %w", err))
+					return
 				}
 				query.Del("labelSelector")
 				query.Add("labelSelector", info.LabelSelector)

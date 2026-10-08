@@ -18,7 +18,7 @@ const (
 	ContactGroupMembershipRemovalUsernameFieldSelector = "status.username"
 )
 
-// UserContactGroupMembershipRemovalListConstraintDecorator intercepts requests to list
+// UserContactGroupMembershipRemovalListConstraintDecorator intercepts requests to list or watch
 // contact group membership removals, and injects a field selector to limit them to the user provided in the request context.
 //
 // This is done so that end users can execute `kubectl get contactgroupmembershipremovals`
@@ -32,7 +32,7 @@ func UserContactGroupMembershipRemovalListConstraintDecorator(handler http.Handl
 			return
 		}
 
-		if info.APIGroup == notificationv1alpha1.SchemeGroupVersion.Group && info.Resource == "contactgroupmembershipremovals" && info.Verb == "list" {
+		if info.APIGroup == notificationv1alpha1.SchemeGroupVersion.Group && info.Resource == "contactgroupmembershipremovals" && (info.Verb == "list" || info.Verb == "watch") {
 			userID, ok := ctx.Value(UserIDContextKey).(string)
 			if ok {
 				currentSelector, err := fields.ParseSelector(info.FieldSelector)
