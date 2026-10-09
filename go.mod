@@ -1,8 +1,6 @@
 module go.miloapis.com/milo
 
-go 1.25.0
-
-toolchain go1.26.0
+go 1.26.0
 
 require (
 	github.com/blang/semver/v4 v4.0.0
@@ -14,7 +12,7 @@ require (
 	github.com/spf13/cobra v1.10.0
 	github.com/spf13/pflag v1.0.9
 	github.com/stretchr/testify v1.11.1
-	go.miloapis.com/billing v0.2.10
+	go.miloapis.com/billing v0.3.10
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0

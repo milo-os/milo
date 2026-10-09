@@ -127,6 +127,104 @@ func TestReconcileOrganizationOnboarding(t *testing.T) {
 	})
 }
 
+func TestReconcileOrganizationOnboardingBillingSignals(t *testing.T) {
+	t.Parallel()
+
+	scheme := getTestScheme()
+	condition := func(conditionType string, status metav1.ConditionStatus, reason string) metav1.Condition {
+		return metav1.Condition{Type: conditionType, Status: status, Reason: reason}
+	}
+
+	tests := []struct {
+		name       string
+		conditions []metav1.Condition
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{
+			name: "ready with invoice terms and no card",
+			conditions: []metav1.Condition{
+				condition(billingv1alpha1.BillingAccountConditionDefaultPaymentMethodReady, metav1.ConditionFalse, "NotConfigured"),
+				condition(billingv1alpha1.BillingAccountConditionPaymentReady, metav1.ConditionTrue, "InvoiceTerms"),
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonReady,
+		},
+		{
+			name: "ready with a card",
+			conditions: []metav1.Condition{
+				condition(billingv1alpha1.BillingAccountConditionDefaultPaymentMethodReady, metav1.ConditionTrue, "Ready"),
+				condition(billingv1alpha1.BillingAccountConditionPaymentReady, metav1.ConditionTrue, "PaymentMethodReady"),
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonReady,
+		},
+		{
+			name: "ready from a card on an account an older billing controller reconciled",
+			conditions: []metav1.Condition{
+				condition(billingv1alpha1.BillingAccountConditionDefaultPaymentMethodReady, metav1.ConditionTrue, "Ready"),
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonReady,
+		},
+		{
+			name: "not ready when terms have ended and there is no card",
+			conditions: []metav1.Condition{
+				condition(billingv1alpha1.BillingAccountConditionDefaultPaymentMethodReady, metav1.ConditionFalse, "NotConfigured"),
+				condition(billingv1alpha1.BillingAccountConditionPaymentReady, metav1.ConditionFalse, "ArrangementEnded"),
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonPaymentMethodNotReady,
+		},
+		{
+			name:       "not ready with no billing conditions yet",
+			wantStatus: metav1.ConditionFalse,
+			wantReason: resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonPaymentMethodNotReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			org := &resourcemanagerv1alpha.Organization{
+				ObjectMeta: metav1.ObjectMeta{Name: "org-billing"},
+				Spec: resourcemanagerv1alpha.OrganizationSpec{
+					ContactInfo: &resourcemanagerv1alpha.OrganizationContactInfo{
+						Email: "a@example.com",
+						Name:  "Ada Lovelace",
+					},
+				},
+			}
+			account := &billingv1alpha1.BillingAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: resourcemanagerv1alpha.OrganizationNamespace(org.Name),
+				},
+				Status: billingv1alpha1.BillingAccountStatus{Conditions: tt.conditions},
+			}
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(org, account).
+				WithObjects(org, account).
+				Build()
+
+			if _, err := reconcileOrganizationOnboarding(t.Context(), client, org); err != nil {
+				t.Fatalf("reconcileOrganizationOnboarding() error = %v", err)
+			}
+			for _, c := range org.Status.Conditions {
+				if c.Type != resourcemanagerv1alpha.OrganizationConditionOnboardingComplete {
+					continue
+				}
+				if c.Status != tt.wantStatus || c.Reason != tt.wantReason {
+					t.Fatalf("OnboardingComplete = %s/%s, want %s/%s", c.Status, c.Reason, tt.wantStatus, tt.wantReason)
+				}
+				return
+			}
+			t.Fatal("OnboardingComplete condition not found")
+		})
+	}
+}
+
 func TestMapBillingAccountToOrganization(t *testing.T) {
 	t.Parallel()
 
