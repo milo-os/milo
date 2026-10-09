@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: GroupMembership
+metadata:
+  name: test-membership-email
+  namespace: ($namespace)
+spec:
+  userRef:
+    name: test-group-email-user
+  groupRef:
+    name: test-persistant-group
+    namespace: ($namespace)

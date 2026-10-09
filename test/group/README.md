@@ -7,6 +7,7 @@ This test verifies:
 - PolicyBindings can reference groups
 - GroupMemberships link users to groups
 - Deleting a group cascades to delete GroupMemberships
+- GroupMemberships are annotated with the member's email at admission
 - PolicyBindings are updated when groups are deleted
 - PolicyBindings are deleted when they have no remaining subjects
 
@@ -17,7 +18,8 @@ This test verifies:
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [create-groups-and-policy-binding](#step-create-groups-and-policy-binding) | 0 | 11 | 0 | 0 | 0 |
 | 2 | [create-memberships](#step-create-memberships) | 0 | 2 | 0 | 0 | 0 |
-| 3 | [delete-groups](#step-delete-groups) | 0 | 12 | 0 | 0 | 0 |
+| 3 | [stamp-member-email](#step-stamp-member-email) | 0 | 3 | 0 | 0 | 0 |
+| 4 | [delete-groups](#step-delete-groups) | 0 | 12 | 0 | 0 | 0 |
 
 ### Step: `create-groups-and-policy-binding`
 
@@ -49,6 +51,18 @@ Create GroupMemberships linking users to the test groups
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `stamp-member-email`
+
+A GroupMembership referencing an existing User is annotated with the member's email at admission
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `apply` | 0 | 0 | *No description* |
+| 3 | `assert` | 0 | 0 | *No description* |
 
 ### Step: `delete-groups`
 

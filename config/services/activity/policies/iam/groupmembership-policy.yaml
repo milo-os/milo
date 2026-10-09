@@ -7,7 +7,14 @@
 # No eventRules — the controller sets conditions but does not emit Kubernetes Events.
 #
 # Design principles:
-# - Use spec.userRef.name for the member and spec.groupRef.name for the group
+# - Prefer the member's email from the iam.miloapis.com/user-email annotation,
+#   stamped by the GroupMembership mutating webhook at admission and kept in
+#   sync by the GroupMembership controller; fall back to spec.userRef.name
+#   (the User name) when the annotation is absent
+# - Rules are listed most-specific first, and the annotation rules also match
+#   strictly more narrowly than the userRef rules, so the same rule wins
+#   regardless of evaluation order
+# - Use spec.groupRef.name for the group
 # - Human-readable phrasing: "added X to group Y", "removed X from group Y"
 # - For delete, responseObject carries the deleted resource spec; fall back to objectRef.name
 # - Exclude system actors to reduce reconciliation noise
@@ -24,6 +31,10 @@ spec:
     kind: GroupMembership
 
   auditRules:
+    - name: create-with-email
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef) && has(audit.requestObject.spec.groupRef) && has(audit.requestObject.metadata.annotations) && 'iam.miloapis.com/user-email' in audit.requestObject.metadata.annotations"
+      summary: "{{ actor }} added {{ audit.requestObject.metadata.annotations['iam.miloapis.com/user-email'] }} to group {{ audit.requestObject.spec.groupRef.name }}"
+
     - name: create-with-userref
       match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.userRef) && has(audit.requestObject.spec.groupRef)"
       summary: "{{ actor }} added {{ audit.requestObject.spec.userRef.name }} to group {{ audit.requestObject.spec.groupRef.name }}"
@@ -31,6 +42,10 @@ spec:
     - name: create-fallback
       match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
       summary: "{{ actor }} added a member to the group"
+
+    - name: delete-with-email
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.userRef) && has(audit.responseObject.spec.groupRef) && has(audit.responseObject.metadata.annotations) && 'iam.miloapis.com/user-email' in audit.responseObject.metadata.annotations"
+      summary: "{{ actor }} removed {{ audit.responseObject.metadata.annotations['iam.miloapis.com/user-email'] }} from group {{ audit.responseObject.spec.groupRef.name }}"
 
     - name: delete-with-userref
       match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.spec) && has(audit.responseObject.spec.userRef) && has(audit.responseObject.spec.groupRef)"

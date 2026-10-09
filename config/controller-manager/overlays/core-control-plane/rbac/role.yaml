@@ -81,9 +81,15 @@ rules:
   - iam.miloapis.com
   resources:
   - groupmemberships
+  - userinvitations
+  - users
   verbs:
   - delete
+  - get
   - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - iam.miloapis.com
   resources:
@@ -131,18 +137,6 @@ rules:
   verbs:
   - get
   - list
-  - update
-  - watch
-- apiGroups:
-  - iam.miloapis.com
-  resources:
-  - userinvitations
-  - users
-  verbs:
-  - delete
-  - get
-  - list
-  - patch
   - update
   - watch
 - apiGroups:
