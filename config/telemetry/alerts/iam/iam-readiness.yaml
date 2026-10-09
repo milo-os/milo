@@ -32,3 +32,24 @@ spec:
               1. Check binding status: kubectl get policybindings -o wide
               2. Review authorization provider sync errors
               3. Verify role and principal references are valid
+
+        - alert: GroupMembershipsNotReady
+          expr: iam_miloapis_com:groupmemberships:not_ready > 0
+          for: 2m
+          labels:
+            severity: critical
+            category: readiness
+            team: platform
+            service: milo
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/group-memberships-not-ready.md"
+            summary: "{{ $value }} group memberships are not ready"
+            description: |
+              Group memberships are not in Ready state, breaking access control.
+
+              Not ready count: {{ $value }}
+
+              Actions needed:
+              1. Check membership status: kubectl get groupmemberships -o wide
+              2. Review authorization provider sync errors
+              3. Verify UserRef and GroupRef references are valid (UserRefValid and GroupRefValid conditions)

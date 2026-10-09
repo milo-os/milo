@@ -1,0 +1,13 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: OrganizationMembership
+metadata:
+  name: membership-matching
+  namespace: organization-om-context-a
+  labels:
+    test.miloapis.com/scenario: "organizationmembership-org-context"
+    test.miloapis.com/update: "repoints-orgref"
+spec:
+  organizationRef:
+    name: some-other-org
+  userRef:
+    name: om-person

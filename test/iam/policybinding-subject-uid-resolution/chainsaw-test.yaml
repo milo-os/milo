@@ -11,6 +11,8 @@ spec:
     - A PolicyBinding referencing a Group by name (no uid) has the Group's
       metadata.uid stamped into the stored subject.
     - A PolicyBinding referencing a non-existent Group is rejected at admission.
+    - A PolicyBinding whose Group subject has a uid but no namespace is rejected
+      at admission.
     - A system group subject (name starting with "system:") is accepted and
       left without a uid.
 
@@ -32,6 +34,14 @@ spec:
     try:
     - apply:
         file: resources/policy-binding-missing-group.yaml
+        expect:
+        - check:
+            ($error != null): true
+  - name: reject-group-with-uid-but-no-namespace
+    description: A Group subject with a uid but no namespace is rejected at admission
+    try:
+    - apply:
+        file: resources/policy-binding-group-with-uid-no-namespace.yaml
         expect:
         - check:
             ($error != null): true

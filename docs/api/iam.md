@@ -1615,7 +1615,8 @@ users.<br/>
         <td>string</td>
         <td>
           Namespace of the referenced object.
-If not specified for a Group, User or ServiceAccount, it is ignored.<br/>
+Required for a non-system Group (which is namespaced); ignored for the
+cluster-scoped User and ServiceAccount subjects.<br/>
         </td>
         <td>false</td>
       </tr><tr>
