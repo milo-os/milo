@@ -13,6 +13,7 @@ import (
 	"k8s.io/kube-openapi/pkg/util/proto"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
+	generatedopenapi "k8s.io/kubernetes/pkg/generated/openapi"
 
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
 	identityopenapi "go.miloapis.com/milo/pkg/apis/identity/v1alpha1"
@@ -43,4 +44,21 @@ func TestIdentityOpenAPIV2ParsesForKubectl(t *testing.T) {
 
 	passkey := swagger.Definitions[identityopenapi.Passkey{}.OpenAPIModelName()]
 	require.Contains(t, passkey.Extensions, "x-kubernetes-group-version-kind")
+}
+
+// The identity package's generated file also carries the apimachinery definitions its types reference. They must
+// match Kubernetes' own, so the served documents are the same whichever copy a server keeps.
+func TestIdentityOpenAPIMatchesKubernetesForSharedTypes(t *testing.T) {
+	ref := func(string) spec.Ref { return spec.Ref{} }
+	kubernetes := generatedopenapi.GetOpenAPIDefinitions(ref)
+	shared := 0
+	for name, definition := range identityopenapi.GetOpenAPIDefinitions(ref) {
+		own, ok := kubernetes[name]
+		if !ok {
+			continue
+		}
+		shared++
+		require.Equal(t, own.Schema, definition.Schema, name)
+	}
+	require.NotZero(t, shared)
 }
