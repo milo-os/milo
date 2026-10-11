@@ -357,6 +357,8 @@ k8s.io/kube-controller-manager v0.35.0 h1:NRMhS5mz6E/D2beojOj2/HcCa2thRPVf4vp4Qx
 k8s.io/kube-controller-manager v0.35.0/go.mod h1:M32fFkRScIW9KSPYUQBVqdjYrja5F2s4v5NrHEUVIJ8=
 k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 h1:Y3gxNAuB0OBLImH611+UDZcmKS3g6CthxToOb37KgwE=
 k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912/go.mod h1:kdmbQkyfwUagLfXIad1y2TdrjPFWp2Q89B3qkRwf/pQ=
+k8s.io/kube-openapi v0.0.0-20260304202019-5b3e3fdb0acf h1:btPscg4cMql0XdYK2jLsJcNEKmACJz8l+U7geC06FiM=
+k8s.io/kube-openapi v0.0.0-20260304202019-5b3e3fdb0acf/go.mod h1:kdmbQkyfwUagLfXIad1y2TdrjPFWp2Q89B3qkRwf/pQ=
 k8s.io/kube-proxy v0.35.0 h1:erv2wYmGZ6nyu/FtmaIb+ORD3q2rfZ4Fhn7VXs/8cPQ=
 k8s.io/kube-proxy v0.35.0/go.mod h1:bd9lpN3uLLOOWc/CFZbkPEi9DTkzQQymbE8FqSU4bWk=
 k8s.io/kube-scheduler v0.35.0 h1:1uzns+SQl1ols3RXH/oxhOPd4fuicXliqWTBLbqIVRM=

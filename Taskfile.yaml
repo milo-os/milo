@@ -357,28 +357,19 @@ tasks:
       - echo "Generating OpenAPI definitions for identity types..."
       - |
         set -e
-        # Model names first, for the identity package only: the generator writes a model-name file into every input
-        # package, and the apimachinery ones are read-only and carry theirs already.
+        # The apimachinery packages are inputs so that references to their types use model names; as read-only
+        # dependencies they get no model-name file.
         "{{.TOOL_DIR}}/openapi-gen" \
           --output-dir=pkg/apis/identity/v1alpha1 \
           --output-pkg=go.miloapis.com/milo/pkg/apis/identity/v1alpha1 \
           --output-file=zz_generated.openapi.go \
           --output-model-name-file=zz_generated.model_name.go \
-          --go-header-file=/dev/null \
-          --report-filename=/dev/null \
-          go.miloapis.com/milo/pkg/apis/identity/v1alpha1
-        # Then the definitions, with the apimachinery packages as inputs, as kube_codegen.sh passes them, so references
-        # to their types use model names.
-        "{{.TOOL_DIR}}/openapi-gen" \
-          --output-dir=pkg/apis/identity/v1alpha1 \
-          --output-pkg=go.miloapis.com/milo/pkg/apis/identity/v1alpha1 \
-          --output-file=zz_generated.openapi.go \
+          --readonly-pkg=k8s.io/apimachinery/pkg/apis/meta/v1 \
+          --readonly-pkg=k8s.io/apimachinery/pkg/runtime \
           --go-header-file=/dev/null \
           --report-filename=/dev/null \
           k8s.io/apimachinery/pkg/apis/meta/v1 \
           k8s.io/apimachinery/pkg/runtime \
-          k8s.io/apimachinery/pkg/version \
-          k8s.io/apimachinery/pkg/api/resource \
           go.miloapis.com/milo/pkg/apis/identity/v1alpha1
     silent: true
 
