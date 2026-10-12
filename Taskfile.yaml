@@ -307,11 +307,25 @@ tasks:
 
   # Code generation tasks
   generate:
-    desc: Generate code (alias for generate:code for backward compatibility)
+    desc: Generate every committed generated file
     cmds:
       - task: generate:code
+      - task: generate:openapi:identity
       - task: generate:docs
       - task: generate:test-docs
+
+  generate:verify:
+    desc: Fail if a committed generated file differs from what task generate produces
+    cmds:
+      - task: generate
+      # git status, not git diff: a generated file that was never committed must fail too.
+      - |
+        if [ -n "$(git status --porcelain)" ]; then
+          git status --short
+          git --no-pager diff
+          echo "Generated code is out of sync with its sources. Run 'task generate' and commit the result." >&2
+          exit 1
+        fi
 
   generate:code:
     desc: Generate code including deepcopy, objects, CRDs, and potentially protobuf marshallers
