@@ -64,9 +64,7 @@ func reconcileOrganizationOnboarding(
 	}
 
 	for i := range billingAccounts.Items {
-		account := &billingAccounts.Items[i]
-		readyCondition := apimeta.FindStatusCondition(account.Status.Conditions, billingv1alpha1.BillingAccountConditionDefaultPaymentMethodReady)
-		if readyCondition != nil && readyCondition.Status == metav1.ConditionTrue {
+		if billingAccountCanBeBilled(&billingAccounts.Items[i]) {
 			onboardingCondition.Status = metav1.ConditionTrue
 			onboardingCondition.Reason = resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonReady
 			onboardingCondition.Message = "Organization onboarding is complete"
@@ -77,9 +75,22 @@ func reconcileOrganizationOnboarding(
 
 	onboardingCondition.Status = metav1.ConditionFalse
 	onboardingCondition.Reason = resourcemanagerv1alpha.OrganizationOnboardingCompleteReasonPaymentMethodNotReady
-	onboardingCondition.Message = "Organization billing account does not have a ready default payment method"
+	onboardingCondition.Message = "Organization billing account does not have an active payment method or payment terms"
 	apimeta.SetStatusCondition(&organization.Status.Conditions, *onboardingCondition)
 	return statusChanged(originalStatus, &organization.Status), nil
+}
+
+// billingAccountCanBeBilled reports whether a billing account has a way to
+// pay. Billing's PaymentReady condition is the signal: it's True for an
+// active default payment method or for payment terms staff have granted.
+//
+// DefaultPaymentMethodReady is still accepted so that milo and billing can
+// deploy in either order: billing accounts reconciled by an older billing
+// controller don't have PaymentReady yet. Remove the fallback once every
+// environment runs billing v0.3.10 or later.
+func billingAccountCanBeBilled(account *billingv1alpha1.BillingAccount) bool {
+	return apimeta.IsStatusConditionTrue(account.Status.Conditions, billingv1alpha1.BillingAccountConditionPaymentReady) ||
+		apimeta.IsStatusConditionTrue(account.Status.Conditions, billingv1alpha1.BillingAccountConditionDefaultPaymentMethodReady)
 }
 
 func statusChanged(before, after *resourcemanagerv1alpha.OrganizationStatus) bool {
