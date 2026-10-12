@@ -425,14 +425,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		opts,
 		[]*runtime.Scheme{legacyscheme.Scheme, apiextensionsapiserver.Scheme, aggregatorscheme.Scheme, miloScheme},
 		apiResourceConfigSource,
-		func(ref openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
-			base := generatedopenapi.GetOpenAPIDefinitions(ref)
-			id := identityopenapi.GetOpenAPIDefinitions(ref)
-			for k, v := range id {
-				base[k] = v
-			}
-			return base
-		},
+		openAPIDefinitions,
 	)
 	if err != nil {
 		return nil, err
@@ -526,6 +519,19 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 }
 
 // DefaultBuildHandlerChain builds the standard Kubernetes filter chain with Milo-specific filters
+// openAPIDefinitions returns every definition the server's OpenAPI documents describe: Kubernetes' and the identity API's.
+// The identity API's generated file also carries the apimachinery types it references; Kubernetes' own stay the source
+// for those.
+func openAPIDefinitions(ref openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
+	definitions := generatedopenapi.GetOpenAPIDefinitions(ref)
+	for name, definition := range identityopenapi.GetOpenAPIDefinitions(ref) {
+		if _, ok := definitions[name]; !ok {
+			definitions[name] = definition
+		}
+	}
+	return definitions
+}
+
 func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbackConfig *rest.Config) http.Handler {
 	handler := apiHandler
 

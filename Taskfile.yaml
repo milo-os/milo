@@ -341,23 +341,36 @@ tasks:
     silent: true
 
   generate:openapi:identity:
-    desc: Generate OpenAPI definitions for identity API types
+    desc: Generate OpenAPI definitions and model names for identity API types
+    vars:
+      # From Kubernetes 1.35 the API server keeps each definition's name as generated, so the generator must be the
+      # one the server builds with: it names each model from the package's +k8s:openapi-model-package tag.
+      KUBE_OPENAPI_VERSION:
+        sh: go list -m k8s.io/kube-openapi | cut -d' ' -f2
     deps:
       - task: install-go-tool
         vars:
           NAME: openapi-gen
-          PACKAGE: k8s.io/code-generator/cmd/openapi-gen
-          VERSION: v0.23.0
+          PACKAGE: k8s.io/kube-openapi/cmd/openapi-gen
+          VERSION: "{{.KUBE_OPENAPI_VERSION}}"
     cmds:
       - echo "Generating OpenAPI definitions for identity types..."
       - |
         set -e
+        # The apimachinery packages are inputs so that references to their types use model names; as read-only
+        # dependencies they get no model-name file.
         "{{.TOOL_DIR}}/openapi-gen" \
-          --input-dirs=go.miloapis.com/milo/pkg/apis/identity/v1alpha1 \
-          --output-package=pkg/apis/identity/v1alpha1 \
-          --output-base=. \
-          --output-file-base=zz_generated.openapi \
-          --go-header-file=/dev/null
+          --output-dir=pkg/apis/identity/v1alpha1 \
+          --output-pkg=go.miloapis.com/milo/pkg/apis/identity/v1alpha1 \
+          --output-file=zz_generated.openapi.go \
+          --output-model-name-file=zz_generated.model_name.go \
+          --readonly-pkg=k8s.io/apimachinery/pkg/apis/meta/v1 \
+          --readonly-pkg=k8s.io/apimachinery/pkg/runtime \
+          --go-header-file=/dev/null \
+          --report-filename=/dev/null \
+          k8s.io/apimachinery/pkg/apis/meta/v1 \
+          k8s.io/apimachinery/pkg/runtime \
+          go.miloapis.com/milo/pkg/apis/identity/v1alpha1
     silent: true
 
   generate:docs:
