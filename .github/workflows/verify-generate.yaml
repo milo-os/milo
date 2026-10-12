@@ -1,0 +1,28 @@
+name: "Verify Generated Code"
+on:
+  pull_request:
+
+jobs:
+  verify-generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install Task
+        uses: go-task/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Verify generated code
+        env:
+          TASK_X_REMOTE_TASKFILES: 1
+        run: task generate:verify

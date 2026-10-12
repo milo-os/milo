@@ -47,8 +47,11 @@ Custom resources are organized under three main API groups:
 
 ### Code Generation
 ```bash
-# Generate deepcopy, CRDs, webhooks, and RBAC
+# Generate deepcopy, CRDs, webhooks, RBAC, OpenAPI definitions and docs
 task generate
+
+# Fail if a committed generated file is out of date
+task generate:verify
 
 # Generate API documentation
 task api-docs
@@ -210,7 +213,8 @@ using the multicluster-runtime framework.
 task --list
 
 # Code generation (REQUIRED after API changes)
-task generate              # Generate deepcopy, CRDs, webhooks, RBAC
+task generate              # Generate deepcopy, CRDs, webhooks, RBAC, OpenAPI definitions and docs
+task generate:verify       # Fail if a committed generated file is out of date
 task generate:docs         # Generate API documentation with crdoc
 
 # Development environment
