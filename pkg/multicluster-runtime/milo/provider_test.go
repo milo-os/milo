@@ -528,3 +528,80 @@ func newSyncTestProvider(t *testing.T, labelSelector *metav1.LabelSelector, spec
 
 	return p, objects
 }
+
+type blockingEngageManager struct {
+	mcmanager.Manager
+	engaging chan struct{}
+	release  chan struct{}
+}
+
+func (m *blockingEngageManager) Engage(context.Context, multicluster.ClusterName, cluster.Cluster) error {
+	close(m.engaging)
+	<-m.release
+	return nil
+}
+
+func TestGetDoesNotBlockWhileEngaging(t *testing.T) {
+	provider, project := newTestProvider(metav1.ConditionTrue, nil)
+	mgr := &blockingEngageManager{
+		engaging: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	provider.mcMgr = mgr
+
+	reconciled := make(chan error, 1)
+	go func() {
+		_, err := provider.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: client.ObjectKeyFromObject(project),
+		})
+		reconciled <- err
+	}()
+
+	select {
+	case <-mgr.engaging:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Reconcile never reached Engage")
+	}
+
+	got := make(chan error, 1)
+	go func() {
+		_, err := provider.Get(context.Background(), "other-project")
+		got <- err
+	}()
+
+	select {
+	case err := <-got:
+		assert.True(t, errors.Is(err, multicluster.ErrClusterNotFound))
+	case <-time.After(2 * time.Second):
+		close(mgr.release)
+		t.Fatal("Get blocked while a project was being engaged")
+	}
+
+	close(mgr.release)
+	require.NoError(t, <-reconciled)
+
+	_, err := provider.Get(context.Background(), "test-project")
+	assert.NoError(t, err)
+}
+
+func TestFailedEngageRemovesProject(t *testing.T) {
+	provider, project := newTestProvider(metav1.ConditionTrue, nil)
+	provider.mcMgr = &failingEngageManager{}
+
+	_, err := provider.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(project),
+	})
+	require.Error(t, err)
+
+	_, err = provider.Get(context.Background(), "test-project")
+	assert.True(t, errors.Is(err, multicluster.ErrClusterNotFound))
+	assert.Empty(t, provider.cancelFns)
+}
+
+type failingEngageManager struct {
+	mcmanager.Manager
+}
+
+func (m *failingEngageManager) Engage(context.Context, multicluster.ClusterName, cluster.Cluster) error {
+	return errors.New("engage failed")
+}
