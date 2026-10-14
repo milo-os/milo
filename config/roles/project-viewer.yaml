@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - resourcemanager.miloapis.com/projects.get
+    - resourcemanager.miloapis.com/projects/status.get
     - resourcemanager.miloapis.com/projects.list
     - resourcemanager.miloapis.com/projects.watch

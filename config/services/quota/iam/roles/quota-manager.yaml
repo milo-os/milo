@@ -14,12 +14,14 @@ spec:
   includedPermissions:
     # ResourceRegistration read permissions only
     - quota.miloapis.com/resourceregistrations.get
+    - quota.miloapis.com/resourceregistrations/status.get
     - quota.miloapis.com/resourceregistrations.list
     - quota.miloapis.com/resourceregistrations.watch
 
     # ResourceGrant full management
     - quota.miloapis.com/resourcegrants.create
     - quota.miloapis.com/resourcegrants.get
+    - quota.miloapis.com/resourcegrants/status.get
     - quota.miloapis.com/resourcegrants.list
     - quota.miloapis.com/resourcegrants.update
     - quota.miloapis.com/resourcegrants.delete
@@ -29,6 +31,7 @@ spec:
     # ResourceClaim full management
     - quota.miloapis.com/resourceclaims.create
     - quota.miloapis.com/resourceclaims.get
+    - quota.miloapis.com/resourceclaims/status.get
     - quota.miloapis.com/resourceclaims.list
     - quota.miloapis.com/resourceclaims.update
     - quota.miloapis.com/resourceclaims.delete
@@ -37,15 +40,18 @@ spec:
 
     # AllowanceBucket read permissions
     - quota.miloapis.com/allowancebuckets.get
+    - quota.miloapis.com/allowancebuckets/status.get
     - quota.miloapis.com/allowancebuckets.list
     - quota.miloapis.com/allowancebuckets.watch
 
     # GrantCreationPolicy read permissions only
     - quota.miloapis.com/grantcreationpolicies.get
+    - quota.miloapis.com/grantcreationpolicies/status.get
     - quota.miloapis.com/grantcreationpolicies.list
     - quota.miloapis.com/grantcreationpolicies.watch
 
     # ClaimCreationPolicy read permissions only
     - quota.miloapis.com/claimcreationpolicies.get
+    - quota.miloapis.com/claimcreationpolicies/status.get
     - quota.miloapis.com/claimcreationpolicies.list
     - quota.miloapis.com/claimcreationpolicies.watch

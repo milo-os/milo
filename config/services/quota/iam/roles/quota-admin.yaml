@@ -15,6 +15,7 @@ spec:
     # ResourceRegistration permissions
     - quota.miloapis.com/resourceregistrations.create
     - quota.miloapis.com/resourceregistrations.get
+    - quota.miloapis.com/resourceregistrations/status.get
     - quota.miloapis.com/resourceregistrations.list
     - quota.miloapis.com/resourceregistrations.update
     - quota.miloapis.com/resourceregistrations.delete
@@ -24,6 +25,7 @@ spec:
     # ResourceGrant permissions
     - quota.miloapis.com/resourcegrants.create
     - quota.miloapis.com/resourcegrants.get
+    - quota.miloapis.com/resourcegrants/status.get
     - quota.miloapis.com/resourcegrants.list
     - quota.miloapis.com/resourcegrants.update
     - quota.miloapis.com/resourcegrants.delete
@@ -33,6 +35,7 @@ spec:
     # ResourceClaim permissions
     - quota.miloapis.com/resourceclaims.create
     - quota.miloapis.com/resourceclaims.get
+    - quota.miloapis.com/resourceclaims/status.get
     - quota.miloapis.com/resourceclaims.list
     - quota.miloapis.com/resourceclaims.update
     - quota.miloapis.com/resourceclaims.delete
@@ -42,6 +45,7 @@ spec:
     # AllowanceBucket permissions
     - quota.miloapis.com/allowancebuckets.create
     - quota.miloapis.com/allowancebuckets.get
+    - quota.miloapis.com/allowancebuckets/status.get
     - quota.miloapis.com/allowancebuckets.list
     - quota.miloapis.com/allowancebuckets.update
     - quota.miloapis.com/allowancebuckets.delete
@@ -51,6 +55,7 @@ spec:
     # GrantCreationPolicy permissions
     - quota.miloapis.com/grantcreationpolicies.create
     - quota.miloapis.com/grantcreationpolicies.get
+    - quota.miloapis.com/grantcreationpolicies/status.get
     - quota.miloapis.com/grantcreationpolicies.list
     - quota.miloapis.com/grantcreationpolicies.update
     - quota.miloapis.com/grantcreationpolicies.delete
@@ -60,6 +65,7 @@ spec:
     # ClaimCreationPolicy permissions
     - quota.miloapis.com/claimcreationpolicies.create
     - quota.miloapis.com/claimcreationpolicies.get
+    - quota.miloapis.com/claimcreationpolicies/status.get
     - quota.miloapis.com/claimcreationpolicies.list
     - quota.miloapis.com/claimcreationpolicies.update
     - quota.miloapis.com/claimcreationpolicies.delete

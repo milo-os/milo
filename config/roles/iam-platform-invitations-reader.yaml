@@ -9,6 +9,7 @@ spec:
   launchStage: Beta
   includedPermissions:
     - iam.miloapis.com/platforminvitations.get
+    - iam.miloapis.com/platforminvitations/status.get
     - iam.miloapis.com/platforminvitations.list
     - iam.miloapis.com/platforminvitations.watch
 

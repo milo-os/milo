@@ -9,8 +9,10 @@ spec:
   launchStage: Beta
   includedPermissions:
     - notes.miloapis.com/notes.get
+    - notes.miloapis.com/notes/status.get
     - notes.miloapis.com/notes.list
     - notes.miloapis.com/notes.watch
     - notes.miloapis.com/clusternotes.get
+    - notes.miloapis.com/clusternotes/status.get
     - notes.miloapis.com/clusternotes.list
     - notes.miloapis.com/clusternotes.watch

@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - notification.miloapis.com/contactgroupmembershipremovals.get
+    - notification.miloapis.com/contactgroupmembershipremovals/status.get
     - notification.miloapis.com/contactgroupmembershipremovals.list
     - notification.miloapis.com/contactgroupmembershipremovals.watch
