@@ -242,52 +242,11 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.V(1).Info("Successfully fetched project", "name", project.GetName(), "namespace", project.GetNamespace())
 
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
-	// Make sure the manager has started
-	// TODO(jreese) what condition would lead to this?
-	if p.mcMgr == nil {
-		log.Info("Multicluster manager not yet started, requeueing", "key", key)
-		return ctrl.Result{RequeueAfter: time.Second * 2}, nil
+	mcMgr, indexers, register, result, err := p.planRegistration(log, key, &project)
+	if !register {
+		return result, err
 	}
-
 	defer p.markProcessed(key)
-
-	// ready and provisioned?
-	conditions, err := extractUnstructuredConditions(project.Object)
-	if err != nil {
-		log.Error(err, "Failed to extract conditions from project", "key", key)
-		return ctrl.Result{}, err
-	}
-
-	log.V(1).Info("Checking project readiness conditions", "key", key, "conditionCount", len(conditions))
-
-	readyConditionType := "Ready"
-	if p.opts.InternalServiceDiscovery {
-		readyConditionType = "ControlPlaneReady"
-	}
-	ready := apimeta.IsStatusConditionTrue(conditions, readyConditionType)
-
-	_, engaged := p.projects[key]
-
-	if engaged {
-		// A project that was engaged while Ready may later transition to
-		// NotReady. Tear it down so its cluster cache, informers, goroutines
-		// and context do not stay alive indefinitely.
-		if !ready {
-			log.Info("Engaged project no longer ready, disengaging", "key", key, "conditions", conditions)
-			p.disengageProject(key)
-		} else {
-			log.V(1).Info("Project already engaged, skipping", "key", key)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !ready {
-		log.Info("Project is not ready, skipping registration", "key", key, "conditionType", readyConditionType, "conditions", conditions)
-		return ctrl.Result{}, nil
-	}
 
 	log.Info("Project is ready, proceeding with cluster registration", "key", key)
 
@@ -308,13 +267,12 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.Info("Creating cluster connection", "key", key, "endpoint", cfg.Host)
 
-	// create cluster.
 	cl, err := cluster.New(cfg, p.opts.ClusterOptions...)
 	if err != nil {
 		log.Error(err, "Failed to create cluster object", "key", key, "endpoint", cfg.Host)
 		return ctrl.Result{}, fmt.Errorf("failed to create cluster: %w", err)
 	}
-	for _, idx := range p.indexers {
+	for _, idx := range indexers {
 		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
 			log.Error(err, "Failed to setup cache index field", "key", key, "field", idx.field)
 			return ctrl.Result{}, fmt.Errorf("failed to index field %q: %w", idx.field, err)
@@ -341,23 +299,113 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.Info("Cluster cache synced successfully", "key", key)
 
-	// store project client
-	p.projects[key] = cl
-	p.cancelFns[key] = cancel
+	if err := p.storeProject(ctx, key, cl, cancel, len(indexers)); err != nil {
+		cancel()
+		log.Error(err, "Failed to apply late cache index fields", "key", key)
+		return ctrl.Result{}, err
+	}
 
 	log.Info("Engaging cluster with multicluster manager", "key", key)
 
-	// engage manager.
-	if err := p.mcMgr.Engage(clusterCtx, multicluster.ClusterName(key), cl); err != nil {
+	if err := mcMgr.Engage(clusterCtx, multicluster.ClusterName(key), cl); err != nil {
 		log.Error(err, "Failed to engage cluster with multicluster manager", "key", key)
-		delete(p.projects, key)
-		delete(p.cancelFns, key)
+		p.removeProjectIfCurrent(key, cl)
 		return reconcile.Result{}, err
 	}
 
 	log.Info("Successfully registered and engaged new cluster", "key", key, "endpoint", cfg.Host)
 
 	return ctrl.Result{}, nil
+}
+
+// planRegistration decides, under p.lock, what Reconcile does with a fetched
+// project. When register is false Reconcile returns result and err as-is.
+// When register is true the caller owns building and engaging the cluster,
+// and receives the multicluster manager and the indexers to apply.
+//
+// The lock is released before the caller connects to the project. Engaging a
+// cluster runs every controller's watch registration, and those controllers'
+// event handlers call Get; holding p.lock across Engage deadlocks a controller
+// whose startup is waiting on those handlers. Project reconciles never run
+// concurrently (MaxConcurrentReconciles is 1), so no other registration can
+// interleave for the same key.
+func (p *Provider) planRegistration(
+	log logr.Logger,
+	key string,
+	project *unstructured.Unstructured,
+) (multicluster.Aware, []index, bool, ctrl.Result, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if p.mcMgr == nil {
+		log.Info("Multicluster manager not yet started, requeueing", "key", key)
+		return nil, nil, false, ctrl.Result{RequeueAfter: time.Second * 2}, nil
+	}
+
+	conditions, err := extractUnstructuredConditions(project.Object)
+	if err != nil {
+		log.Error(err, "Failed to extract conditions from project", "key", key)
+		p.markProcessed(key)
+		return nil, nil, false, ctrl.Result{}, err
+	}
+
+	log.V(1).Info("Checking project readiness conditions", "key", key, "conditionCount", len(conditions))
+
+	readyConditionType := "Ready"
+	if p.opts.InternalServiceDiscovery {
+		readyConditionType = "ControlPlaneReady"
+	}
+	ready := apimeta.IsStatusConditionTrue(conditions, readyConditionType)
+
+	if _, engaged := p.projects[key]; engaged {
+		// A project that was engaged while Ready may later transition to
+		// NotReady. Tear it down so its cluster cache, informers, goroutines
+		// and context do not stay alive indefinitely.
+		if !ready {
+			log.Info("Engaged project no longer ready, disengaging", "key", key, "conditions", conditions)
+			p.disengageProject(key)
+		} else {
+			log.V(1).Info("Project already engaged, skipping", "key", key)
+		}
+		p.markProcessed(key)
+		return nil, nil, false, ctrl.Result{}, nil
+	}
+
+	if !ready {
+		log.Info("Project is not ready, skipping registration", "key", key, "conditionType", readyConditionType, "conditions", conditions)
+		p.markProcessed(key)
+		return nil, nil, false, ctrl.Result{}, nil
+	}
+
+	return p.mcMgr, append([]index(nil), p.indexers...), true, ctrl.Result{}, nil
+}
+
+// storeProject records cl as key's cluster so Get can return it, and applies
+// any indexers registered after planRegistration took its snapshot.
+func (p *Provider) storeProject(ctx context.Context, key string, cl cluster.Cluster, cancel context.CancelFunc, appliedIndexers int) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	for _, idx := range p.indexers[appliedIndexers:] {
+		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
+			return fmt.Errorf("failed to index field %q: %w", idx.field, err)
+		}
+	}
+
+	p.projects[key] = cl
+	p.cancelFns[key] = cancel
+	return nil
+}
+
+// removeProjectIfCurrent disengages key only if cl is still its registered
+// cluster, so a failed Engage never tears down a newer registration.
+func (p *Provider) removeProjectIfCurrent(key string, cl cluster.Cluster) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if current, ok := p.projects[key]; ok && current == cl {
+		p.disengageProject(key)
+	}
 }
 
 // disengageProject tears down any cluster engaged for key: it cancels the

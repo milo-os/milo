@@ -128,7 +128,7 @@ spec:
           metrics:
             - value: |
                 has(object.status.lastReconciliation) ?
-                  double(timestamp(object.status.lastReconciliation).getSeconds()) : 0.0
+                  double(int(timestamp(object.status.lastReconciliation))) : 0.0
               labels:
                 - name: name
                   value: "object.metadata.name"

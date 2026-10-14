@@ -1,8 +1,6 @@
 module go.miloapis.com/milo
 
-go 1.25.0
-
-toolchain go1.26.0
+go 1.26.0
 
 require (
 	github.com/blang/semver/v4 v4.0.0
@@ -14,7 +12,7 @@ require (
 	github.com/spf13/cobra v1.10.0
 	github.com/spf13/pflag v1.0.9
 	github.com/stretchr/testify v1.11.1
-	go.miloapis.com/billing v0.2.10
+	go.miloapis.com/billing v0.3.10
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
@@ -30,7 +28,7 @@ require (
 	k8s.io/controller-manager v0.35.0
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-aggregator v0.35.0
-	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912
+	k8s.io/kube-openapi v0.0.0-20260304202019-5b3e3fdb0acf
 	k8s.io/kubernetes v1.35.0
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
 	sigs.k8s.io/controller-runtime v0.23.3

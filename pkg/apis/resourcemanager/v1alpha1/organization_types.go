@@ -18,6 +18,10 @@ const (
 	OrganizationOnboardingCompleteReasonReady                 = "Ready"
 	OrganizationOnboardingCompleteReasonContactInfoIncomplete = "ContactInfoIncomplete"
 	OrganizationOnboardingCompleteReasonBillingAccountMissing = "BillingAccountMissing"
+	// OrganizationOnboardingCompleteReasonPaymentMethodNotReady means no billing
+	// account can be billed yet: none has an active payment method or payment
+	// terms granted by staff. The name predates payment terms and is kept for
+	// existing consumers.
 	OrganizationOnboardingCompleteReasonPaymentMethodNotReady = "PaymentMethodNotReady"
 )
 
