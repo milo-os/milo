@@ -33,7 +33,7 @@ spec:
           help: "Creation timestamp of IAM groups"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -69,7 +69,7 @@ spec:
           help: "Creation timestamp of IAM group memberships"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -129,7 +129,7 @@ spec:
           help: "Creation timestamp of IAM service accounts"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -165,7 +165,7 @@ spec:
           help: "Creation timestamp of IAM policy bindings"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -225,7 +225,7 @@ spec:
           help: "Creation timestamp of IAM protected resources"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -285,7 +285,7 @@ spec:
           help: "Creation timestamp of IAM roles"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -345,7 +345,7 @@ spec:
           help: "Creation timestamp of IAM user invitations"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -381,7 +381,7 @@ spec:
           help: "Creation timestamp of IAM users"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"

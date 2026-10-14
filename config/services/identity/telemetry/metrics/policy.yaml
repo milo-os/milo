@@ -33,7 +33,7 @@ spec:
           help: "Creation timestamp of identity service account keys"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"

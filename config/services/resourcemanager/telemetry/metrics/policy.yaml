@@ -35,7 +35,7 @@ spec:
           help: "Creation timestamp of resource manager organization memberships"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -105,7 +105,7 @@ spec:
           help: "Creation timestamp of resource manager organizations"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
@@ -175,7 +175,7 @@ spec:
           help: "Creation timestamp of resource manager projects"
           type: gauge
           metrics:
-            - value: "double(timestamp(object.metadata.creationTimestamp).getSeconds())"
+            - value: "double(int(timestamp(object.metadata.creationTimestamp)))"
               labels:
                 - name: name
                   value: "object.metadata.name"
