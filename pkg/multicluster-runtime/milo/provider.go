@@ -111,6 +111,7 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 	if controllerName == "" {
 		controllerName = "projectcontrolplane"
 	}
+	p.name = controllerName
 
 	controllerBuilder := builder.ControllerManagedBy(localMgr).
 		For(&project, forOpts...).
@@ -132,6 +133,7 @@ type index struct {
 
 // Provider is a cluster Provider that works with Datum
 type Provider struct {
+	name              string
 	opts              Options
 	log               logr.Logger
 	projectRestConfig *rest.Config
@@ -270,11 +272,13 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	cl, err := cluster.New(cfg, p.opts.ClusterOptions...)
 	if err != nil {
 		log.Error(err, "Failed to create cluster object", "key", key, "endpoint", cfg.Host)
+		p.recordRegistrationFailure(stageCreateCluster)
 		return ctrl.Result{}, fmt.Errorf("failed to create cluster: %w", err)
 	}
 	for _, idx := range indexers {
 		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
 			log.Error(err, "Failed to setup cache index field", "key", key, "field", idx.field)
+			p.recordRegistrationFailure(stageIndex)
 			return ctrl.Result{}, fmt.Errorf("failed to index field %q: %w", idx.field, err)
 		}
 	}
@@ -294,6 +298,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	if !cl.GetCache().WaitForCacheSync(ctx) {
 		cancel()
 		log.Error(nil, "Cluster cache sync failed", "key", key)
+		p.recordRegistrationFailure(stageCacheSync)
 		return ctrl.Result{}, fmt.Errorf("failed to sync cache")
 	}
 
@@ -302,6 +307,7 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	if err := p.storeProject(ctx, key, cl, cancel, len(indexers)); err != nil {
 		cancel()
 		log.Error(err, "Failed to apply late cache index fields", "key", key)
+		p.recordRegistrationFailure(stageIndex)
 		return ctrl.Result{}, err
 	}
 
@@ -309,9 +315,14 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	if err := mcMgr.Engage(clusterCtx, multicluster.ClusterName(key), cl); err != nil {
 		log.Error(err, "Failed to engage cluster with multicluster manager", "key", key)
+		p.recordRegistrationFailure(stageEngage)
 		p.removeProjectIfCurrent(key, cl)
 		return reconcile.Result{}, err
 	}
+
+	p.lock.Lock()
+	p.recordEngagedLocked()
+	p.lock.Unlock()
 
 	log.Info("Successfully registered and engaged new cluster", "key", key, "endpoint", cfg.Host)
 
@@ -418,6 +429,17 @@ func (p *Provider) disengageProject(key string) {
 		delete(p.cancelFns, key)
 	}
 	delete(p.projects, key)
+	p.recordEngagedLocked()
+}
+
+// recordEngagedLocked publishes the number of registered projects. Callers must
+// hold p.lock.
+func (p *Provider) recordEngagedLocked() {
+	engagedProjects.WithLabelValues(p.name).Set(float64(len(p.projects)))
+}
+
+func (p *Provider) recordRegistrationFailure(stage string) {
+	registrationFailures.WithLabelValues(p.name, stage).Inc()
 }
 
 func (p *Provider) markStarted(now time.Time) {
@@ -426,6 +448,12 @@ func (p *Provider) markStarted(now time.Time) {
 	if p.initialSync.startedAt.IsZero() {
 		p.initialSync.startedAt = now
 	}
+	if !p.initialSync.synced.Load() {
+		initialSyncComplete.WithLabelValues(p.name).Set(0)
+	}
+	p.lock.Lock()
+	p.recordEngagedLocked()
+	p.lock.Unlock()
 }
 
 func (p *Provider) takeInitialSnapshot(ctx context.Context) error {
@@ -537,6 +565,8 @@ func (p *Provider) completeIfDoneLocked() {
 	if !s.startedAt.IsZero() {
 		elapsed = time.Since(s.startedAt)
 	}
+	initialSyncComplete.WithLabelValues(p.name).Set(1)
+	initialSyncDuration.WithLabelValues(p.name).Set(elapsed.Seconds())
 	p.log.Info("Initial project sync complete", "projects", s.snapshotSize, "elapsed", elapsed.String())
 }
 
