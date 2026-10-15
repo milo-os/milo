@@ -24,6 +24,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/apiserver/pkg/storage/cacher"
 	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/notfoundhandler"
@@ -88,7 +89,13 @@ var (
 	eventsForwardExtras                  []string
 	sharedETCDClientPoolSize             int
 	projectNamespaceBootstrapTimeout     time.Duration
+	watchCacheConsistencyCheckPeriod     time.Duration
 )
+
+// defaultWatchCacheConsistencyCheckPeriod is longer than upstream's 5 minutes because Milo keeps one watch cache per
+// project per resource type, and each cache's check is a full LIST from etcd: at upstream's period the checks are
+// nearly all of the server's etcd LISTs.
+const defaultWatchCacheConsistencyCheckPeriod = time.Hour
 
 // NewCommand creates a *cobra.Command object with default parameters
 func NewCommand() *cobra.Command {
@@ -214,6 +221,7 @@ func NewCommand() *cobra.Command {
 	fs.StringSliceVar(&eventsForwardExtras, "events-forward-extras", []string{"iam.miloapis.com/parent-api-group", "iam.miloapis.com/parent-type", "iam.miloapis.com/parent-name"}, "User extras keys to forward to Activity for events")
 	fs.IntVar(&sharedETCDClientPoolSize, "shared-etcd-client-pool-size", 32, "Number of etcd client connections opened per transport and round-robined across all project control plane watch caches. Higher values spread watch progress traffic across more gRPC streams at the cost of more connections. Minimum 1.")
 	fs.DurationVar(&projectNamespaceBootstrapTimeout, "project-namespace-bootstrap-timeout", projectstorage.DefaultNamespaceBootstrapTimeout, "Maximum time to wait for the milo-system namespace to be ensured in a project control plane on first use. Requests for that project wait at most this long; other projects are never blocked.")
+	fs.DurationVar(&watchCacheConsistencyCheckPeriod, "watch-cache-consistency-check-period", defaultWatchCacheConsistencyCheckPeriod, "How often each watch cache compares itself with etcd when the DetectCacheInconsistency feature gate is on, with up to half again as jitter. Each check lists the cache's resource from etcd. Must be positive.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
@@ -253,14 +261,29 @@ func NewOptions() *options.Options {
 	return s
 }
 
+// applyStorageFlags applies the storage flags that act through process-wide settings. It must run before any storage
+// is built: each watch cache reads the consistency check period when its checker starts.
+func applyStorageFlags() error {
+	if watchCacheConsistencyCheckPeriod <= 0 {
+		return fmt.Errorf("--watch-cache-consistency-check-period must be positive, got %s", watchCacheConsistencyCheckPeriod)
+	}
+	cacher.ConsistencyCheckPeriod = watchCacheConsistencyCheckPeriod
+	klog.InfoS("Watch cache consistency check period configured", "period", watchCacheConsistencyCheckPeriod)
+
+	etcdshared.SetSharedClientPoolSize(sharedETCDClientPoolSize)
+	klog.InfoS("Shared etcd client pool configured", "size", sharedETCDClientPoolSize)
+	return nil
+}
+
 // Run runs the specified APIServer
 func Run(ctx context.Context, opts options.CompletedOptions) error {
 	klog.Infof("Version: %+v", version.Get())
 
 	klog.InfoS("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
 
-	etcdshared.SetSharedClientPoolSize(sharedETCDClientPoolSize)
-	klog.InfoS("Shared etcd client pool configured", "size", sharedETCDClientPoolSize)
+	if err := applyStorageFlags(); err != nil {
+		return err
+	}
 
 	config, err := NewConfig(opts)
 	if err != nil {
