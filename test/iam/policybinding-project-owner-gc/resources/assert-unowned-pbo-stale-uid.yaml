@@ -1,0 +1,6 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pbo-stale-uid
+  namespace: organization-pbo-org
+  (ownerReferences == null): true

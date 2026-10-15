@@ -1,0 +1,147 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: policybinding-project-owner-gc
+spec:
+  description: |
+    Verifies that a PolicyBinding on a Project is removed with its Project, and
+    that the owner reference which does it never removes a live grant.
+
+    The PolicyBinding mutating webhook adds an owner reference to the Project a
+    binding's resourceRef names, only when the live Project carries the uid the
+    binding names. Milo's garbage collector deletes a dependent whose owner is
+    missing or carries another uid, so a reference to the wrong uid would delete
+    the binding at once.
+
+    This test verifies:
+    - A binding on a Project gets an owner reference to it, and is removed when
+      the Project is deleted.
+    - A binding that names a uid the Project does not carry gets no owner
+      reference, and stays.
+    - An update that strips the owner reference gets it back.
+
+    The webhook also gives no owner reference to a binding created through a
+    project control plane. A project control plane serves no PolicyBinding
+    today, so the unit tests cover that case.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org
+
+  steps:
+    - name: setup
+      description: Create the organization, the assignable role and the User the bindings grant it to
+      cluster: main
+      try:
+        - apply:
+            file: resources/organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-pbo-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+        - apply:
+            file: resources/role-and-user.yaml
+
+    - name: create-kept-project
+      description: Create the Project that stays for the rest of the test
+      cluster: org
+      try:
+        - apply:
+            file: resources/project-kept.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: pbo-kept
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: binding-gains-the-owner-reference
+      description: A binding on a Project gets an owner reference to that Project
+      cluster: org
+      # The next step deletes the Project, and the garbage collector the binding.
+      skipDelete: true
+      try:
+        - apply:
+            file: resources/project-gone.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: pbo-gone
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+        - script:
+            content: kubectl get projects.resourcemanager.miloapis.com pbo-gone -o json
+            outputs:
+              - name: gone
+                value: (json_parse($stdout))
+        - apply:
+            file: resources/binding-on-gone.yaml
+        - assert:
+            file: resources/assert-owned-on-gone.yaml
+
+    - name: binding-goes-with-its-project
+      description: Deleting the Project removes the binding through the garbage collector
+      cluster: org
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              name: pbo-gone
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: PolicyBinding
+            namespace: organization-pbo-org
+            name: pbo-on-gone
+            timeout: 90s
+            for:
+              deletion: {}
+
+    - name: stale-uid-gets-no-reference
+      description: |
+        A binding that names a uid the Project does not carry gets no owner
+        reference. With one, the garbage collector would see a uid mismatch and
+        delete it at once. The previous step shows how fast the collector acts.
+      cluster: org
+      try:
+        - apply:
+            file: resources/binding-stale-uid.yaml
+        - assert:
+            file: resources/assert-unowned-pbo-stale-uid.yaml
+        - sleep:
+            duration: 20s
+        - assert:
+            file: resources/assert-unowned-pbo-stale-uid.yaml
+
+    - name: update-restores-the-reference
+      description: An update that strips the owner reference gets it back from the webhook
+      cluster: org
+      try:
+        - script:
+            content: kubectl get projects.resourcemanager.miloapis.com pbo-kept -o json
+            outputs:
+              - name: kept
+                value: (json_parse($stdout))
+        - apply:
+            file: resources/binding-on-kept.yaml
+        - assert:
+            file: resources/assert-owned-on-kept.yaml
+        - script:
+            content: |
+              kubectl patch policybindings.iam.miloapis.com pbo-on-kept -n organization-pbo-org \
+                --type=json -p '[{"op": "remove", "path": "/metadata/ownerReferences"}]'
+        - assert:
+            file: resources/assert-owned-on-kept.yaml

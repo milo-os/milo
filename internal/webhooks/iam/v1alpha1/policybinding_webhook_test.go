@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	mccontext "sigs.k8s.io/multicluster-runtime/pkg/context"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
 
 func policyBinding(subjects ...iamv1alpha1.Subject) *iamv1alpha1.PolicyBinding {
@@ -737,4 +741,241 @@ func TestPolicyBindingValidator_ValidateDelete(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// projectTargetedBinding returns a binding whose resourceRef names the Project
+// projectName with the uid projectUID, as the portal's "share project" flow
+// creates it.
+func projectTargetedBinding(projectName, projectUID string) *iamv1alpha1.PolicyBinding {
+	pb := policyBinding(iamv1alpha1.Subject{Kind: "User", Name: "alice", UID: "user-uid-1"})
+	pb.Spec.ResourceSelector = iamv1alpha1.ResourceSelector{
+		ResourceRef: &iamv1alpha1.ResourceReference{
+			APIGroup: resourcemanagerv1alpha1.GroupVersion.Group,
+			Kind:     "Project",
+			Name:     projectName,
+			UID:      projectUID,
+		},
+	}
+	return pb
+}
+
+// projectWithUID returns the Project name in organization acme with the given uid.
+func projectWithUID(name, uid string) *resourcemanagerv1alpha1.Project {
+	project := testProject(name, "acme")
+	project.UID = types.UID(uid)
+	return project
+}
+
+// projectOwnerReference is the owner reference a binding on the Project name
+// with the given uid must carry: the same shape createOwnerPolicyBinding gives
+// the project owner's binding, with neither controller nor blockOwnerDeletion.
+func projectOwnerReference(name, uid string) metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion: resourcemanagerv1alpha1.GroupVersion.String(),
+		Kind:       "Project",
+		Name:       name,
+		UID:        types.UID(uid),
+	}
+}
+
+// requestWith returns a context whose admission request has the given
+// operation, groups and extras.
+func requestWith(op admissionv1.Operation, groups []string, extra map[string]authenticationv1.ExtraValue) context.Context {
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			Operation: op,
+			UserInfo:  authenticationv1.UserInfo{Groups: groups, Extra: extra},
+		},
+	}
+	return admission.NewContextWithRequest(context.Background(), req)
+}
+
+// projectParentExtra is the parent context the Milo API server injects into a
+// request made through a project control plane.
+func projectParentExtra(projectName string) map[string]authenticationv1.ExtraValue {
+	return map[string]authenticationv1.ExtraValue{
+		iamv1alpha1.ParentNameExtraKey:     {projectName},
+		iamv1alpha1.ParentKindExtraKey:     {"Project"},
+		iamv1alpha1.ParentAPIGroupExtraKey: {resourcemanagerv1alpha1.GroupVersion.Group},
+	}
+}
+
+// throughProjectControlPlane marks ctx as the webhook server's ClusterAwareServer
+// does for a request made through the project control plane projectName.
+func throughProjectControlPlane(ctx context.Context, projectName string) context.Context {
+	return mccontext.WithCluster(ctx, multicluster.ClusterName(projectName))
+}
+
+func TestPolicyBindingMutator_ProjectOwnerReference(t *testing.T) {
+	const name, liveUID, staleUID = "web", "project-uid-live", "project-uid-stale"
+
+	otherOwner := metav1.OwnerReference{APIVersion: "iam.miloapis.com/v1alpha1", Kind: "Group", Name: "loaders", UID: "group-uid-1"}
+	withOwners := func(pb *iamv1alpha1.PolicyBinding, refs ...metav1.OwnerReference) *iamv1alpha1.PolicyBinding {
+		pb.OwnerReferences = refs
+		return pb
+	}
+	withRef := func(ref iamv1alpha1.ResourceReference) *iamv1alpha1.PolicyBinding {
+		pb := projectTargetedBinding(name, liveUID)
+		pb.Spec.ResourceSelector.ResourceRef = &ref
+		return pb
+	}
+
+	tests := map[string]struct {
+		ctx        context.Context
+		cached     []client.Object // what the webhook's cache holds
+		live       []client.Object // what the API server holds
+		liveErr    error           // the API server's answer to every read, when set
+		binding    *iamv1alpha1.PolicyBinding
+		wantOwners []metav1.OwnerReference
+		wantErr    string
+	}{
+		// A UID mismatch reads as an absent owner to the garbage collector,
+		// which would delete the binding at once.
+		"adds no owner when the spec names another uid than the live Project": {
+			ctx:     orgContextRequest("acme"),
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: projectTargetedBinding(name, staleUID),
+		},
+		"decides from the live Project, not the cache, when the cache holds the spec's uid": {
+			ctx:     orgContextRequest("acme"),
+			cached:  []client.Object{projectWithUID(name, staleUID)},
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: projectTargetedBinding(name, staleUID),
+		},
+		"decides from the live Project, not the cache, when the cache holds another uid": {
+			ctx:        orgContextRequest("acme"),
+			cached:     []client.Object{projectWithUID(name, staleUID)},
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    projectTargetedBinding(name, liveUID),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
+		},
+		"adds an owner reference to the live Project in organization context": {
+			ctx:        orgContextRequest("acme"),
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    projectTargetedBinding(name, liveUID),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
+		},
+		"adds an owner reference in platform scope": {
+			ctx:        requestWith(admissionv1.Create, nil, nil),
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    projectTargetedBinding(name, liveUID),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
+		},
+		"adds an owner reference on an update": {
+			ctx:        requestWith(admissionv1.Update, []string{"system:masters"}, nil),
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    projectTargetedBinding(name, liveUID),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
+		},
+		"adds no owner when the Project does not exist": {
+			ctx:     orgContextRequest("acme"),
+			binding: projectTargetedBinding(name, liveUID),
+		},
+		"fails closed when the Project cannot be read": {
+			ctx:     orgContextRequest("acme"),
+			liveErr: errors.New("etcd unavailable"),
+			binding: projectTargetedBinding(name, liveUID),
+			wantErr: "etcd unavailable",
+		},
+		// A binding stored in a project control plane would look for its owner
+		// there, find no Project, and be deleted.
+		"adds no owner on a project control plane": {
+			ctx:     throughProjectControlPlane(projectContextRequest("other"), "other"),
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: projectTargetedBinding(name, liveUID),
+		},
+		"adds no owner on a project control plane for system:masters": {
+			ctx:     throughProjectControlPlane(requestWith(admissionv1.Create, []string{"system:masters"}, projectParentExtra("other")), "other"),
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: projectTargetedBinding(name, liveUID),
+		},
+		"adds no owner for a Project kind in another API group": {
+			ctx:     orgContextRequest("acme"),
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: withRef(iamv1alpha1.ResourceReference{APIGroup: "example.com", Kind: "Project", Name: name, UID: liveUID}),
+		},
+		// A Project of the same name and uid exists in the next two cases, so
+		// only the kind keeps the reference off.
+		"adds no owner for an Organization target": {
+			ctx:     orgContextRequest("acme"),
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: withRef(iamv1alpha1.ResourceReference{APIGroup: resourcemanagerv1alpha1.GroupVersion.Group, Kind: "Organization", Name: name, UID: liveUID}),
+		},
+		"adds no owner for a namespaced target": {
+			ctx:     orgContextRequest("acme"),
+			live:    []client.Object{projectWithUID(name, liveUID)},
+			binding: withRef(iamv1alpha1.ResourceReference{APIGroup: resourcemanagerv1alpha1.GroupVersion.Group, Kind: "OrganizationMembership", Name: name, Namespace: "organization-other", UID: liveUID}),
+		},
+		"adds no owner for a resourceKind selector": {
+			ctx:     orgContextRequest("acme"),
+			binding: policyBinding(iamv1alpha1.Subject{Kind: "User", Name: "alice", UID: "user-uid-1"}),
+		},
+		"keeps an existing reference to the Project and adds no duplicate": {
+			ctx:        orgContextRequest("acme"),
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    withOwners(projectTargetedBinding(name, liveUID), projectOwnerReference(name, liveUID)),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
+		},
+		// A reference to the Project's name with an older uid reads as absent to
+		// the collector; the live one keeps the binding alive.
+		"adds the live reference beside one to an older uid of the same name": {
+			ctx:        orgContextRequest("acme"),
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    withOwners(projectTargetedBinding(name, liveUID), projectOwnerReference(name, staleUID)),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, staleUID), projectOwnerReference(name, liveUID)},
+		},
+		"appends to other owner references and keeps them": {
+			ctx:        orgContextRequest("acme"),
+			live:       []client.Object{projectWithUID(name, liveUID)},
+			binding:    withOwners(projectTargetedBinding(name, liveUID), otherOwner),
+			wantOwners: []metav1.OwnerReference{otherOwner, projectOwnerReference(name, liveUID)},
+		},
+	}
+
+	for testName, tc := range tests {
+		t.Run(testName, func(t *testing.T) {
+			cached := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.cached...).Build()
+			liveBuilder := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.live...)
+			if tc.liveErr != nil {
+				liveBuilder = liveBuilder.WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+						return tc.liveErr
+					},
+				})
+			}
+			mutator := &PolicyBindingMutator{client: cached, reader: liveBuilder.Build()}
+
+			err := mutator.Default(tc.ctx, tc.binding)
+
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantOwners, tc.binding.OwnerReferences)
+		})
+	}
+}
+
+// splitReaders is a manager whose cache and API reader hold different objects.
+type splitReaders struct {
+	cached client.Client
+	live   client.Reader
+}
+
+func (r splitReaders) GetClient() client.Client    { return r.cached }
+func (r splitReaders) GetAPIReader() client.Reader { return r.live }
+
+func TestNewPolicyBindingMutator_ReadsTheProjectThroughTheAPIReader(t *testing.T) {
+	const name, liveUID, staleUID = "web", "project-uid-live", "project-uid-stale"
+	mgr := splitReaders{
+		cached: fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectWithUID(name, staleUID)).Build(),
+		live:   fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectWithUID(name, liveUID)).Build(),
+	}
+	pb := projectTargetedBinding(name, liveUID)
+
+	require.NoError(t, newPolicyBindingMutator(mgr).Default(orgContextRequest("acme"), pb))
+
+	assert.Equal(t, []metav1.OwnerReference{projectOwnerReference(name, liveUID)}, pb.OwnerReferences)
 }

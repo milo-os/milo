@@ -1,0 +1,20 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pbo-on-kept
+  namespace: organization-pbo-org
+  labels:
+    test.miloapis.com/scenario: "policybinding-project-owner-gc"
+spec:
+  roleRef:
+    name: pbo-viewer
+    namespace: datum-cloud
+  subjects:
+    - kind: User
+      name: pbo-user
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Project
+      name: pbo-kept
+      uid: ($kept.metadata.uid)
