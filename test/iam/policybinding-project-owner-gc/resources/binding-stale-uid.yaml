@@ -1,0 +1,21 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pbo-stale-uid
+  namespace: organization-pbo-org
+  labels:
+    test.miloapis.com/scenario: "policybinding-project-owner-gc"
+spec:
+  # The role need not exist: the platform admin needs no assignable role.
+  roleRef:
+    name: pbo-viewer
+    namespace: datum-cloud
+  subjects:
+    - kind: User
+      name: pbo-user
+  resourceSelector:
+    resourceRef:
+      apiGroup: resourcemanager.miloapis.com
+      kind: Project
+      name: pbo-kept
+      uid: 00000000-0000-0000-0000-000000000000

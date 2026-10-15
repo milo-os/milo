@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: pbo-kept
+  labels:
+    test.miloapis.com/scenario: "policybinding-project-owner-gc"
+spec:
+  ownerRef:
+    kind: Organization
+    name: pbo-org

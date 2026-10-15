@@ -6,11 +6,14 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	mccontext "sigs.k8s.io/multicluster-runtime/pkg/context"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -24,14 +27,26 @@ const systemGroupPrefix = "system:"
 
 func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager, assignableRolesNamespace string) error {
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.PolicyBinding{}).
-		WithDefaulter(&PolicyBindingMutator{
-			client: mgr.GetClient(),
-		}).
+		WithDefaulter(newPolicyBindingMutator(mgr)).
 		WithValidator(&PolicyBindingValidator{
 			client:                   mgr.GetClient(),
 			assignableRolesNamespace: assignableRolesNamespace,
 		}).
 		Complete()
+}
+
+// managerReaders is the part of a manager the PolicyBinding mutator reads
+// through.
+type managerReaders interface {
+	GetClient() client.Client
+	GetAPIReader() client.Reader
+}
+
+// newPolicyBindingMutator returns the mutator the manager serves: subjects
+// resolve through the manager's cached client, a target Project through its
+// API reader.
+func newPolicyBindingMutator(mgr managerReaders) *PolicyBindingMutator {
+	return &PolicyBindingMutator{client: mgr.GetClient(), reader: mgr.GetAPIReader()}
 }
 
 // +kubebuilder:webhook:path=/mutate-iam-miloapis-com-v1alpha1-policybinding,mutating=true,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=policybindings,verbs=create;update,versions=v1alpha1,name=mpolicybinding.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
@@ -50,8 +65,13 @@ func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager, assignableRolesName
 // instance-pinning guarantee: the stored uid still identifies one specific
 // object instance, so a delete+recreate of a same-named subject yields a new
 // uid and the binding no longer matches until it is re-applied.
+//
+// It also makes a binding on a Project a dependent of that Project (see
+// ensureProjectOwnerReference), reading the Project through reader, which
+// bypasses the cache that client reads from.
 type PolicyBindingMutator struct {
 	client client.Client
+	reader client.Reader
 }
 
 func (m *PolicyBindingMutator) Default(ctx context.Context, pb *iamv1alpha1.PolicyBinding) error {
@@ -91,7 +111,87 @@ func (m *PolicyBindingMutator) Default(ctx context.Context, pb *iamv1alpha1.Poli
 		return errors.NewInvalid(iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(), pb.Name, errs)
 	}
 
+	return m.ensureProjectOwnerReference(ctx, pb)
+}
+
+// ensureProjectOwnerReference makes a binding whose resourceRef names a
+// Project a dependent of that Project, so the garbage collector removes the
+// binding with it. createOwnerPolicyBinding gives the project owner's binding
+// the same reference; this covers every other binding on a Project.
+//
+// The reference is added only where it cannot remove a live grant. The
+// garbage collector deletes a dependent at once when its owner is missing or
+// carries another uid, so:
+//   - the Project is read live, not from the cache, and its uid must equal the
+//     uid the binding names;
+//   - a request through a project control plane gets none: the binding is
+//     stored there, and the collector finds no Project there.
+//
+// A binding that already names its Project's uid in an owner reference is left
+// alone without a read, so an update of an owned binding never waits on, or
+// fails with, a read of the Project. It appends, and never changes or removes
+// another owner reference.
+func (m *PolicyBindingMutator) ensureProjectOwnerReference(ctx context.Context, pb *iamv1alpha1.PolicyBinding) error {
+	ref := projectTarget(pb)
+	if ref == nil || onProjectControlPlane(ctx) || hasOwner(pb.OwnerReferences, types.UID(ref.UID)) {
+		return nil
+	}
+	project, err := m.liveProject(ctx, ref)
+	if err != nil || project == nil {
+		return err
+	}
+	pb.OwnerReferences = append(pb.OwnerReferences, metav1.OwnerReference{
+		APIVersion: resourcemanagerv1alpha1.GroupVersion.String(),
+		Kind:       "Project",
+		Name:       project.Name,
+		UID:        project.UID,
+	})
 	return nil
+}
+
+// projectTarget returns the binding's resourceRef when it names a Project, and
+// nil otherwise.
+func projectTarget(pb *iamv1alpha1.PolicyBinding) *iamv1alpha1.ResourceReference {
+	ref := pb.Spec.ResourceSelector.ResourceRef
+	if ref == nil || ref.APIGroup != resourcemanagerv1alpha1.GroupVersion.Group || ref.Kind != "Project" {
+		return nil
+	}
+	return ref
+}
+
+// onProjectControlPlane reports whether the request came through a project
+// control plane, as the webhook server's ClusterAwareServer marks it for any
+// user, system:masters included.
+func onProjectControlPlane(ctx context.Context) bool {
+	clusterName, ok := mccontext.ClusterFrom(ctx)
+	return ok && clusterName != ""
+}
+
+// liveProject reads the Project ref names, bypassing the cache, and returns it
+// only when it carries the uid ref names. It returns nil and no error when the
+// Project is gone or carries another uid.
+func (m *PolicyBindingMutator) liveProject(ctx context.Context, ref *iamv1alpha1.ResourceReference) (*resourcemanagerv1alpha1.Project, error) {
+	project := &resourcemanagerv1alpha1.Project{}
+	if err := m.reader.Get(ctx, client.ObjectKey{Name: ref.Name}, project); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, errors.NewInternalError(fmt.Errorf("failed to get project %q: %w", ref.Name, err))
+	}
+	if string(project.UID) != ref.UID {
+		return nil, nil
+	}
+	return project, nil
+}
+
+// hasOwner reports whether refs already names the owner with the given uid.
+func hasOwner(refs []metav1.OwnerReference, uid types.UID) bool {
+	for _, owner := range refs {
+		if owner.UID == uid {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveSubjectUID looks up the object named by the subject and returns its

@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata:
+  name: pbo-on-gone
+  namespace: organization-pbo-org
+  ownerReferences:
+    - apiVersion: resourcemanager.miloapis.com/v1alpha1
+      kind: Project
+      name: pbo-gone
+      uid: ($gone.metadata.uid)
