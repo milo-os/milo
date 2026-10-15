@@ -6,6 +6,7 @@ metadata:
   labels:
     test.miloapis.com/scenario: "policybinding-project-owner-gc"
 spec:
+  # The role need not exist: the platform admin needs no assignable role.
   roleRef:
     name: pbo-viewer
     namespace: datum-cloud

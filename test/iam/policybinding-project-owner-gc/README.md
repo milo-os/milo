@@ -16,6 +16,9 @@ This test verifies:
   reference, and stays.
 - An update that strips the owner reference gets it back.
 
+The bindings are created as the platform admin, which needs no assignable
+role, so the test creates none and owns no shared namespace.
+
 The webhook also gives no owner reference to a binding created through a
 project control plane. A project control plane serves no PolicyBinding
 today, so the unit tests cover that case.
@@ -34,7 +37,7 @@ today, so the unit tests cover that case.
 
 ### Step: `setup`
 
-Create the organization, the assignable role and the User the bindings grant it to
+Create the organization and the User the bindings grant a role to
 
 #### Try
 

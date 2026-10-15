@@ -1,0 +1,13 @@
+# The User the bindings grant a role to. The role itself is not created: the
+# bindings are made as the platform admin, which needs no assignable role, and
+# the test reads only owner references, so it owns no shared namespace.
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: pbo-user
+  labels:
+    test.miloapis.com/scenario: "policybinding-project-owner-gc"
+spec:
+  email: policybinding-owner-user@test.local
+  givenName: PolicyBinding
+  familyName: Owner
