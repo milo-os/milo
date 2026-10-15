@@ -258,11 +258,13 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 	// Return a cancel function that cleans up the waiter
 	cancelWithCleanup := func() {
 		cancelFunc()
-		w.UnregisterClaimWaiter(claimName, namespace)
+		w.waitersLock.Lock()
+		defer w.waitersLock.Unlock()
+		w.unregisterLocked(key, waiter)
 	}
 
 	// Start the timeout timer
-	waiter.timer = time.AfterFunc(timeout, func() {
+	timer := time.AfterFunc(timeout, func() {
 		w.logger.V(3).Info("Claim waiter timed out",
 			"claimName", claimName,
 			"namespace", namespace,
@@ -272,18 +274,16 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 		// Metrics for timeout
 		waiterDuration.WithLabelValues("timeout").Observe(time.Since(waiter.startTime).Seconds())
 
-		select {
-		case resultChan <- ClaimResult{
+		w.deliver(key, waiter, ClaimResult{
 			Granted: false,
 			Reason:  "timeout",
 			Error:   fmt.Errorf("timeout waiting for ResourceClaim %s/%s after %v", namespace, claimName, timeout),
-		}:
-		default:
-		}
-
-		// Clean up the waiter
-		w.UnregisterClaimWaiter(claimName, namespace)
+		})
 	})
+	// The waiter is already registered, so the timer is set under the lock its readers hold.
+	w.waitersLock.Lock()
+	waiter.timer = timer
+	w.waitersLock.Unlock()
 
 	w.logger.V(4).Info("Claim waiter registered successfully",
 		"claimName", claimName,
@@ -301,31 +301,58 @@ func (w *watchManager) UnregisterClaimWaiter(claimName, namespace string) {
 	defer w.waitersLock.Unlock()
 
 	if waiter, exists := w.waiters[key]; exists {
-		w.logger.V(4).Info("Unregistering claim waiter",
-			"claimName", claimName,
-			"namespace", namespace,
-			"project", w.projectID)
-
-		if waiter.timer != nil {
-			waiter.timer.Stop()
-		}
-		waiter.cancelFunc()
-		close(waiter.resultChan)
-		delete(w.waiters, key)
-
-		// Decrement active waiter count and update TTL
-		activeCount := atomic.AddInt32(&w.activeWaiters, -1)
-		w.updateTTL()
-
-		// Metrics: unregister and current waiter count
-		waiterCompletions.WithLabelValues("unregistered").Inc()
-		waitersCurrent.Set(float64(activeCount))
-
-		w.logger.V(4).Info("Claim waiter unregistered",
-			"claimName", claimName,
-			"namespace", namespace,
-			"project", w.projectID)
+		w.unregisterLocked(key, waiter)
 	}
+}
+
+// deliver sends result to waiter and unregisters it, if waiter is still the
+// one registered for key. It holds waitersLock from the check to the close, so
+// a timeout, a claim event, a cancel and Stop cannot interleave: a timer's
+// callback runs in its own goroutine and Timer.Stop does not wait for it.
+// The channel holds one result and only deliver sends, so the send never
+// blocks.
+func (w *watchManager) deliver(key types.NamespacedName, waiter *claimWaiter, result ClaimResult) {
+	w.waitersLock.Lock()
+	defer w.waitersLock.Unlock()
+
+	if w.waiters[key] != waiter {
+		return
+	}
+	waiter.resultChan <- result
+	w.unregisterLocked(key, waiter)
+}
+
+// unregisterLocked removes waiter, if it is still the one registered for key,
+// and closes its channel. The caller holds waitersLock.
+func (w *watchManager) unregisterLocked(key types.NamespacedName, waiter *claimWaiter) {
+	if w.waiters[key] != waiter {
+		return
+	}
+	claimName, namespace := key.Name, key.Namespace
+	w.logger.V(4).Info("Unregistering claim waiter",
+		"claimName", claimName,
+		"namespace", namespace,
+		"project", w.projectID)
+
+	if waiter.timer != nil {
+		waiter.timer.Stop()
+	}
+	waiter.cancelFunc()
+	close(waiter.resultChan)
+	delete(w.waiters, key)
+
+	// Decrement active waiter count and update TTL
+	activeCount := atomic.AddInt32(&w.activeWaiters, -1)
+	w.updateTTL()
+
+	// Metrics: unregister and current waiter count
+	waiterCompletions.WithLabelValues("unregistered").Inc()
+	waitersCurrent.Set(float64(activeCount))
+
+	w.logger.V(4).Info("Claim waiter unregistered",
+		"claimName", claimName,
+		"namespace", namespace,
+		"project", w.projectID)
 }
 
 // updateTTL manages the TTL timer based on active waiter count
@@ -694,15 +721,7 @@ func (w *watchManager) handleClaimEvent(obj interface{}) {
 		waiterDuration.WithLabelValues(outcome).Observe(time.Since(waiter.startTime).Seconds())
 		watchEventsProcessed.WithLabelValues(outcome).Inc()
 
-		// Send result to waiter.
-		// This should always succeed immediately since:
-		// 1. Channel has buffer size 1
-		// 2. Consumer is blocked waiting for exactly one result
-		// 3. We unregister immediately after, preventing future sends
-		//
-		// If this blocks, it indicates a logic error (waiter already received a result
-		// but wasn't unregistered, or waiter was unregistered but map not cleaned up).
-		waiter.resultChan <- *result
+		w.deliver(key, waiter, *result)
 
 		w.logger.V(3).Info("Claim result sent to waiter",
 			"claimName", key.Name,
@@ -710,8 +729,6 @@ func (w *watchManager) handleClaimEvent(obj interface{}) {
 			"granted", result.Granted,
 			"reason", result.Reason,
 			"project", w.projectID)
-
-		w.UnregisterClaimWaiter(key.Name, key.Namespace)
 	} else {
 		// Claim still pending
 		watchEventsProcessed.WithLabelValues("pending").Inc()
@@ -743,14 +760,11 @@ func (w *watchManager) handleClaimDeletion(obj interface{}) {
 	// Claim was deleted - notify waiter
 	waiterDuration.WithLabelValues("deleted").Observe(time.Since(waiter.startTime).Seconds())
 
-	// Send deletion result to waiter (blocking send is correct - see handleClaimEvent for rationale)
-	waiter.resultChan <- ClaimResult{
+	w.deliver(key, waiter, ClaimResult{
 		Granted: false,
 		Reason:  "deleted",
 		Error:   fmt.Errorf("ResourceClaim %s/%s was deleted", key.Namespace, key.Name),
-	}
-
-	w.UnregisterClaimWaiter(key.Name, key.Namespace)
+	})
 }
 
 // evaluateClaimStatus evaluates a ResourceClaim's status and returns a result if final
