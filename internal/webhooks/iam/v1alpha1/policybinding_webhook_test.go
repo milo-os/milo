@@ -828,6 +828,7 @@ func TestPolicyBindingMutator_ProjectOwnerReference(t *testing.T) {
 		binding    *iamv1alpha1.PolicyBinding
 		wantOwners []metav1.OwnerReference
 		wantErr    string
+		wantNoRead bool // the case must not read the Project at all
 	}{
 		// A UID mismatch reads as an absent owner to the garbage collector,
 		// which would delete the binding at once.
@@ -916,6 +917,15 @@ func TestPolicyBindingMutator_ProjectOwnerReference(t *testing.T) {
 			binding:    withOwners(projectTargetedBinding(name, liveUID), projectOwnerReference(name, liveUID)),
 			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
 		},
+		// After the backfill every update of an owned binding comes here; a read
+		// that fails or stalls must not refuse it.
+		"reads nothing for an update of a binding that already has the reference": {
+			ctx:        requestWith(admissionv1.Update, nil, nil),
+			liveErr:    errors.New("etcd unavailable"),
+			binding:    withOwners(projectTargetedBinding(name, liveUID), projectOwnerReference(name, liveUID)),
+			wantOwners: []metav1.OwnerReference{projectOwnerReference(name, liveUID)},
+			wantNoRead: true,
+		},
 		// A reference to the Project's name with an older uid reads as absent to
 		// the collector; the live one keeps the binding alive.
 		"adds the live reference beside one to an older uid of the same name": {
@@ -935,15 +945,18 @@ func TestPolicyBindingMutator_ProjectOwnerReference(t *testing.T) {
 	for testName, tc := range tests {
 		t.Run(testName, func(t *testing.T) {
 			cached := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.cached...).Build()
-			liveBuilder := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.live...)
-			if tc.liveErr != nil {
-				liveBuilder = liveBuilder.WithInterceptorFuncs(interceptor.Funcs{
-					Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
-						return tc.liveErr
+			reads := 0
+			live := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(tc.live...).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						reads++
+						if tc.liveErr != nil {
+							return tc.liveErr
+						}
+						return c.Get(ctx, key, obj, opts...)
 					},
-				})
-			}
-			mutator := &PolicyBindingMutator{client: cached, reader: liveBuilder.Build()}
+				}).Build()
+			mutator := &PolicyBindingMutator{client: cached, reader: live}
 
 			err := mutator.Default(tc.ctx, tc.binding)
 
@@ -954,6 +967,9 @@ func TestPolicyBindingMutator_ProjectOwnerReference(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantOwners, tc.binding.OwnerReferences)
+			if tc.wantNoRead {
+				assert.Zero(t, reads, "the Project was read")
+			}
 		})
 	}
 }

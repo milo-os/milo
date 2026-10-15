@@ -127,14 +127,17 @@ func (m *PolicyBindingMutator) Default(ctx context.Context, pb *iamv1alpha1.Poli
 //   - a request through a project control plane gets none: the binding is
 //     stored there, and the collector finds no Project there.
 //
-// It appends, and never changes or removes another owner reference.
+// A binding that already names its Project's uid in an owner reference is left
+// alone without a read, so an update of an owned binding never waits on, or
+// fails with, a read of the Project. It appends, and never changes or removes
+// another owner reference.
 func (m *PolicyBindingMutator) ensureProjectOwnerReference(ctx context.Context, pb *iamv1alpha1.PolicyBinding) error {
 	ref := projectTarget(pb)
-	if ref == nil || onProjectControlPlane(ctx) {
+	if ref == nil || onProjectControlPlane(ctx) || hasOwner(pb.OwnerReferences, types.UID(ref.UID)) {
 		return nil
 	}
 	project, err := m.liveProject(ctx, ref)
-	if err != nil || project == nil || hasOwner(pb.OwnerReferences, project.UID) {
+	if err != nil || project == nil {
 		return err
 	}
 	pb.OwnerReferences = append(pb.OwnerReferences, metav1.OwnerReference{
