@@ -786,8 +786,8 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		return newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, result.Reason)
 
 	case <-ctx.Done():
+		// The deferred cancelFunc removes this request's waiter, and only it.
 		span.SetStatus(codes.Error, "Context cancelled")
-		watchManager.UnregisterClaimWaiter(claimName, namespace)
 		return newInternalFailure(ctx.Err())
 	}
 }
