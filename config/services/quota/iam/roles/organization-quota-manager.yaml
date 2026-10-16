@@ -15,20 +15,24 @@ spec:
   includedPermissions:
     # ResourceRegistration read permissions (to understand available resource types)
     - quota.miloapis.com/resourceregistrations.get
+    - quota.miloapis.com/resourceregistrations/status.get
     - quota.miloapis.com/resourceregistrations.list
     - quota.miloapis.com/resourceregistrations.watch
 
     # ResourceGrant read permissions (to view grants affecting their organization)
     - quota.miloapis.com/resourcegrants.get
+    - quota.miloapis.com/resourcegrants/status.get
     - quota.miloapis.com/resourcegrants.list
     - quota.miloapis.com/resourcegrants.watch
 
     # ResourceClaim read permissions (to view claims for their organization)
     - quota.miloapis.com/resourceclaims.get
+    - quota.miloapis.com/resourceclaims/status.get
     - quota.miloapis.com/resourceclaims.list
     - quota.miloapis.com/resourceclaims.watch
 
     # AllowanceBucket read permissions (to monitor quota usage)
     - quota.miloapis.com/allowancebuckets.get
+    - quota.miloapis.com/allowancebuckets/status.get
     - quota.miloapis.com/allowancebuckets.list
     - quota.miloapis.com/allowancebuckets.watch

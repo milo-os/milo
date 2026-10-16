@@ -10,5 +10,6 @@ spec:
   includedPermissions:
     # Read-only permissions for EmailBroadcast resources
     - notification.miloapis.com/emailbroadcasts.get
+    - notification.miloapis.com/emailbroadcasts/status.get
     - notification.miloapis.com/emailbroadcasts.list
     - notification.miloapis.com/emailbroadcasts.watch

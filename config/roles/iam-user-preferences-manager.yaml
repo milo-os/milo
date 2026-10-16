@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
   - iam.miloapis.com/userpreferences.get
+  - iam.miloapis.com/userpreferences/status.get
   - iam.miloapis.com/userpreferences.update
   - iam.miloapis.com/userpreferences.patch 

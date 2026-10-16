@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - notification.miloapis.com/contactgroups.get
+    - notification.miloapis.com/contactgroups/status.get
     - notification.miloapis.com/contactgroups.list
     - notification.miloapis.com/contactgroups.watch

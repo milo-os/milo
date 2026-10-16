@@ -13,5 +13,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - quota.miloapis.com/resourceregistrations.get
+    - quota.miloapis.com/resourceregistrations/status.get
     - quota.miloapis.com/resourceregistrations.list
     - quota.miloapis.com/resourceregistrations.watch

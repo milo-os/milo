@@ -10,6 +10,7 @@ spec:
   includedPermissions:
     - resourcemanager.miloapis.com/projects.create
     - resourcemanager.miloapis.com/projects.get
+    - resourcemanager.miloapis.com/projects/status.get
     - resourcemanager.miloapis.com/projects.list
     - resourcemanager.miloapis.com/projects.update
     - resourcemanager.miloapis.com/projects.delete

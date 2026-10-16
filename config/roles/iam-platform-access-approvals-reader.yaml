@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - iam.miloapis.com/platformaccessapprovals.get
+    - iam.miloapis.com/platformaccessapprovals/status.get
     - iam.miloapis.com/platformaccessapprovals.list
     - iam.miloapis.com/platformaccessapprovals.watch

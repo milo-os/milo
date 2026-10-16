@@ -10,5 +10,6 @@ spec:
   includedPermissions:
     # Read-only permissions for contact resources
     - notification.miloapis.com/contacts.get
+    - notification.miloapis.com/contacts/status.get
     - notification.miloapis.com/contacts.list
     - notification.miloapis.com/contacts.watch

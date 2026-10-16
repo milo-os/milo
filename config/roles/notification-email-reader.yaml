@@ -10,5 +10,6 @@ spec:
   includedPermissions:
     # Read-only permissions for Email resources
     - notification.miloapis.com/emails.get
+    - notification.miloapis.com/emails/status.get
     - notification.miloapis.com/emails.list
     - notification.miloapis.com/emails.watch

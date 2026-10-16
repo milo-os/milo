@@ -19,5 +19,6 @@ spec:
     - core.miloapis.com/events.list
     - core.miloapis.com/events.watch
     - core.miloapis.com/namespaces.get
+    - core.miloapis.com/namespaces/status.get
     - core.miloapis.com/namespaces.list
     - core.miloapis.com/namespaces.watch

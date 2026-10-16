@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - resourcemanager.miloapis.com/organizationmemberships.get
+    - resourcemanager.miloapis.com/organizationmemberships/status.get
     - resourcemanager.miloapis.com/organizationmemberships.list
     - resourcemanager.miloapis.com/organizationmemberships.watch

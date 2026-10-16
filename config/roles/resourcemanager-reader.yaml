@@ -10,7 +10,9 @@ spec:
   includedPermissions:
     # Read-only permissions for ResourceManager resources
     - resourcemanager.miloapis.com/organizations.get
+    - resourcemanager.miloapis.com/organizations/status.get
     - resourcemanager.miloapis.com/organizations.watch
     - resourcemanager.miloapis.com/projects.get
+    - resourcemanager.miloapis.com/projects/status.get
     - resourcemanager.miloapis.com/projects.list
     - resourcemanager.miloapis.com/projects.watch

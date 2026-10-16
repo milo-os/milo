@@ -9,11 +9,13 @@ spec:
   launchStage: Beta
   includedPermissions:
   - iam.miloapis.com/users.get
+  - iam.miloapis.com/users/status.get
   - iam.miloapis.com/users.update
   - iam.miloapis.com/users.patch
   - iam.miloapis.com/users.delete
   - resourcemanager.miloapis.com/organizationmemberships.list
   - resourcemanager.miloapis.com/organizationmemberships.get
+  - resourcemanager.miloapis.com/organizationmemberships/status.get
   - resourcemanager.miloapis.com/organizationmemberships.delete
   - identity.miloapis.com/sessions.list
   - identity.miloapis.com/sessions.get
@@ -23,6 +25,7 @@ spec:
   - identity.miloapis.com/passkeys.list
   - identity.miloapis.com/passkeys.get
   - iam.miloapis.com/userinvitations.get
+  - iam.miloapis.com/userinvitations/status.get
   - iam.miloapis.com/userinvitations.list
   - iam.miloapis.com/userinvitations.watch
   - notification.miloapis.com/contacts.list

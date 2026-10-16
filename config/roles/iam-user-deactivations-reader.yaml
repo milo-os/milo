@@ -9,5 +9,6 @@ spec:
   launchStage: Beta
   includedPermissions:
     - iam.miloapis.com/userdeactivations.get
+    - iam.miloapis.com/userdeactivations/status.get
     - iam.miloapis.com/userdeactivations.list
     - iam.miloapis.com/userdeactivations.watch
