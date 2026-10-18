@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: gm-email-user
+spec:
+  email: gm-member-renamed@example.com
+  givenName: Group
+  familyName: Member
