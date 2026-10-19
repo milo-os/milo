@@ -45,6 +45,12 @@ type PlatformAccessSpec struct {
 	// Reason is a human-readable explanation for the current state.
 	// +kubebuilder:validation:Optional
 	Reason string `json:"reason,omitempty"`
+
+	// RiskAssessment summarizes the most recent automated risk evaluation of the
+	// user. It is written by the fraud service alongside State and is copied to
+	// User.status.riskAssessment by the UserController.
+	// +kubebuilder:validation:Optional
+	RiskAssessment *RiskAssessment `json:"riskAssessment,omitempty"`
 }
 
 // PlatformAccessStatus defines the observed state of PlatformAccess.

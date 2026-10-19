@@ -730,6 +730,15 @@ User is a cluster-scoped resource.<br/>
           Reason is a human-readable explanation for the current state.<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b><a href="#platformaccessspecriskassessment">riskAssessment</a></b></td>
+        <td>object</td>
+        <td>
+          RiskAssessment summarizes the most recent automated risk evaluation of the
+user. It is written by the fraud service alongside State and is copied to
+User.status.riskAssessment by the UserController.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -758,6 +767,58 @@ User is a cluster-scoped resource.
           Name is the name of the User being referenced.<br/>
         </td>
         <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### PlatformAccess.spec.riskAssessment
+<sup><sup>[↩ Parent](#platformaccessspec)</sup></sup>
+
+
+
+RiskAssessment summarizes the most recent automated risk evaluation of the
+user. It is written by the fraud service alongside State and is copied to
+User.status.riskAssessment by the UserController.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>decision</b></td>
+        <td>string</td>
+        <td>
+          Decision is the evaluation outcome, for example ACCEPTED, REVIEW, DEACTIVATE or REJECTED.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>evaluatedAt</b></td>
+        <td>string</td>
+        <td>
+          EvaluatedAt is when the evaluation completed.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>evaluationName</b></td>
+        <td>string</td>
+        <td>
+          EvaluationName is the name of the evaluation this summary was taken from.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>score</b></td>
+        <td>string</td>
+        <td>
+          Score is the composite risk score as a decimal string, for example "0.12".<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -3655,6 +3716,15 @@ by the auth provider based on authentication events.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#userstatusriskassessment">riskAssessment</a></b></td>
+        <td>object</td>
+        <td>
+          RiskAssessment summarizes the user's most recent automated risk evaluation.
+It is copied from PlatformAccess.spec.riskAssessment by the UserController
+and is absent when no evaluation has been recorded.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>state</b></td>
         <td>enum</td>
         <td>
@@ -3746,6 +3816,58 @@ with respect to the current state of the instance.<br/>
           <br/>
             <i>Format</i>: int64<br/>
             <i>Minimum</i>: 0<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### User.status.riskAssessment
+<sup><sup>[↩ Parent](#userstatus)</sup></sup>
+
+
+
+RiskAssessment summarizes the user's most recent automated risk evaluation.
+It is copied from PlatformAccess.spec.riskAssessment by the UserController
+and is absent when no evaluation has been recorded.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>decision</b></td>
+        <td>string</td>
+        <td>
+          Decision is the evaluation outcome, for example ACCEPTED, REVIEW, DEACTIVATE or REJECTED.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>evaluatedAt</b></td>
+        <td>string</td>
+        <td>
+          EvaluatedAt is when the evaluation completed.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>evaluationName</b></td>
+        <td>string</td>
+        <td>
+          EvaluationName is the name of the evaluation this summary was taken from.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>score</b></td>
+        <td>string</td>
+        <td>
+          Score is the composite risk score as a decimal string, for example "0.12".<br/>
         </td>
         <td>false</td>
       </tr></tbody>

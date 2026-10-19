@@ -49,10 +49,13 @@ const (
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="State",type="string",JSONPath=".status.state"
 // +kubebuilder:printcolumn:name="Platform Access",type="string",JSONPath=".status.platformAccess"
+// +kubebuilder:printcolumn:name="Risk Score",type="string",JSONPath=".status.riskAssessment.score",priority=1
+// +kubebuilder:printcolumn:name="Risk Decision",type="string",JSONPath=".status.riskAssessment.decision",priority=1
 // +kubebuilder:resource:path=users,scope=Cluster
 // +kubebuilder:selectablefield:JSONPath=".status.platformAccess"
 // +kubebuilder:selectablefield:JSONPath=".status.emailVerification"
 // +kubebuilder:selectablefield:JSONPath=".spec.email"
+// +kubebuilder:selectablefield:JSONPath=".status.riskAssessment.decision"
 // +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform,User"
 type User struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -98,6 +101,12 @@ type UserStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Pending;Approved;Rejected;Suspended
 	PlatformAccess PlatformAccessState `json:"platformAccess,omitempty"`
+
+	// RiskAssessment summarizes the user's most recent automated risk evaluation.
+	// It is copied from PlatformAccess.spec.riskAssessment by the UserController
+	// and is absent when no evaluation has been recorded.
+	// +kubebuilder:validation:Optional
+	RiskAssessment *RiskAssessment `json:"riskAssessment,omitempty"`
 
 	// EmailVerification is the auth provider's view of whether the user's email address is verified. See EmailVerificationState.
 	// +kubebuilder:validation:Optional
