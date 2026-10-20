@@ -33,3 +33,17 @@ Old marked objects are not inserted with an assumed storage path. Each is first 
 ## Claims and limits
 
 This proves the bootstrap admission plugin's marker behavior through Milo's HTTP router using native CRD validation and project-context discovery. It does not prove IAM authorization, trusted writer identity, release authorization, CRD webhooks, native controller reconciliation, endpoint traffic, customer-facing acceptance, or production rollout. The valid objects satisfy the vendored CRD schemas; they intentionally do not claim that external references such as the Workload location or HTTPRoute backend exist.
+
+## Review and race validation
+
+Lead independently checked both fixture hashes and ran the real HTTP probe plus
+log-buffer regression under `-race`; combined package result was 20.144s.
+CRD installation must return 201; an existing definition is a setup failure.
+Project discovery is polled for the exact plural and kind, and denied operations
+are followed by reads asserting unchanged UID, resourceVersion and markers.
+
+The first race run exposed promoted `bytes.Buffer.ReadFrom` bypassing the log
+buffer's Write lock. Holding a mutex across ReadFrom then blocked diagnostics
+until child shutdown. The final fix uses a private buffer with short synchronized
+Write/String calls; its regression test keeps child output open while requiring
+String to return. The final run has neither race nor stream-lifetime lock.
