@@ -351,8 +351,8 @@ func configMap(namespace, name string) map[string]any {
 }
 
 type nativeResourceCase struct {
-	name, group, version, plural, kind, crdName string
-	object                                      func(namespace, name, version string) map[string]any
+	name, group, version, plural, kind string
+	object                             func(namespace, name, version string) map[string]any
 }
 
 func probeNativeResourceOwnership(t *testing.T, ctx context.Context, client *http.Client, tokens map[string]string, etcdEndpoint string, port int, project, namespace string) {
@@ -364,22 +364,21 @@ func probeNativeResourceOwnership(t *testing.T, ctx context.Context, client *htt
 
 	for _, resource := range []nativeResourceCase{
 		{
-			name: "workload", group: "compute.datumapis.com", version: "v1alpha", plural: "workloads", kind: "Workload", crdName: "workloads.compute.datumapis.com",
+			name: "workload", group: "compute.datumapis.com", version: "v1alpha", plural: "workloads", kind: "Workload",
 			object: workloadObject,
 		},
 		{
-			name: "httproute-v1", group: "gateway.networking.k8s.io", version: "v1", plural: "httproutes", kind: "HTTPRoute", crdName: "httproutes.gateway.networking.k8s.io",
+			name: "httproute-v1", group: "gateway.networking.k8s.io", version: "v1", plural: "httproutes", kind: "HTTPRoute",
 			object: httpRouteObject,
 		},
 		{
-			name: "httproute-v1beta1", group: "gateway.networking.k8s.io", version: "v1beta1", plural: "httproutes", kind: "HTTPRoute", crdName: "httproutes.gateway.networking.k8s.io",
+			name: "httproute-v1beta1", group: "gateway.networking.k8s.io", version: "v1beta1", plural: "httproutes", kind: "HTTPRoute",
 			object: httpRouteObject,
 		},
 	} {
 		t.Run(resource.name, func(t *testing.T) {
 			api := base + "/apis/" + resource.group + "/" + resource.version
-			status, body := requestJSON(t, ctx, client, tokens["customer"], http.MethodGet, api, nil, nil)
-			require.Equalf(t, http.StatusOK, status, "project discovery did not expose the installed %s API: %s", resource.name, body)
+			pollProjectDiscovery(t, ctx, client, tokens["customer"], api, resource.plural, resource.kind)
 			collection := api + "/namespaces/" + namespace + "/" + resource.plural
 			identities := []string{"customer", "apps-controller", "release-worker", "system-admin"}
 			for _, identity := range identities {
@@ -411,7 +410,7 @@ func probeNativeResourceOwnership(t *testing.T, ctx context.Context, client *htt
 			// Create through Milo, locate by decoded object identity in the isolated
 			// project's actual etcd records, and CAS only the marker metadata.
 			seedName := "old-" + resource.name
-			status, body = requestJSON(t, ctx, client, tokens["customer"], http.MethodPost, collection, resource.object(namespace, seedName, resource.version), nil)
+			status, body := requestJSON(t, ctx, client, tokens["customer"], http.MethodPost, collection, resource.object(namespace, seedName, resource.version), nil)
 			require.Equalf(t, http.StatusCreated, status, "create marker seed: %s", body)
 			key, value, revision := findStoredNativeObject(t, ctx, etcdEndpoint, project, namespace, seedName, resource.kind)
 			markedValue, err := withOwnershipMarker(value)
@@ -428,6 +427,7 @@ func probeNativeResourceOwnership(t *testing.T, ctx context.Context, client *htt
 					require.Equalf(t, http.StatusOK, status, "read old marker seed: %s", body)
 					var existing map[string]any
 					require.NoError(t, json.Unmarshal(body, &existing))
+					before := objectMetadataSnapshot(t, existing)
 					operations := []struct {
 						name, method, endpoint string
 						body                   any
@@ -447,6 +447,11 @@ func probeNativeResourceOwnership(t *testing.T, ctx context.Context, client *htt
 							requireAppsOwnershipDenial(t, body)
 						})
 					}
+					status, body = requestJSON(t, ctx, client, tokens["customer"], http.MethodGet, objectURL, nil, nil)
+					require.Equalf(t, http.StatusOK, status, "read old marker after denied writes: %s", body)
+					var afterObject map[string]any
+					require.NoError(t, json.Unmarshal(body, &afterObject))
+					require.Equal(t, before, objectMetadataSnapshot(t, afterObject), "denied writes changed stored object metadata")
 				})
 			}
 		})
@@ -477,7 +482,7 @@ func installNativeCRD(t *testing.T, ctx context.Context, client *http.Client, to
 		annotations["discovery.miloapis.com/parent-contexts"] = "Project"
 	}
 	status, body := requestJSON(t, ctx, client, token, http.MethodPost, root+"/apis/apiextensions.k8s.io/v1/customresourcedefinitions", object, nil)
-	require.Truef(t, status == http.StatusCreated || status == http.StatusConflict, "install exact upstream CRD %s: HTTP %d %s", expectedName, status, body)
+	require.Equalf(t, http.StatusCreated, status, "install exact upstream CRD %s (existing CRD is a test setup error): %s", expectedName, body)
 	crdURL := root + "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + expectedName
 	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
@@ -505,6 +510,63 @@ func installNativeCRD(t *testing.T, ctx context.Context, client *http.Client, to
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// pollProjectDiscovery waits for Milo's project-context discovery resource list
+// to publish the exact API resource, rather than treating a successful group
+// endpoint response as proof that the requested kind is served.
+func pollProjectDiscovery(t *testing.T, ctx context.Context, client *http.Client, token, endpoint, plural, kind string) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastStatus int
+	var lastBody []byte
+	for {
+		lastStatus, lastBody = requestJSON(t, ctx, client, token, http.MethodGet, endpoint, nil, nil)
+		if lastStatus == http.StatusOK {
+			var list struct {
+				Resources []struct {
+					Name string `json:"name"`
+					Kind string `json:"kind"`
+				} `json:"resources"`
+			}
+			if json.Unmarshal(lastBody, &list) == nil {
+				for _, resource := range list.Resources {
+					if resource.Name == plural && resource.Kind == kind {
+						return
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context ended waiting for project discovery %s %s: %v (last HTTP %d: %s)", plural, kind, ctx.Err(), lastStatus, lastBody)
+		case <-deadline.C:
+			t.Fatalf("project discovery did not expose %s %s at %s (last HTTP %d: %s)", plural, kind, endpoint, lastStatus, lastBody)
+		case <-ticker.C:
+		}
+	}
+}
+
+type metadataSnapshot struct {
+	UID             string            `json:"uid"`
+	ResourceVersion string            `json:"resourceVersion"`
+	Labels          map[string]string `json:"labels"`
+	Annotations     map[string]string `json:"annotations"`
+}
+
+func objectMetadataSnapshot(t *testing.T, object map[string]any) metadataSnapshot {
+	t.Helper()
+	data, err := json.Marshal(object["metadata"])
+	require.NoError(t, err)
+	var snapshot metadataSnapshot
+	require.NoError(t, json.Unmarshal(data, &snapshot))
+	require.NotEmpty(t, snapshot.UID, "seeded object must have a storage UID")
+	require.NotEmpty(t, snapshot.ResourceVersion, "seeded object must have a resourceVersion")
+	require.Contains(t, snapshot.Labels, appsownership.ProjectUIDLabel)
+	return snapshot
 }
 
 func workloadObject(namespace, name, version string) map[string]any {
@@ -569,6 +631,15 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.Buffer.Write(p)
+}
+
+// bytes.Buffer.ReadFrom is promoted through embedding. os/exec uses that
+// ReaderFrom fast path when copying child output, bypassing Write's lock unless
+// we provide a synchronized method here as well.
+func (b *lockedBuffer) ReadFrom(r io.Reader) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.ReadFrom(r)
 }
 
 func (b *lockedBuffer) String() string {
