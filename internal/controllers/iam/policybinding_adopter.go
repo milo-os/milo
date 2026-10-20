@@ -2,7 +2,9 @@ package iam
 
 import (
 	"context"
+	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,7 +19,11 @@ type PolicyBindingAdopter struct {
 	// APIReader reads the target from the API server, not the cache, so a re-created target is never mistaken for
 	// the one the binding names.
 	APIReader client.Reader
-	Scheme    *runtime.Scheme
+	// Mapper resolves the kind a resourceRef names, so any kind the API server serves can be a binding's owner.
+	Mapper meta.RESTMapper
+	Scheme *runtime.Scheme
+	// Now is the clock the target's creation window is measured with; nil means time.Now.
+	Now func() time.Time
 }
 
 // Reconcile adopts nothing yet.
