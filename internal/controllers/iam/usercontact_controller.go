@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
@@ -24,6 +25,11 @@ const (
 	// contactSubjectNameIndexKey is the field index key used for efficient lookups by SubjectRef.Name.
 	contactSubjectNameIndexKey = "spec.subject.name"
 
+	// userContactEmailIndexKey is the field index key for looking up Users by email. It must differ from the keys
+	// other controllers in the same manager register on User (userEmailIndexKey, platformInvitationUserEmailIndexKey):
+	// a second registration of one key fails the manager's start.
+	userContactEmailIndexKey = "iam.miloapis.com/usercontact-useremail"
+
 	// userContactFieldOwner is the field manager name used for server-side apply/patch operations.
 	userContactFieldOwner = "user-contact-controller"
 
@@ -44,7 +50,15 @@ const (
 
 	// UserContactSyncFailedReason indicates the user sync with a contact failed.
 	UserContactSyncFailedReason = "SyncFailed"
+
+	// UserContactEmailHeldReason indicates the Contact for the user's email belongs to another subject. A Contact's
+	// subject cannot change once set, so the user is linked only when that Contact is released.
+	UserContactEmailHeldReason = "EmailHeldByAnotherUser"
 )
+
+// errEmailHeld reports that the Contact for a user's email names another subject. The Contact webhook refuses to
+// change a subject, so retrying cannot succeed; the Contact watch reconciles the user when that Contact is released.
+var errEmailHeld = errors.New("the Contact for this email belongs to another subject")
 
 // UserContactController reconciles User objects and ensures corresponding Contacts exist.
 // When a User is created or updated, it searches for existing Contacts with the same email.
@@ -87,6 +101,10 @@ func (r *UserContactController) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Ensure a Contact exists for this User
 	contact, err := r.ensureContactForUser(ctx, user)
+	if errors.Is(err, errEmailHeld) {
+		log.Info("Contact for this email belongs to another subject, waiting for its release")
+		return ctrl.Result{}, r.updateUserStatus(ctx, user, nil, err)
+	}
 	if err != nil {
 		log.Error(err, "Failed to ensure contact for user")
 		if statusErr := r.updateUserStatus(ctx, user, nil, err); statusErr != nil {
@@ -188,7 +206,16 @@ func (r *UserContactController) updateUserStatus(ctx context.Context, user *iamv
 
 	var condition metav1.Condition
 
-	if syncErr != nil {
+	if errors.Is(syncErr, errEmailHeld) {
+		condition = metav1.Condition{
+			Type:               UserContactSyncedCondition,
+			Status:             metav1.ConditionFalse,
+			Reason:             UserContactEmailHeldReason,
+			Message:            "The Contact for this email belongs to another subject; the user is linked when that Contact is released",
+			LastTransitionTime: metav1.Now(),
+		}
+		log.Info("Updating User status: email held by another subject", "user", user.Name)
+	} else if syncErr != nil {
 		condition = metav1.Condition{
 			Type:               UserContactSyncedCondition,
 			Status:             metav1.ConditionFalse,
@@ -237,9 +264,7 @@ func (r *UserContactController) ensureContactForUser(ctx context.Context, user *
 	// Filter to only contacts that reference this User (Kind=User check)
 	for i := range existingContactList.Items {
 		contact := &existingContactList.Items[i]
-		if contact.Spec.SubjectRef != nil &&
-			contact.Spec.SubjectRef.Kind == "User" &&
-			contact.Spec.SubjectRef.Name == user.Name {
+		if contactNamesUser(contact, user.Name) {
 			log.Info("Found existing contact referencing this user", "contact", contact.Name)
 
 			// Before syncing, delete any unlinked contacts with the user's new email
@@ -256,6 +281,14 @@ func (r *UserContactController) ensureContactForUser(ctx context.Context, user *
 	}
 
 	// No contact referencing this user found.
+	return r.claimContactByEmail(ctx, user)
+}
+
+// claimContactByEmail links the user to the Contact with its email, or creates one when there is none.
+// A Contact that names another subject is not taken: its subject cannot change.
+func (r *UserContactController) claimContactByEmail(ctx context.Context, user *iamv1alpha1.User) (*notificationv1alpha1.Contact, error) {
+	log := log.FromContext(ctx).WithName("claim-contact-by-email").WithValues("user", user.Name, "email", user.Spec.Email)
+
 	// Search for existing Contacts with the same email across all namespaces.
 	contactList := &notificationv1alpha1.ContactList{}
 	if err := r.Client.List(ctx, contactList,
@@ -266,6 +299,11 @@ func (r *UserContactController) ensureContactForUser(ctx context.Context, user *
 	if len(contactList.Items) > 0 {
 		// Contact with same email exists, update it with SubjectRef
 		contact := &contactList.Items[0]
+		// Any subject here is another one: ensureContactForUser looks for a Contact naming this User first
+		if contact.Spec.SubjectRef != nil {
+			log.Info("Found existing contact with same email, held by another subject", "contact", contact.Name)
+			return nil, errEmailHeld
+		}
 		log.Info("Found existing contact with same email", "contact", contact.Name)
 		if err := r.syncContactWithUser(ctx, contact, user); err != nil {
 			return nil, err
@@ -317,42 +355,17 @@ func (r *UserContactController) deleteUnlinkedContactsWithEmail(ctx context.Cont
 func (r *UserContactController) syncContactWithUser(ctx context.Context, contact *notificationv1alpha1.Contact, user *iamv1alpha1.User) error {
 	log := log.FromContext(ctx).WithName("sync-contact-with-user")
 
-	// Check if any updates are needed
-	needsUpdate := false
-
-	// Check SubjectRef
-	if contact.Spec.SubjectRef == nil ||
-		contact.Spec.SubjectRef.Kind != "User" ||
-		contact.Spec.SubjectRef.Name != user.Name {
-		needsUpdate = true
-	}
-
-	// Check email
-	if contact.Spec.Email != user.Spec.Email {
-		needsUpdate = true
-	}
-
-	// Check given name
-	if contact.Spec.GivenName != user.Spec.GivenName {
-		needsUpdate = true
-	}
-
-	// Check family name
-	if contact.Spec.FamilyName != user.Spec.FamilyName {
-		needsUpdate = true
-	}
-
-	if !needsUpdate {
+	if contactMatchesUser(contact, user) {
 		log.Info("Contact already in sync with user, no update needed", "contact", contact.Name)
 		return nil
 	}
 
 	// Update the Contact
 	before := contact.DeepCopy()
-	
+
 	// Only update SubjectRef if it doesn't already point to this user.
 	// This avoids triggering the webhook's immutability check for minor corrections (like missing APIGroup).
-	if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Kind != "User" || contact.Spec.SubjectRef.Name != user.Name {
+	if !contactNamesUser(contact, user.Name) {
 		contact.Spec.SubjectRef = &notificationv1alpha1.SubjectReference{
 			APIGroup: iamv1alpha1.SchemeGroupVersion.Group,
 			Kind:     "User",
@@ -360,7 +373,7 @@ func (r *UserContactController) syncContactWithUser(ctx context.Context, contact
 			// Namespace is omitted for cluster-scoped resources like User
 		}
 	}
-	
+
 	contact.Spec.Email = user.Spec.Email
 	contact.Spec.GivenName = user.Spec.GivenName
 	contact.Spec.FamilyName = user.Spec.FamilyName
@@ -468,9 +481,7 @@ func (r *UserContactController) findContactsForDeletedUser(ctx context.Context, 
 
 	var requests []reconcile.Request
 	for _, contact := range contactList.Items {
-		if contact.Spec.SubjectRef != nil &&
-			contact.Spec.SubjectRef.Kind == "User" &&
-			contact.Spec.SubjectRef.Name == user.Name {
+		if contactNamesUser(&contact, user.Name) {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      contact.Name,
@@ -487,42 +498,59 @@ func (r *UserContactController) findContactsForDeletedUser(ctx context.Context, 
 	return requests
 }
 
+// findUsersWaitingForContact finds the Users with a Contact's email that the Contact does not name.
+// Used to reconcile a user whose email is held when that Contact is released or deleted.
+func (r *UserContactController) findUsersWaitingForContact(ctx context.Context, obj client.Object) []reconcile.Request {
+	contact, ok := obj.(*notificationv1alpha1.Contact)
+	if !ok || contact.Spec.Email == "" {
+		return nil
+	}
+
+	log := log.FromContext(ctx).WithName("find-users-waiting-for-contact")
+
+	userList := &iamv1alpha1.UserList{}
+	if err := r.Client.List(ctx, userList,
+		client.MatchingFields{userContactEmailIndexKey: contact.Spec.Email}); err != nil {
+		log.Error(err, "Failed to list users by email")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, user := range userList.Items {
+		// The Contact's own subject is reconciled through its own events
+		if contactNamesUser(contact, user.Name) {
+			continue
+		}
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: user.Name}})
+	}
+
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *UserContactController) SetupWithManager(mgr ctrl.Manager) error {
 	log := log.Log.WithName("user-contact-controller")
 	log.Info("Setting up UserContactController with Manager")
 
 	// Create an index on Contact.spec.email for efficient lookups when creating contacts
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &notificationv1alpha1.Contact{}, contactEmailIndexKey, func(obj client.Object) []string {
-		contact, ok := obj.(*notificationv1alpha1.Contact)
-		if !ok {
-			return nil
-		}
-		if contact.Spec.Email == "" {
-			return nil
-		}
-		return []string{contact.Spec.Email}
-	}); err != nil {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail); err != nil {
 		return fmt.Errorf("failed to set field index on Contact by spec.email: %w", err)
 	}
 
 	// Create an index on Contact.spec.subject.name for efficient lookups
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, func(obj client.Object) []string {
-		contact, ok := obj.(*notificationv1alpha1.Contact)
-		if !ok {
-			return nil
-		}
-		if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Name == "" {
-			return nil
-		}
-		return []string{contact.Spec.SubjectRef.Name}
-	}); err != nil {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName); err != nil {
 		return fmt.Errorf("failed to set field index on Contact by spec.subject.name: %w", err)
 	}
 
-	// Build the controller that watches Users
+	// Create an index on User.spec.email, so a released Contact finds the users waiting for its email
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &iamv1alpha1.User{}, userContactEmailIndexKey, indexUserByEmail); err != nil {
+		return fmt.Errorf("failed to set field index on User by spec.email: %w", err)
+	}
+
+	// Build the controller that watches Users, and the Contacts that may free a user's email
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&iamv1alpha1.User{}).
+		Watches(&notificationv1alpha1.Contact{}, handler.EnqueueRequestsFromMapFunc(r.findUsersWaitingForContact)).
 		Named("user-contact").
 		Complete(r); err != nil {
 		return fmt.Errorf("failed to build user-contact controller: %w", err)
@@ -539,4 +567,55 @@ func (r *UserContactController) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return nil
+}
+
+// indexContactByEmail indexes a Contact by its email.
+func indexContactByEmail(obj client.Object) []string {
+	contact, ok := obj.(*notificationv1alpha1.Contact)
+	if !ok {
+		return nil
+	}
+	if contact.Spec.Email == "" {
+		return nil
+	}
+	return []string{contact.Spec.Email}
+}
+
+// indexContactBySubjectName indexes a Contact by the name of its subject.
+func indexContactBySubjectName(obj client.Object) []string {
+	contact, ok := obj.(*notificationv1alpha1.Contact)
+	if !ok {
+		return nil
+	}
+	if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Name == "" {
+		return nil
+	}
+	return []string{contact.Spec.SubjectRef.Name}
+}
+
+// indexUserByEmail indexes a User by its email.
+func indexUserByEmail(obj client.Object) []string {
+	user, ok := obj.(*iamv1alpha1.User)
+	if !ok {
+		return nil
+	}
+	if user.Spec.Email == "" {
+		return nil
+	}
+	return []string{user.Spec.Email}
+}
+
+// contactNamesUser reports whether the Contact's subject is the named User.
+func contactNamesUser(contact *notificationv1alpha1.Contact, userName string) bool {
+	return contact.Spec.SubjectRef != nil &&
+		contact.Spec.SubjectRef.Kind == "User" &&
+		contact.Spec.SubjectRef.Name == userName
+}
+
+// contactMatchesUser reports whether the Contact already names the User and carries its email and names.
+func contactMatchesUser(contact *notificationv1alpha1.Contact, user *iamv1alpha1.User) bool {
+	return contactNamesUser(contact, user.Name) &&
+		contact.Spec.Email == user.Spec.Email &&
+		contact.Spec.GivenName == user.Spec.GivenName &&
+		contact.Spec.FamilyName == user.Spec.FamilyName
 }

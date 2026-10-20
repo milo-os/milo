@@ -9,10 +9,10 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -24,30 +24,6 @@ func setupUserContactTestScheme() *runtime.Scheme {
 	_ = iamv1alpha1.AddToScheme(scheme)
 	_ = notificationv1alpha1.AddToScheme(scheme)
 	return scheme
-}
-
-// contactEmailIndexFunc is the index function for Contact.spec.email
-func contactEmailIndexFunc(obj client.Object) []string {
-	contact, ok := obj.(*notificationv1alpha1.Contact)
-	if !ok {
-		return nil
-	}
-	if contact.Spec.Email == "" {
-		return nil
-	}
-	return []string{contact.Spec.Email}
-}
-
-// contactSubjectNameIndexFunc is the index function for Contact.spec.subject.name
-func contactSubjectNameIndexFunc(obj client.Object) []string {
-	contact, ok := obj.(*notificationv1alpha1.Contact)
-	if !ok {
-		return nil
-	}
-	if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Name == "" {
-		return nil
-	}
-	return []string{contact.Spec.SubjectRef.Name}
 }
 
 func TestUserContactController_CreateContactForNewUser(t *testing.T) {
@@ -70,8 +46,8 @@ func TestUserContactController_CreateContactForNewUser(t *testing.T) {
 		WithObjects(user).
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
 		WithStatusSubresource(&iamv1alpha1.User{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -135,8 +111,8 @@ func TestUserContactController_UpdateExistingContactWithUserReference(t *testing
 		WithObjects(user, existingContact).
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
 		WithStatusSubresource(&iamv1alpha1.User{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -165,7 +141,7 @@ func TestUserContactController_UpdateExistingContactWithUserReference(t *testing
 	assert.Equal(t, user.Spec.FamilyName, updatedContact.Spec.FamilyName)
 }
 
-func TestUserContactController_OverwriteContactWithDifferentUserReference(t *testing.T) {
+func TestUserContactController_ContactWithDifferentUserReferenceIsHeld(t *testing.T) {
 	scheme := setupUserContactTestScheme()
 
 	user := &iamv1alpha1.User{
@@ -201,8 +177,8 @@ func TestUserContactController_OverwriteContactWithDifferentUserReference(t *tes
 		WithObjects(user, existingContact).
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
 		WithStatusSubresource(&iamv1alpha1.User{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -215,16 +191,24 @@ func TestUserContactController_OverwriteContactWithDifferentUserReference(t *tes
 	result, err := controller.Reconcile(ctx, reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: user.Name},
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "a condition only another object can change is reported, not retried")
 	assert.False(t, result.Requeue)
 
-	// Verify the existing contact was updated to point to the new user
+	// Verify the existing contact still points to the other user: the Contact webhook refuses a changed subject
 	updatedContact := &notificationv1alpha1.Contact{}
 	err = fakeClient.Get(ctx, types.NamespacedName{Name: "existing-contact", Namespace: testContactNamespace}, updatedContact)
 	require.NoError(t, err)
 
 	assert.NotNil(t, updatedContact.Spec.SubjectRef)
-	assert.Equal(t, user.Name, updatedContact.Spec.SubjectRef.Name, "SubjectRef should be updated to new user")
+	assert.Equal(t, "another-user", updatedContact.Spec.SubjectRef.Name, "SubjectRef should stay with the other user")
+
+	// Verify the user reports the held email
+	updatedUser := &iamv1alpha1.User{}
+	require.NoError(t, fakeClient.Get(ctx, types.NamespacedName{Name: user.Name}, updatedUser))
+	condition := meta.FindStatusCondition(updatedUser.Status.Conditions, UserContactSyncedCondition)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionFalse, condition.Status)
+	assert.Equal(t, UserContactEmailHeldReason, condition.Reason)
 }
 
 func TestUserContactController_CleanupDanglingReferenceOnContactReconcile(t *testing.T) {
@@ -254,8 +238,8 @@ func TestUserContactController_CleanupDanglingReferenceOnContactReconcile(t *tes
 		WithScheme(scheme).
 		WithObjects(contact). // No user!
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -318,8 +302,8 @@ func TestUserContactController_SyncEmailOnUserEmailChange(t *testing.T) {
 		WithObjects(user, existingContact).
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
 		WithStatusSubresource(&iamv1alpha1.User{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -398,8 +382,8 @@ func TestUserContactController_DeleteUnlinkedContactOnEmailChange(t *testing.T) 
 		WithObjects(user, userContact, newsletterContact).
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
 		WithStatusSubresource(&iamv1alpha1.User{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -432,8 +416,8 @@ func TestUserContactController_UserNotFound(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -486,8 +470,8 @@ func TestUserContactController_UpdateContactInDifferentNamespace(t *testing.T) {
 		WithObjects(user, existingContact).
 		WithStatusSubresource(&notificationv1alpha1.Contact{}).
 		WithStatusSubresource(&iamv1alpha1.User{}).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -545,8 +529,8 @@ func TestUserContactController_ContactReconcileWithValidUser(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(user, contact).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
@@ -592,8 +576,8 @@ func TestUserContactController_SkipUserBeingDeleted(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(user).
-		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, contactEmailIndexFunc).
-		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, contactSubjectNameIndexFunc).
+		WithIndex(&notificationv1alpha1.Contact{}, contactEmailIndexKey, indexContactByEmail).
+		WithIndex(&notificationv1alpha1.Contact{}, contactSubjectNameIndexKey, indexContactBySubjectName).
 		Build()
 
 	controller := &UserContactController{
