@@ -110,3 +110,22 @@ opts := milo.Options{
     // InternalServiceDiscovery: false, // Use Project mode (default)
 }
 ```
+
+## Metrics
+
+The provider registers these metrics with controller-runtime's registry, so
+they appear on the consuming manager's `/metrics` endpoint with no extra
+wiring. Every series carries a `provider` label set to the provider's
+controller name (`ControllerName`, default `projectcontrolplane`).
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `milo_cluster_provider_engaged_projects` | gauge | Projects engaged with the multicluster manager |
+| `milo_cluster_provider_initial_sync_complete` | gauge | `1` once every project in the initial list is processed; `0` from provider start until then |
+| `milo_cluster_provider_initial_sync_duration_seconds` | gauge | Seconds from provider start until the initial list was processed |
+| `milo_cluster_provider_registration_failures_total` | counter | Failed project registrations, by `stage`: `create_cluster`, `index`, `cache_sync`, `engage` |
+
+`milo_cluster_provider_initial_sync_complete` staying at `0` well past the
+usual initial sync duration means the provider is not getting through its
+projects, for example because engagement is blocked. Alert on that rather than
+on the engaged count, which legitimately changes as projects come and go.
