@@ -105,7 +105,7 @@ func pollEnv(t *testing.T, pc pollCase) (*PolicyBindingAdopter, client.Client, *
 		}}).Build()
 	return &PolicyBindingAdopter{
 		Client: c, APIReader: c, Mapper: mapper, Scheme: scheme,
-		Now: func() time.Time { return bindingCreated.Add(pc.age) },
+		now: func() time.Time { return bindingCreated.Add(pc.age) },
 	}, c, project
 }
 

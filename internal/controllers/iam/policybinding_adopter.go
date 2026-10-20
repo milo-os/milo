@@ -22,8 +22,8 @@ type PolicyBindingAdopter struct {
 	// Mapper resolves the kind a resourceRef names, so any kind the API server serves can be a binding's owner.
 	Mapper meta.RESTMapper
 	Scheme *runtime.Scheme
-	// Now is the clock the target's creation window is measured with; nil means time.Now.
-	Now func() time.Time
+	// now is the clock the target's creation window is measured with; nil means time.Now.
+	now func() time.Time
 }
 
 // Reconcile adopts nothing yet.
