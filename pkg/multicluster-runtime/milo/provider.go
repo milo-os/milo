@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,8 +40,17 @@ var _ multicluster.Provider = &Provider{}
 var projectGVK = resourcemanagerv1alpha1.GroupVersion.WithKind("Project")
 var projectControlPlaneGVK = infrastructurev1alpha1.GroupVersion.WithKind("ProjectControlPlane")
 
+// DefaultProjectCacheSyncTimeout bounds the time one unavailable project can
+// occupy the provider's serial discovery worker while syncing its cache.
+const DefaultProjectCacheSyncTimeout = 30 * time.Second
+
 // Options are the options for the Datum cluster Provider.
 type Options struct {
+	// ProjectCacheSyncTimeout bounds cache synchronization during engagement.
+	// Zero uses DefaultProjectCacheSyncTimeout; negative values are invalid.
+	// A timed-out project is torn down and retried by the controller queue.
+	ProjectCacheSyncTimeout time.Duration
+
 	// ClusterOptions are the options passed to the cluster constructor.
 	ClusterOptions []cluster.Option
 
@@ -71,6 +81,10 @@ type Options struct {
 
 // New creates a new Datum cluster Provider.
 func New(localMgr manager.Manager, opts Options) (*Provider, error) {
+	if opts.ProjectCacheSyncTimeout < 0 {
+		return nil, fmt.Errorf("project cache sync timeout must not be negative")
+	}
+
 	p := &Provider{
 		opts:              opts,
 		log:               log.Log.WithName("datum-cluster-provider"),
@@ -112,9 +126,11 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 		controllerName = "projectcontrolplane"
 	}
 
+	// Discovery only manages this replica's local clients and caches. It must
+	// run on followers too; service reconcilers keep their own leader election.
 	controllerBuilder := builder.ControllerManagedBy(localMgr).
 		For(&project, forOpts...).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1, NeedLeaderElection: ptr.To(false)}).
 		Named(controllerName)
 
 	if err := controllerBuilder.Complete(p); err != nil {
@@ -291,10 +307,17 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.Info("Waiting for cluster cache to sync", "key", key)
 
-	if !cl.GetCache().WaitForCacheSync(ctx) {
+	syncTimeout := p.opts.ProjectCacheSyncTimeout
+	if syncTimeout == 0 {
+		syncTimeout = DefaultProjectCacheSyncTimeout
+	}
+	syncCtx, cancelSync := context.WithTimeout(ctx, syncTimeout)
+	synced := cl.GetCache().WaitForCacheSync(syncCtx)
+	cancelSync()
+	if !synced {
 		cancel()
 		log.Error(nil, "Cluster cache sync failed", "key", key)
-		return ctrl.Result{}, fmt.Errorf("failed to sync cache")
+		return ctrl.Result{}, fmt.Errorf("failed to sync project %q cache within %s", key, syncTimeout)
 	}
 
 	log.Info("Cluster cache synced successfully", "key", key)
