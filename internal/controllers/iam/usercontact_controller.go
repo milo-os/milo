@@ -44,6 +44,10 @@ const (
 
 	// UserContactSyncFailedReason indicates the user sync with a contact failed.
 	UserContactSyncFailedReason = "SyncFailed"
+
+	// UserContactEmailHeldReason indicates the Contact for the user's email belongs to another subject. A Contact's
+	// subject cannot change once set, so the user is linked only when that Contact is released.
+	UserContactEmailHeldReason = "EmailHeldByAnotherUser"
 )
 
 // UserContactController reconciles User objects and ensures corresponding Contacts exist.
@@ -349,7 +353,7 @@ func (r *UserContactController) syncContactWithUser(ctx context.Context, contact
 
 	// Update the Contact
 	before := contact.DeepCopy()
-	
+
 	// Only update SubjectRef if it doesn't already point to this user.
 	// This avoids triggering the webhook's immutability check for minor corrections (like missing APIGroup).
 	if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Kind != "User" || contact.Spec.SubjectRef.Name != user.Name {
@@ -360,7 +364,7 @@ func (r *UserContactController) syncContactWithUser(ctx context.Context, contact
 			// Namespace is omitted for cluster-scoped resources like User
 		}
 	}
-	
+
 	contact.Spec.Email = user.Spec.Email
 	contact.Spec.GivenName = user.Spec.GivenName
 	contact.Spec.FamilyName = user.Spec.FamilyName
