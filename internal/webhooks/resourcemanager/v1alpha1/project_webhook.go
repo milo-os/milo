@@ -231,18 +231,12 @@ func (v *ProjectValidator) createOwnerPolicyBinding(ctx context.Context, project
 			Namespace: fmt.Sprintf("organization-%s", project.Spec.OwnerRef.Name),
 			Labels: map[string]string{
 				// Lets the subject-binding reaper controller find this binding
-				// when foundUser is deleted; the OwnerReference below only
-				// covers cleanup when the Project itself is deleted.
+				// when foundUser is deleted.
 				v1alpha1.SubjectUserNameLabel: foundUser.Name,
 			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: v1alpha1.GroupVersion.String(),
-					Kind:       "Project",
-					Name:       project.Name,
-					UID:        project.UID,
-				},
-			},
+			// No owner reference: the Project is not stored yet, so the garbage
+			// collector would find no owner and delete the binding. The
+			// PolicyBinding adopter sets it once the Project is stored.
 		},
 		Spec: iamv1alpha1.PolicyBindingSpec{
 			RoleRef: iamv1alpha1.RoleReference{

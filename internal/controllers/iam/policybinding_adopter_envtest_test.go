@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -56,6 +57,8 @@ func TestPolicyBindingAdopter(t *testing.T) {
 		project := env.project(t, "d1")
 		pb := env.binding(t, "d1", env.refTo(project), nil)
 		env.waitOwnedBy(t, pb, project.UID)
+		require.Nil(t, pb.OwnerReferences[0].Controller, "the target is an owner, not the binding's controller")
+		require.Nil(t, pb.OwnerReferences[0].BlockOwnerDeletion, "the binding never holds its target's deletion")
 		require.NoError(t, env.client.Delete(env.ctx, project))
 		env.waitGone(t, pb)
 	})
@@ -76,6 +79,19 @@ func TestPolicyBindingAdopter(t *testing.T) {
 			Kind: "ConfigMap", Name: cm.Name, UID: string(cm.UID), Namespace: adopterOther,
 		}, nil)
 		env.keepsOwners(t, pb, nil)
+	})
+
+	t.Run("D19 a status-only update does not reconcile: one Warning for a cross-namespace binding, none per status write", func(t *testing.T) {
+		cm := env.configMap(t, adopterOther, "d19")
+		pb := env.binding(t, "d19", iamv1alpha1.ResourceReference{
+			Kind: "ConfigMap", Name: cm.Name, UID: string(cm.UID), Namespace: adopterOther,
+		}, nil)
+		env.eventually(t, func() bool { return env.warnings(t, pb) == 1 }, "one Warning for the create")
+		for i := range 3 {
+			env.writeStatus(t, pb, fmt.Sprintf("status write %d", i))
+		}
+		time.Sleep(settle)
+		require.Equal(t, int32(1), env.warnings(t, pb), "no Warning for a status-only update")
 	})
 
 	t.Run("D4 a binding owned by another object is never adopted and goes with that object", func(t *testing.T) {
@@ -316,6 +332,35 @@ func (e *adopterEnv) projectThenBinding(name string) error {
 		return err
 	}
 	return e.client.Create(e.ctx, newBinding(name, e.refTo(p), nil))
+}
+
+// writeStatus writes a condition to the binding's status, as the authorization provider does on its reconciles.
+func (e *adopterEnv) writeStatus(t *testing.T, pb *iamv1alpha1.PolicyBinding, message string) {
+	t.Helper()
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := e.client.Get(e.ctx, client.ObjectKeyFromObject(pb), pb); err != nil {
+			return err
+		}
+		meta.SetStatusCondition(&pb.Status.Conditions, metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionFalse, Reason: "Test", Message: message,
+		})
+		return e.client.Status().Update(e.ctx, pb)
+	}))
+}
+
+// warnings counts the adopter's OwnerNotAllowed Warnings on the binding; the recorder folds repeats into one Event's
+// count.
+func (e *adopterEnv) warnings(t *testing.T, pb *iamv1alpha1.PolicyBinding) int32 {
+	t.Helper()
+	var events corev1.EventList
+	require.NoError(t, e.client.List(e.ctx, &events, client.InNamespace(pb.Namespace)))
+	var count int32
+	for _, ev := range events.Items {
+		if ev.InvolvedObject.Name == pb.Name && ev.Reason == "OwnerNotAllowed" {
+			count += max(ev.Count, 1)
+		}
+	}
+	return count
 }
 
 func (e *adopterEnv) release(t *testing.T, obj client.Object) {
