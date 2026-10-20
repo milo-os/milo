@@ -264,9 +264,7 @@ func (r *UserContactController) ensureContactForUser(ctx context.Context, user *
 	// Filter to only contacts that reference this User (Kind=User check)
 	for i := range existingContactList.Items {
 		contact := &existingContactList.Items[i]
-		if contact.Spec.SubjectRef != nil &&
-			contact.Spec.SubjectRef.Kind == "User" &&
-			contact.Spec.SubjectRef.Name == user.Name {
+		if contactNamesUser(contact, user.Name) {
 			log.Info("Found existing contact referencing this user", "contact", contact.Name)
 
 			// Before syncing, delete any unlinked contacts with the user's new email
@@ -357,32 +355,7 @@ func (r *UserContactController) deleteUnlinkedContactsWithEmail(ctx context.Cont
 func (r *UserContactController) syncContactWithUser(ctx context.Context, contact *notificationv1alpha1.Contact, user *iamv1alpha1.User) error {
 	log := log.FromContext(ctx).WithName("sync-contact-with-user")
 
-	// Check if any updates are needed
-	needsUpdate := false
-
-	// Check SubjectRef
-	if contact.Spec.SubjectRef == nil ||
-		contact.Spec.SubjectRef.Kind != "User" ||
-		contact.Spec.SubjectRef.Name != user.Name {
-		needsUpdate = true
-	}
-
-	// Check email
-	if contact.Spec.Email != user.Spec.Email {
-		needsUpdate = true
-	}
-
-	// Check given name
-	if contact.Spec.GivenName != user.Spec.GivenName {
-		needsUpdate = true
-	}
-
-	// Check family name
-	if contact.Spec.FamilyName != user.Spec.FamilyName {
-		needsUpdate = true
-	}
-
-	if !needsUpdate {
+	if contactMatchesUser(contact, user) {
 		log.Info("Contact already in sync with user, no update needed", "contact", contact.Name)
 		return nil
 	}
@@ -392,7 +365,7 @@ func (r *UserContactController) syncContactWithUser(ctx context.Context, contact
 
 	// Only update SubjectRef if it doesn't already point to this user.
 	// This avoids triggering the webhook's immutability check for minor corrections (like missing APIGroup).
-	if contact.Spec.SubjectRef == nil || contact.Spec.SubjectRef.Kind != "User" || contact.Spec.SubjectRef.Name != user.Name {
+	if !contactNamesUser(contact, user.Name) {
 		contact.Spec.SubjectRef = &notificationv1alpha1.SubjectReference{
 			APIGroup: iamv1alpha1.SchemeGroupVersion.Group,
 			Kind:     "User",
@@ -508,9 +481,7 @@ func (r *UserContactController) findContactsForDeletedUser(ctx context.Context, 
 
 	var requests []reconcile.Request
 	for _, contact := range contactList.Items {
-		if contact.Spec.SubjectRef != nil &&
-			contact.Spec.SubjectRef.Kind == "User" &&
-			contact.Spec.SubjectRef.Name == user.Name {
+		if contactNamesUser(&contact, user.Name) {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      contact.Name,
@@ -547,9 +518,7 @@ func (r *UserContactController) findUsersWaitingForContact(ctx context.Context, 
 	var requests []reconcile.Request
 	for _, user := range userList.Items {
 		// The Contact's own subject is reconciled through its own events
-		if contact.Spec.SubjectRef != nil &&
-			contact.Spec.SubjectRef.Kind == "User" &&
-			contact.Spec.SubjectRef.Name == user.Name {
+		if contactNamesUser(contact, user.Name) {
 			continue
 		}
 		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: user.Name}})
@@ -634,4 +603,19 @@ func indexUserByEmail(obj client.Object) []string {
 		return nil
 	}
 	return []string{user.Spec.Email}
+}
+
+// contactNamesUser reports whether the Contact's subject is the named User.
+func contactNamesUser(contact *notificationv1alpha1.Contact, userName string) bool {
+	return contact.Spec.SubjectRef != nil &&
+		contact.Spec.SubjectRef.Kind == "User" &&
+		contact.Spec.SubjectRef.Name == userName
+}
+
+// contactMatchesUser reports whether the Contact already names the User and carries its email and names.
+func contactMatchesUser(contact *notificationv1alpha1.Contact, user *iamv1alpha1.User) bool {
+	return contactNamesUser(contact, user.Name) &&
+		contact.Spec.Email == user.Spec.Email &&
+		contact.Spec.GivenName == user.Spec.GivenName &&
+		contact.Spec.FamilyName == user.Spec.FamilyName
 }
