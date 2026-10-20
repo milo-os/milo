@@ -623,29 +623,80 @@ func findStoredNativeObject(t *testing.T, ctx context.Context, endpoint, project
 }
 
 type lockedBuffer struct {
-	mu sync.Mutex
-	bytes.Buffer
+	mu     sync.Mutex
+	buffer bytes.Buffer
 }
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.Write(p)
-}
-
-// bytes.Buffer.ReadFrom is promoted through embedding. os/exec uses that
-// ReaderFrom fast path when copying child output, bypassing Write's lock unless
-// we provide a synchronized method here as well.
-func (b *lockedBuffer) ReadFrom(r io.Reader) (int64, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.Buffer.ReadFrom(r)
+	return b.buffer.Write(p)
 }
 
 func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.String()
+	return b.buffer.String()
+}
+
+func TestLockedBufferStringDoesNotWaitForOpenChildOutput(t *testing.T) {
+	buf := &lockedBuffer{}
+	reader := &blockingChildOutputReader{started: make(chan struct{}), release: make(chan struct{})}
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(buf, reader)
+		copyDone <- err
+	}()
+	select {
+	case <-reader.started:
+	case <-time.After(time.Second):
+		close(reader.release)
+		t.Fatal("copy did not enter the blocking child-output read")
+	}
+	stringDone := make(chan string, 1)
+	go func() { stringDone <- buf.String() }()
+	var responsive bool
+	select {
+	case got := <-stringDone:
+		if got != "output" {
+			close(reader.release)
+			t.Fatalf("String() = %q, want buffered output", got)
+		}
+		responsive = true
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(reader.release)
+	select {
+	case err := <-copyDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("copy did not stop after releasing child output")
+	}
+	if !responsive {
+		t.Fatal("String() blocked while the child-output stream remained open")
+	}
+}
+
+type blockingChildOutputReader struct {
+	started chan struct{}
+	release chan struct{}
+	first   bool
+}
+
+func (r *blockingChildOutputReader) Read(p []byte) (int, error) {
+	if !r.first {
+		r.first = true
+		return copy(p, "output"), nil
+	}
+	select {
+	case <-r.started:
+	default:
+		close(r.started)
+	}
+	<-r.release
+	return 0, io.EOF
 }
 
 func requestJSON(t *testing.T, ctx context.Context, client *http.Client, token, method, endpoint string, body any, headers map[string]string) (int, []byte) {
