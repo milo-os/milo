@@ -4,18 +4,23 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"sigs.k8s.io/yaml"
 )
 
-func TestWithControlPlanePathNotFound(t *testing.T) {
+func TestWithUnservedParentSubresourceNotFound(t *testing.T) {
 	resolver := &request.RequestInfoFactory{
 		APIPrefixes:          sets.NewString("api", "apis"),
 		GrouplessAPIPrefixes: sets.NewString("api"),
@@ -34,6 +39,9 @@ func TestWithControlPlanePathNotFound(t *testing.T) {
 		"bare project control-plane path": {
 			path: "/apis/resourcemanager.miloapis.com/v1alpha1/projects/datum-cloud/control-plane",
 		},
+		"projects segment repeated before the project name": {
+			path: "/apis/resourcemanager.miloapis.com/v1alpha1/projects/projects/datum-cloud/control-plane/apis/networking.datumapis.com/v1alpha/namespaces/default/domains",
+		},
 		"organization control-plane path": {
 			path: "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/datum/control-plane/apis",
 		},
@@ -44,15 +52,27 @@ func TestWithControlPlanePathNotFound(t *testing.T) {
 			path:       "/apis/resourcemanager.miloapis.com/v1alpha1/projects/datum-cloud",
 			wantPassed: true,
 		},
+		"project list passes": {
+			path:       "/apis/resourcemanager.miloapis.com/v1alpha1/projects",
+			wantPassed: true,
+		},
 		"project status passes": {
 			path:       "/apis/resourcemanager.miloapis.com/v1alpha1/projects/datum-cloud/status",
+			wantPassed: true,
+		},
+		"organization status passes": {
+			path:       "/apis/resourcemanager.miloapis.com/v1alpha1/organizations/datum/status",
+			wantPassed: true,
+		},
+		"user status passes": {
+			path:       "/apis/iam.miloapis.com/v1alpha1/users/u-1/status",
 			wantPassed: true,
 		},
 		"namespace read passes": {
 			path:       "/api/v1/namespaces/datum-net",
 			wantPassed: true,
 		},
-		"same subresource name in another group passes": {
+		"subresource of another resource passes": {
 			path:       "/apis/example.com/v1/widgets/w/control-plane",
 			wantPassed: true,
 		},
@@ -76,7 +96,7 @@ func TestWithControlPlanePathNotFound(t *testing.T) {
 			req = req.WithContext(request.WithRequestInfo(req.Context(), info))
 
 			rec := httptest.NewRecorder()
-			WithControlPlanePathNotFound(next, codecs).ServeHTTP(rec, req)
+			WithUnservedParentSubresourceNotFound(next, codecs).ServeHTTP(rec, req)
 
 			assert.Equal(t, tc.wantPassed, passed)
 			if tc.wantPassed {
@@ -88,7 +108,46 @@ func TestWithControlPlanePathNotFound(t *testing.T) {
 			var status metav1.Status
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &status))
 			assert.Equal(t, metav1.StatusReasonNotFound, status.Reason)
-			assert.Contains(t, status.Message, "control-plane path prefix")
+			assert.Contains(t, status.Message, "is not an API path")
+		})
+	}
+}
+
+func TestParentSubresourcesMatchTheirCRDs(t *testing.T) {
+	crdFiles := map[schema.GroupResource]string{
+		{Group: "resourcemanager.miloapis.com", Resource: "projects"}:      "resourcemanager/resourcemanager.miloapis.com_projects.yaml",
+		{Group: "resourcemanager.miloapis.com", Resource: "organizations"}: "resourcemanager/resourcemanager.miloapis.com_organizations.yaml",
+		{Group: "iam.miloapis.com", Resource: "users"}:                     "iam/iam.miloapis.com_users.yaml",
+	}
+	require.Len(t, controlPlaneParentSubresources, len(crdFiles))
+
+	for gr, file := range crdFiles {
+		t.Run(gr.String(), func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "crd", "bases", file))
+			require.NoError(t, err)
+
+			var crd apiextensionsv1.CustomResourceDefinition
+			require.NoError(t, yaml.Unmarshal(raw, &crd))
+			require.Equal(t, gr.Group, crd.Spec.Group)
+			require.Equal(t, gr.Resource, crd.Spec.Names.Plural)
+			require.NotEmpty(t, crd.Spec.Versions)
+
+			served := sets.New[string]()
+			for _, version := range crd.Spec.Versions {
+				if version.Subresources == nil {
+					continue
+				}
+				if version.Subresources.Status != nil {
+					served.Insert("status")
+				}
+				if version.Subresources.Scale != nil {
+					served.Insert("scale")
+				}
+			}
+
+			allowed, ok := controlPlaneParentSubresources[gr]
+			require.True(t, ok)
+			assert.ElementsMatch(t, sets.List(served), sets.List(allowed))
 		})
 	}
 }
