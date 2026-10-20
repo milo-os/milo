@@ -151,6 +151,12 @@ func startContactEnv(t *testing.T) *contactEnv {
 	})
 	require.NoError(t, err)
 	require.NoError(t, notificationwebhook.SetupContactWebhooksWithManager(mgr))
+	// Production's manager also holds these User indexes, from UserInvitation and PlatformInvitation. A second
+	// registration of one key fails the manager's start, so they come first and a clash fails here.
+	for _, key := range []string{userEmailIndexKey, platformInvitationUserEmailIndexKey} {
+		require.NoError(t, mgr.GetFieldIndexer().IndexField(context.Background(), &iamv1alpha1.User{}, key,
+			func(client.Object) []string { return nil }))
+	}
 	controller := &UserContactController{Client: mgr.GetClient(), ContactNamespace: testContactNamespace}
 	require.NoError(t, controller.SetupWithManager(mgr))
 
@@ -288,22 +294,33 @@ func (e *contactEnv) contactOf(t *testing.T, user *iamv1alpha1.User) *notificati
 // subjectOf reads a Contact's subject from the API server, not the cache: the assertions follow the server.
 func (e *contactEnv) subjectOf(t *testing.T, contact *notificationv1alpha1.Contact) string {
 	t.Helper()
-	got := &notificationv1alpha1.Contact{}
-	require.NoError(t, e.server.Get(e.ctx, client.ObjectKeyFromObject(contact), got))
-	if got.Spec.SubjectRef == nil {
-		return ""
-	}
-	return got.Spec.SubjectRef.Name
+	subject, err := e.readSubject(contact)
+	require.NoError(t, err)
+	return subject
 }
 
-func (e *contactEnv) syncedReason(t *testing.T, user *iamv1alpha1.User) string {
-	t.Helper()
-	got := &iamv1alpha1.User{}
-	require.NoError(t, e.server.Get(e.ctx, client.ObjectKeyFromObject(user), got))
-	if c := meta.FindStatusCondition(got.Status.Conditions, UserContactSyncedCondition); c != nil {
-		return c.Reason
+// readSubject and readReason take no t: require.Eventually calls a condition in a goroutine that can outlive its
+// test, and a failure there panics instead of failing the test.
+func (e *contactEnv) readSubject(contact *notificationv1alpha1.Contact) (string, error) {
+	got := &notificationv1alpha1.Contact{}
+	if err := e.server.Get(e.ctx, client.ObjectKeyFromObject(contact), got); err != nil {
+		return "", err
 	}
-	return ""
+	if got.Spec.SubjectRef == nil {
+		return "", nil
+	}
+	return got.Spec.SubjectRef.Name, nil
+}
+
+func (e *contactEnv) readReason(user *iamv1alpha1.User) (string, error) {
+	got := &iamv1alpha1.User{}
+	if err := e.server.Get(e.ctx, client.ObjectKeyFromObject(user), got); err != nil {
+		return "", err
+	}
+	if c := meta.FindStatusCondition(got.Status.Conditions, UserContactSyncedCondition); c != nil {
+		return c.Reason, nil
+	}
+	return "", nil
 }
 
 // deleteHeld deletes a User that carries the stand-in finalizer, so it stays deleting until release.
@@ -337,12 +354,18 @@ func (e *contactEnv) eventually(t *testing.T, condition func() bool, what string
 
 func (e *contactEnv) waitSubject(t *testing.T, contact *notificationv1alpha1.Contact, want string) {
 	t.Helper()
-	e.eventually(t, func() bool { return e.subjectOf(t, contact) == want }, "the Contact never named "+want)
+	e.eventually(t, func() bool {
+		subject, err := e.readSubject(contact)
+		return err == nil && subject == want
+	}, "the Contact never named "+want)
 }
 
 func (e *contactEnv) waitReason(t *testing.T, user *iamv1alpha1.User, want string) {
 	t.Helper()
-	e.eventually(t, func() bool { return e.syncedReason(t, user) == want }, user.Name+" never reported "+want)
+	e.eventually(t, func() bool {
+		reason, err := e.readReason(user)
+		return err == nil && reason == want
+	}, user.Name+" never reported "+want)
 }
 
 // touch changes a label on the User, which the user-contact controller sees as an update.
