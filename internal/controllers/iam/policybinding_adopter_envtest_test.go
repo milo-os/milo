@@ -254,7 +254,7 @@ func startAdopterEnv(t *testing.T, preload func(*adopterEnv)) *adopterEnv {
 		Controller:             ctrlconfig.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	require.NoError(t, err)
-	adopter := &PolicyBindingAdopter{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Scheme: scheme}
+	adopter := &PolicyBindingAdopter{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Mapper: mgr.GetRESTMapper(), Scheme: scheme}
 	require.NoError(t, adopter.SetupWithManager(mgr))
 	go func() { _ = mgr.Start(ctx) }()
 	require.True(t, mgr.GetCache().WaitForCacheSync(ctx))
