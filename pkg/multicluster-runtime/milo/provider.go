@@ -39,8 +39,17 @@ var _ multicluster.Provider = &Provider{}
 var projectGVK = resourcemanagerv1alpha1.GroupVersion.WithKind("Project")
 var projectControlPlaneGVK = infrastructurev1alpha1.GroupVersion.WithKind("ProjectControlPlane")
 
+// DefaultProjectCacheSyncTimeout bounds the time one unavailable project can
+// occupy the provider's serial discovery worker while syncing its cache.
+const DefaultProjectCacheSyncTimeout = 30 * time.Second
+
 // Options are the options for the Datum cluster Provider.
 type Options struct {
+	// ProjectCacheSyncTimeout bounds cache synchronization during engagement.
+	// Zero uses DefaultProjectCacheSyncTimeout; negative values are invalid.
+	// A timed-out project is torn down and retried by the controller queue.
+	ProjectCacheSyncTimeout time.Duration
+
 	// ClusterOptions are the options passed to the cluster constructor.
 	ClusterOptions []cluster.Option
 
@@ -71,6 +80,10 @@ type Options struct {
 
 // New creates a new Datum cluster Provider.
 func New(localMgr manager.Manager, opts Options) (*Provider, error) {
+	if opts.ProjectCacheSyncTimeout < 0 {
+		return nil, fmt.Errorf("project cache sync timeout must not be negative")
+	}
+
 	p := &Provider{
 		opts:              opts,
 		log:               log.Log.WithName("datum-cluster-provider"),
@@ -291,10 +304,10 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.Info("Waiting for cluster cache to sync", "key", key)
 
-	if !cl.GetCache().WaitForCacheSync(ctx) {
+	if err := p.syncProjectCache(ctx, key, cl); err != nil {
 		cancel()
-		log.Error(nil, "Cluster cache sync failed", "key", key)
-		return ctrl.Result{}, fmt.Errorf("failed to sync cache")
+		log.Error(err, "Cluster cache sync failed", "key", key)
+		return ctrl.Result{}, err
 	}
 
 	log.Info("Cluster cache synced successfully", "key", key)
@@ -316,6 +329,28 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Successfully registered and engaged new cluster", "key", key, "endpoint", cfg.Host)
 
 	return ctrl.Result{}, nil
+}
+
+// syncProjectCache waits for a project cluster's cache to sync, within the
+// project cache sync timeout, so one unavailable project cannot hold the
+// provider's serial worker.
+func (p *Provider) syncProjectCache(ctx context.Context, key string, cl cluster.Cluster) error {
+	syncTimeout := p.projectCacheSyncTimeout()
+	syncCtx, cancelSync := context.WithTimeout(ctx, syncTimeout)
+	defer cancelSync()
+	if !cl.GetCache().WaitForCacheSync(syncCtx) {
+		return fmt.Errorf("failed to sync project %q cache within %s", key, syncTimeout)
+	}
+	return nil
+}
+
+// projectCacheSyncTimeout returns the bound on a project's cache sync: the
+// option, or DefaultProjectCacheSyncTimeout when it is zero.
+func (p *Provider) projectCacheSyncTimeout() time.Duration {
+	if p.opts.ProjectCacheSyncTimeout == 0 {
+		return DefaultProjectCacheSyncTimeout
+	}
+	return p.opts.ProjectCacheSyncTimeout
 }
 
 // planRegistration decides, under p.lock, what Reconcile does with a fetched
