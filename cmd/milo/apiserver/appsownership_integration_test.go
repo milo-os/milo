@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	_ "embed"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -27,7 +29,18 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/appsownership"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 )
+
+// These fixtures are byte-for-byte upstream CRDs. Their source commits and
+// hashes, plus Milo's project-context metadata overlay, are recorded in
+// docs/architecture/apps-ownership/native-crd-http-proof.md.
+//
+//go:embed testdata/appsownership/workloads.compute.datumapis.com.yaml
+var workloadCRD []byte
+
+//go:embed testdata/appsownership/httproutes.gateway.networking.k8s.io.yaml
+var httpRouteCRD []byte
 
 const (
 	serverChildEnv = "MILO_APPS_OWNERSHIP_HTTP_CHILD"
@@ -163,6 +176,12 @@ func TestAppsOwnershipHTTPIntegration(t *testing.T) {
 		"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": namespace},
 	}, nil)
 	require.Equalf(t, http.StatusCreated, status, "create project namespace: %s", body)
+
+	// Install exact upstream CRDs through Milo's platform/root API, then use
+	// their real schemas and the project control-plane paths for ownership
+	// checks. This does not start the Workload or Gateway controllers.
+	probeNativeResourceOwnership(t, ctx, client, tokens, etcd.URL.Host, serverPort, project, namespace)
+
 	identities := []string{"customer", "apps-controller", "release-worker", "system-admin"}
 	for _, identity := range identities {
 		t.Run(identity+" cannot create markers", func(t *testing.T) {
@@ -329,6 +348,216 @@ func configMap(namespace, name string) map[string]any {
 		"metadata":   map[string]any{"namespace": namespace, "name": name},
 		"data":       map[string]string{"value": "ordinary"},
 	}
+}
+
+type nativeResourceCase struct {
+	name, group, version, plural, kind, crdName string
+	object                                      func(namespace, name, version string) map[string]any
+}
+
+func probeNativeResourceOwnership(t *testing.T, ctx context.Context, client *http.Client, tokens map[string]string, etcdEndpoint string, port int, project, namespace string) {
+	t.Helper()
+	root := fmt.Sprintf("https://127.0.0.1:%d", port)
+	base := root + "/apis/resourcemanager.miloapis.com/v1alpha1/projects/" + project + "/control-plane"
+	installNativeCRD(t, ctx, client, tokens["system-admin"], root, workloadCRD, "workloads.compute.datumapis.com")
+	installNativeCRD(t, ctx, client, tokens["system-admin"], root, httpRouteCRD, "httproutes.gateway.networking.k8s.io")
+
+	for _, resource := range []nativeResourceCase{
+		{
+			name: "workload", group: "compute.datumapis.com", version: "v1alpha", plural: "workloads", kind: "Workload", crdName: "workloads.compute.datumapis.com",
+			object: workloadObject,
+		},
+		{
+			name: "httproute-v1", group: "gateway.networking.k8s.io", version: "v1", plural: "httproutes", kind: "HTTPRoute", crdName: "httproutes.gateway.networking.k8s.io",
+			object: httpRouteObject,
+		},
+		{
+			name: "httproute-v1beta1", group: "gateway.networking.k8s.io", version: "v1beta1", plural: "httproutes", kind: "HTTPRoute", crdName: "httproutes.gateway.networking.k8s.io",
+			object: httpRouteObject,
+		},
+	} {
+		t.Run(resource.name, func(t *testing.T) {
+			api := base + "/apis/" + resource.group + "/" + resource.version
+			status, body := requestJSON(t, ctx, client, tokens["customer"], http.MethodGet, api, nil, nil)
+			require.Equalf(t, http.StatusOK, status, "project discovery did not expose the installed %s API: %s", resource.name, body)
+			collection := api + "/namespaces/" + namespace + "/" + resource.plural
+			identities := []string{"customer", "apps-controller", "release-worker", "system-admin"}
+			for _, identity := range identities {
+				t.Run(identity+" cannot create or forge ownership", func(t *testing.T) {
+					name := "marked-" + identity
+					marked := resource.object(namespace, name, resource.version)
+					marked["metadata"].(map[string]any)["labels"] = map[string]string{appsownership.ProjectUIDLabel: "probe-project"}
+					status, body := requestJSON(t, ctx, client, tokens[identity], http.MethodPost, collection, marked, nil)
+					require.Equalf(t, http.StatusForbidden, status, "marker create body: %s", body)
+					requireAppsOwnershipDenial(t, body)
+
+					plainName := "plain-" + identity
+					status, body = requestJSON(t, ctx, client, tokens[identity], http.MethodPost, collection, resource.object(namespace, plainName, resource.version), nil)
+					require.Equalf(t, http.StatusCreated, status, "valid unmarked %s control create body: %s", resource.kind, body)
+					objectURL := collection + "/" + plainName
+					for _, metadata := range []map[string]any{
+						{"labels": map[string]string{appsownership.ProjectUIDLabel: "probe-project"}},
+						{"annotations": map[string]string{appsownership.AppUIDLabel: "probe-app"}},
+					} {
+						status, body = requestJSON(t, ctx, client, tokens[identity], http.MethodPatch, objectURL, map[string]any{"metadata": metadata}, map[string]string{"Content-Type": "application/merge-patch+json"})
+						require.Equalf(t, http.StatusForbidden, status, "marker patch body: %s", body)
+						requireAppsOwnershipDenial(t, body)
+					}
+					status, body = requestJSON(t, ctx, client, tokens[identity], http.MethodDelete, objectURL, nil, nil)
+					require.Equalf(t, http.StatusOK, status, "unmarked delete control body: %s", body)
+				})
+			}
+
+			// Create through Milo, locate by decoded object identity in the isolated
+			// project's actual etcd records, and CAS only the marker metadata.
+			seedName := "old-" + resource.name
+			status, body = requestJSON(t, ctx, client, tokens["customer"], http.MethodPost, collection, resource.object(namespace, seedName, resource.version), nil)
+			require.Equalf(t, http.StatusCreated, status, "create marker seed: %s", body)
+			key, value, revision := findStoredNativeObject(t, ctx, etcdEndpoint, project, namespace, seedName, resource.kind)
+			markedValue, err := withOwnershipMarker(value)
+			require.NoError(t, err)
+			seedConfigMapValue(t, ctx, etcdEndpoint, key, revision, markedValue)
+			objectURL := collection + "/" + seedName
+			status, body = requestJSON(t, ctx, client, tokens["customer"], http.MethodGet, objectURL, nil, nil)
+			require.Equalf(t, http.StatusOK, status, "raw marker seed not visible through Milo: %s", body)
+			require.Contains(t, string(body), appsownership.ProjectUIDLabel)
+
+			for _, identity := range identities {
+				t.Run(identity+" cannot mutate old marked "+resource.name, func(t *testing.T) {
+					status, body := requestJSON(t, ctx, client, tokens["customer"], http.MethodGet, objectURL, nil, nil)
+					require.Equalf(t, http.StatusOK, status, "read old marker seed: %s", body)
+					var existing map[string]any
+					require.NoError(t, json.Unmarshal(body, &existing))
+					operations := []struct {
+						name, method, endpoint string
+						body                   any
+						headers                map[string]string
+					}{
+						{"PUT update", http.MethodPut, objectURL, existing, nil},
+						{"merge patch", http.MethodPatch, objectURL, map[string]any{"metadata": map[string]any{"finalizers": []string{"apps.miloapis.com/probe"}}}, map[string]string{"Content-Type": "application/merge-patch+json"}},
+						{"strip ownership marker", http.MethodPatch, objectURL, map[string]any{"metadata": map[string]any{"labels": map[string]any{appsownership.ProjectUIDLabel: nil}, "annotations": map[string]any{appsownership.AppUIDLabel: nil}}}, map[string]string{"Content-Type": "application/merge-patch+json"}},
+						{"server-side apply", http.MethodPatch, objectURL + "?fieldManager=apps-ownership-probe&force=true", resource.object(namespace, seedName, resource.version), map[string]string{"Content-Type": "application/apply-patch+yaml"}},
+						{"status update", http.MethodPatch, objectURL + "/status", map[string]any{"status": statusFor(resource.kind)}, map[string]string{"Content-Type": "application/merge-patch+json"}},
+						{"DELETE", http.MethodDelete, objectURL, map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"}, nil},
+					}
+					for _, operation := range operations {
+						t.Run(operation.name, func(t *testing.T) {
+							status, body := requestJSON(t, ctx, client, tokens[identity], operation.method, operation.endpoint, operation.body, operation.headers)
+							require.Equalf(t, http.StatusForbidden, status, "%s body: %s", operation.name, body)
+							requireAppsOwnershipDenial(t, body)
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func installNativeCRD(t *testing.T, ctx context.Context, client *http.Client, token, root string, source []byte, expectedName string) {
+	t.Helper()
+	wantHash := map[string]string{
+		"workloads.compute.datumapis.com":      "ba38aeadb5d6c7a97c9b05a031d9955099820f5e7edd206a43fe3dd7f031b889",
+		"httproutes.gateway.networking.k8s.io": "682203b109baecb18d38073a578f7bc2c17d22fe9b0c27bf030850abe014c370",
+	}[expectedName]
+	require.NotEmpty(t, wantHash, "unexpected native CRD fixture")
+	require.Equal(t, wantHash, fmt.Sprintf("%x", sha256.Sum256(source)), "native CRD fixture differs from the pinned upstream source bytes")
+	var object map[string]any
+	require.NoError(t, yaml.Unmarshal(source, &object))
+	metadata := object["metadata"].(map[string]any)
+	require.Equal(t, expectedName, metadata["name"])
+	annotations, _ := metadata["annotations"].(map[string]any)
+	if annotations == nil {
+		annotations = map[string]any{}
+		metadata["annotations"] = annotations
+	}
+	// Gateway API's upstream bundle has no Milo context annotation. This
+	// explicit Milo overlay allows project discovery while preserving the
+	// complete upstream validation schema.
+	if expectedName == "httproutes.gateway.networking.k8s.io" {
+		annotations["discovery.miloapis.com/parent-contexts"] = "Project"
+	}
+	status, body := requestJSON(t, ctx, client, token, http.MethodPost, root+"/apis/apiextensions.k8s.io/v1/customresourcedefinitions", object, nil)
+	require.Truef(t, status == http.StatusCreated || status == http.StatusConflict, "install exact upstream CRD %s: HTTP %d %s", expectedName, status, body)
+	crdURL := root + "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + expectedName
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context ended waiting for CRD %s Established: %v", expectedName, ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("CRD %s did not become Established", expectedName)
+		default:
+		}
+		status, body = requestJSON(t, ctx, client, token, http.MethodGet, crdURL, nil, nil)
+		if status == http.StatusOK {
+			var current map[string]any
+			if json.Unmarshal(body, &current) == nil {
+				statusBlock, _ := current["status"].(map[string]any)
+				conditions, _ := statusBlock["conditions"].([]any)
+				for _, raw := range conditions {
+					condition, _ := raw.(map[string]any)
+					if condition["type"] == "Established" && condition["status"] == "True" {
+						return
+					}
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func workloadObject(namespace, name, version string) map[string]any {
+	return map[string]any{
+		"apiVersion": "compute.datumapis.com/" + version, "kind": "Workload",
+		"metadata": map[string]any{"namespace": namespace, "name": name},
+		"spec": map[string]any{
+			"placements": []any{map[string]any{"name": "default", "locations": []any{map[string]any{"name": "dfw"}}, "scaleSettings": map[string]any{"minReplicas": 1, "instanceManagementPolicy": "OrderedReady"}}},
+			"template":   map[string]any{"spec": map[string]any{"runtime": map[string]any{"resources": map[string]any{"instanceType": "datumcloud-d1-standard-2"}}, "networkInterfaces": []any{map[string]any{"network": map[string]any{"name": "probe-network"}}}}},
+		},
+	}
+}
+
+func statusFor(kind string) map[string]any {
+	if kind == "HTTPRoute" {
+		condition := map[string]any{"lastTransitionTime": "2026-10-20T00:00:00Z", "message": "probe status payload", "reason": "Probe", "status": "False", "type": "Accepted"}
+		return map[string]any{"parents": []any{map[string]any{"parentRef": map[string]any{"name": "probe-gateway"}, "controllerName": "apps.probe/controller", "conditions": []any{condition}}}}
+	}
+	return map[string]any{"currentReplicas": 0, "deployments": 0, "desiredReplicas": 0, "readyReplicas": 0, "replicas": 0, "updatedReplicas": 0}
+}
+
+func httpRouteObject(namespace, name, version string) map[string]any {
+	return map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/" + version, "kind": "HTTPRoute",
+		"metadata": map[string]any{"namespace": namespace, "name": name},
+		"spec":     map[string]any{"hostnames": []string{"probe.example.test"}, "rules": []any{map[string]any{"matches": []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}}}, "backendRefs": []any{map[string]any{"name": "probe-backend", "port": 8080}}}}},
+	}
+}
+
+func findStoredNativeObject(t *testing.T, ctx context.Context, endpoint, project, namespace, name, kind string) (string, []byte, int64) {
+	t.Helper()
+	client := newEtcdClient(t, endpoint)
+	response, err := client.Get(ctx, "/projects/"+project+"/", clientv3.WithPrefix())
+	require.NoError(t, err)
+	var foundKey string
+	var foundValue []byte
+	var foundRevision int64
+	for _, kv := range response.Kvs {
+		var object map[string]any
+		if json.Unmarshal(kv.Value, &object) != nil || object["kind"] != kind {
+			continue
+		}
+		metadata, _ := object["metadata"].(map[string]any)
+		if metadata["name"] != name || metadata["namespace"] != namespace {
+			continue
+		}
+		require.Empty(t, foundKey, "multiple records matched the native object identity")
+		foundKey = string(kv.Key)
+		foundValue = append([]byte(nil), kv.Value...)
+		foundRevision = kv.ModRevision
+	}
+	require.NotEmpty(t, foundKey, "Milo did not persist the native object as JSON under the project prefix")
+	return foundKey, foundValue, foundRevision
 }
 
 type lockedBuffer struct {
