@@ -538,6 +538,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 	handler = filterlatency.TrackCompleted(handler)
 	handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authorization")
+	handler = datumfilters.WithControlPlanePathNotFound(handler, c.Serializer)
 
 	if c.FlowControl != nil {
 		workEstimatorCfg := flowcontrolrequest.DefaultWorkEstimatorConfig()
