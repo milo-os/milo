@@ -17,6 +17,10 @@ const (
 	PluginName      = "AppsOwnershipEnforcement"
 	ProjectUIDLabel = "apps.miloapis.com/project-uid"
 	AppUIDLabel     = "apps.miloapis.com/app-uid"
+	// NamespaceReservationKey is reserved for a future namespace hold acquired
+	// before component creation and retained through incomplete releases. There
+	// are no authorized acquisition or removal writers in this bootstrap guard.
+	NamespaceReservationKey = "apps.miloapis.com/namespace-reservation"
 )
 
 type Plugin struct{ *admission.Handler }
@@ -55,7 +59,7 @@ func (p *Plugin) Validate(_ context.Context, a admission.Attributes, _ admission
 		if err != nil {
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership metadata cannot be inspected"))
 		}
-		for _, key := range []string{ProjectUIDLabel, AppUIDLabel} {
+		for _, key := range []string{ProjectUIDLabel, AppUIDLabel, NamespaceReservationKey} {
 			_, labelPresent := accessor.GetLabels()[key]
 			_, annotationPresent := accessor.GetAnnotations()[key]
 			if labelPresent || annotationPresent {

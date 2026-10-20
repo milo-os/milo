@@ -18,3 +18,5 @@ jobs:
         run: echo "KUBEBUILDER_ASSETS=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.23 use 1.33.0 -p path)" >> "$GITHUB_ENV"
       - name: Run IAM tests
         run: go test -timeout 5m ./...
+      - name: Verify Apps namespace reservation storage races
+        run: go test -race -tags=integration ./internal/apiserver/admission/plugin/appsownership -count=1 -timeout=120s

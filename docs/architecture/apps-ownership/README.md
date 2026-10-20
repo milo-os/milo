@@ -7,6 +7,12 @@ The compiled `AppsOwnershipEnforcement` admission plugin rejects create, update,
 and delete when either old or new metadata contains either reserved key, in
 labels or annotations. Empty values and partial pairs are reserved too.
 
+The guard also reserves `apps.miloapis.com/namespace-reservation` in either
+metadata map, on every kind. A namespace carrying that key cannot be deleted or
+force-finalized. Acquisition and removal remain disabled for every caller. See
+[namespace reservation and drain contract](../apps-namespace-reservation/README.md)
+for the real-storage concurrency proof and the remaining lifecycle work.
+
 There are no authorized writers in this bootstrap slice. Customer, controller,
 release-worker, impersonated and `system:masters` identities all receive the
 same denial. Status and finalizer writes are deliberately denied on marked
@@ -108,7 +114,7 @@ Scale intentionally illustrates the coverage limit: its parent marker is not
 present in the admission object. Full repository CI and the real Milo/test-infra
 gate remain required.
 
-Before deployment, inventory existing uses of the two reserved keys. This slice
+Before deployment, inventory existing uses of all three reserved keys. This slice
 will freeze any such objects, including their status and cleanup. It creates none
 itself. Deploying a binary without the guard would remove these reservations;
 that rollback is unacceptable after any managed resources are enabled. Keep Apps
