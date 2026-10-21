@@ -67,21 +67,14 @@ func TestUserStatusLastLoginProviderEnum(t *testing.T) {
 	if !ok {
 		t.Fatal("status schema missing lastLoginProvider property")
 	}
-	if len(lastLoginProp.AllOf) == 0 {
-		t.Fatal("lastLoginProvider has no allOf enum constraints")
-	}
-
 	want := map[string]bool{"github": true, "google": true, "passkey": true, "email": true}
-	for i, constraint := range lastLoginProp.AllOf {
-		got := enumValues(t, constraint.Enum)
-		if len(got) != len(want) {
-			t.Errorf("allOf[%d] enum = %v, want 4 values matching %v", i, got, want)
-			continue
-		}
-		for _, v := range got {
-			if !want[v] {
-				t.Errorf("allOf[%d] enum contains unexpected value %q", i, v)
-			}
+	got := enumValues(t, lastLoginProp.Enum)
+	if len(got) != len(want) {
+		t.Fatalf("lastLoginProvider enum = %v, want 4 values matching %v", got, want)
+	}
+	for _, v := range got {
+		if !want[v] {
+			t.Errorf("lastLoginProvider enum contains unexpected value %q", v)
 		}
 	}
 }

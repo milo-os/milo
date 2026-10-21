@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.22.0
     discovery.miloapis.com/parent-contexts: Platform
   name: platformaccesses.iam.miloapis.com
 spec:
@@ -67,17 +67,6 @@ spec:
                   state.
                 type: string
               state:
-                allOf:
-                - enum:
-                  - Pending
-                  - Approved
-                  - Rejected
-                  - Suspended
-                - enum:
-                  - Pending
-                  - Approved
-                  - Rejected
-                  - Suspended
                 default: Pending
                 description: |-
                   State is the desired platform access state for the user.
@@ -87,6 +76,11 @@ spec:
                     Approved → Suspended (fraud deactivates, or admin suspends)
                     Approved → Rejected  (admin disapproves)
                     Suspended → Approved (admin reactivates)
+                enum:
+                - Pending
+                - Approved
+                - Rejected
+                - Suspended
                 type: string
               userRef:
                 description: |-

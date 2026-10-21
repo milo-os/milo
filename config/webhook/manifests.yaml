@@ -11,6 +11,90 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
+      path: /mutate-notes-miloapis-com-v1alpha1-clusternote
+      port: 9443
+  failurePolicy: Fail
+  name: mclusternote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - clusternotes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /mutate-notification-miloapis-com-v1alpha1-contact
+      port: 9443
+  failurePolicy: Fail
+  name: mcontact.notification.miloapis.com
+  rules:
+  - apiGroups:
+    - notification.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - contacts
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /mutate-notes-miloapis-com-v1alpha1-note
+      port: 9443
+  failurePolicy: Fail
+  name: mnote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - notes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /mutate-resourcemanager-miloapis-com-v1alpha1-organization
+      port: 9443
+  failurePolicy: Fail
+  name: morganization.datum.net
+  rules:
+  - apiGroups:
+    - resourcemanager.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - organizations
+  sideEffects: NoneOnDryRun
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
       path: /mutate-iam-miloapis-com-v1alpha1-platformaccess
       port: 9443
   failurePolicy: Fail
@@ -117,132 +201,6 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
-      path: /mutate-iam-miloapis-com-v1alpha1-userdeactivation
-      port: 9443
-  failurePolicy: Fail
-  name: muserdeactivation.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - userdeactivations
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /mutate-iam-miloapis-com-v1alpha1-userinvitation
-      port: 9443
-  failurePolicy: Fail
-  name: muserinvitation.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - userinvitations
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /mutate-notes-miloapis-com-v1alpha1-clusternote
-      port: 9443
-  failurePolicy: Fail
-  name: mclusternote.notes.miloapis.com
-  rules:
-  - apiGroups:
-    - notes.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - clusternotes
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /mutate-notes-miloapis-com-v1alpha1-note
-      port: 9443
-  failurePolicy: Fail
-  name: mnote.notes.miloapis.com
-  rules:
-  - apiGroups:
-    - notes.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - notes
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /mutate-notification-miloapis-com-v1alpha1-contact
-      port: 9443
-  failurePolicy: Fail
-  name: mcontact.notification.miloapis.com
-  rules:
-  - apiGroups:
-    - notification.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - contacts
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /mutate-resourcemanager-miloapis-com-v1alpha1-organization
-      port: 9443
-  failurePolicy: Fail
-  name: morganization.datum.net
-  rules:
-  - apiGroups:
-    - resourcemanager.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - organizations
-  sideEffects: NoneOnDryRun
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
       path: /mutate-resourcemanager-miloapis-com-v1alpha1-project
       port: 9443
   failurePolicy: Fail
@@ -278,12 +236,6 @@ webhooks:
     resources:
     - projectsuspensions
   sideEffects: None
----
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingWebhookConfiguration
-metadata:
-  name: resourcemanager.miloapis.com
-webhooks:
 - admissionReviewVersions:
   - v1
   - v1beta1
@@ -291,162 +243,10 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-groupmembership
+      path: /mutate-iam-miloapis-com-v1alpha1-userdeactivation
       port: 9443
   failurePolicy: Fail
-  name: vgroupmembership.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - groupmemberships
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-platformaccess
-      port: 9443
-  failurePolicy: Fail
-  name: vplatformaccess.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - DELETE
-    resources:
-    - platformaccesses
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-platformaccessapproval
-      port: 9443
-  failurePolicy: Fail
-  name: vplatformaccessapproval.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - platformaccessapprovals
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-platformaccessrejection
-      port: 9443
-  failurePolicy: Fail
-  name: vplatformaccessrejection.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - platformaccessrejections
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-platforminvitation
-      port: 9443
-  failurePolicy: Fail
-  name: vplatforminvitation.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - platforminvitations
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-policybinding
-      port: 9443
-  failurePolicy: Fail
-  name: vpolicybinding.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    - DELETE
-    resources:
-    - policybindings
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-user
-      port: 9443
-  failurePolicy: Fail
-  name: vuser.iam.miloapis.com
-  rules:
-  - apiGroups:
-    - iam.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - users
-  sideEffects: NoneOnDryRun
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-userdeactivation
-      port: 9443
-  failurePolicy: Fail
-  name: vuserdeactivation.iam.miloapis.com
+  name: muserdeactivation.iam.miloapis.com
   rules:
   - apiGroups:
     - iam.miloapis.com
@@ -464,10 +264,10 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
-      path: /validate-iam-miloapis-com-v1alpha1-userinvitation
+      path: /mutate-iam-miloapis-com-v1alpha1-userinvitation
       port: 9443
   failurePolicy: Fail
-  name: vuserinvitation.iam.miloapis.com
+  name: muserinvitation.iam.miloapis.com
   rules:
   - apiGroups:
     - iam.miloapis.com
@@ -475,31 +275,15 @@ webhooks:
     - v1alpha1
     operations:
     - CREATE
-    - UPDATE
     resources:
     - userinvitations
   sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-identity-miloapis-com-v1alpha1-useridentity
-      port: 9443
-  failurePolicy: Fail
-  name: vuseridentity.identity.miloapis.com
-  rules:
-  - apiGroups:
-    - identity.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - DELETE
-    resources:
-    - useridentities
-  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: resourcemanager.miloapis.com
+webhooks:
 - admissionReviewVersions:
   - v1
   - v1beta1
@@ -521,28 +305,6 @@ webhooks:
     - UPDATE
     resources:
     - clusternotes
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: milo-controller-manager
-      namespace: milo-system
-      path: /validate-notes-miloapis-com-v1alpha1-note
-      port: 9443
-  failurePolicy: Fail
-  name: vnote.notes.miloapis.com
-  rules:
-  - apiGroups:
-    - notes.miloapis.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - notes
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -683,6 +445,50 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-groupmembership
+      port: 9443
+  failurePolicy: Fail
+  name: vgroupmembership.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - groupmemberships
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-notes-miloapis-com-v1alpha1-note
+      port: 9443
+  failurePolicy: Fail
+  name: vnote.notes.miloapis.com
+  rules:
+  - apiGroups:
+    - notes.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - notes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
       path: /validate-resourcemanager-miloapis-com-v1alpha1-organization
       port: 9443
   failurePolicy: Fail
@@ -728,6 +534,114 @@ webhooks:
     service:
       name: milo-controller-manager
       namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-platformaccess
+      port: 9443
+  failurePolicy: Fail
+  name: vplatformaccess.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - DELETE
+    resources:
+    - platformaccesses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-platformaccessapproval
+      port: 9443
+  failurePolicy: Fail
+  name: vplatformaccessapproval.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - platformaccessapprovals
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-platformaccessrejection
+      port: 9443
+  failurePolicy: Fail
+  name: vplatformaccessrejection.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - platformaccessrejections
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-platforminvitation
+      port: 9443
+  failurePolicy: Fail
+  name: vplatforminvitation.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - platforminvitations
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-policybinding
+      port: 9443
+  failurePolicy: Fail
+  name: vpolicybinding.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - policybindings
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
       path: /validate-resourcemanager-miloapis-com-v1alpha1-project
       port: 9443
   failurePolicy: Fail
@@ -765,4 +679,90 @@ webhooks:
     - DELETE
     resources:
     - projectsuspensions
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-user
+      port: 9443
+  failurePolicy: Fail
+  name: vuser.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - users
+  sideEffects: NoneOnDryRun
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-userdeactivation
+      port: 9443
+  failurePolicy: Fail
+  name: vuserdeactivation.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - userdeactivations
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-identity-miloapis-com-v1alpha1-useridentity
+      port: 9443
+  failurePolicy: Fail
+  name: vuseridentity.identity.miloapis.com
+  rules:
+  - apiGroups:
+    - identity.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - DELETE
+    resources:
+    - useridentities
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  - v1beta1
+  clientConfig:
+    service:
+      name: milo-controller-manager
+      namespace: milo-system
+      path: /validate-iam-miloapis-com-v1alpha1-userinvitation
+      port: 9443
+  failurePolicy: Fail
+  name: vuserinvitation.iam.miloapis.com
+  rules:
+  - apiGroups:
+    - iam.miloapis.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - userinvitations
   sideEffects: None
