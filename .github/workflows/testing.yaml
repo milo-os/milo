@@ -15,6 +15,6 @@ jobs:
       - name: Install dependencies
         run: go mod download
       - name: Install envtest API server
-        run: echo "KUBEBUILDER_ASSETS=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.23 use 1.33.0 -p path)" >> "$GITHUB_ENV"
+        run: echo "KUBEBUILDER_ASSETS=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.25 use 1.37.0 -p path)" >> "$GITHUB_ENV"
       - name: Run IAM tests
         run: go test -timeout 5m ./...

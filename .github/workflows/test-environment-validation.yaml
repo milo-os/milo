@@ -53,13 +53,13 @@ jobs:
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: 'v1.30.0'
+          version: 'v1.37.1'
 
       - name: Install KinD
         uses: helm/kind-action@v1
         with:
           install_only: true
-          version: v0.24.0
+          version: v0.29.0
 
       - name: Verify prerequisites
         run: |
