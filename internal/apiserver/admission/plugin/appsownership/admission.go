@@ -26,9 +26,10 @@ const (
 
 type Plugin struct {
 	*admission.Handler
-	statusWriters    []StatusWriter
-	finalizerWriters []FinalizerWriter
-	dynamicClient    dynamic.Interface
+	statusWriters     []StatusWriter
+	finalizerWriters  []FinalizerWriter
+	dynamicClient     dynamic.Interface
+	grantRegistration string
 }
 
 var _ admission.ValidationInterface = &Plugin{}
@@ -42,6 +43,7 @@ func Register(plugins *admission.Plugins) {
 		p := NewPlugin()
 		p.statusWriters = config.StatusWriters
 		p.finalizerWriters = config.FinalizerWriters
+		p.grantRegistration = config.GrantRegistration
 		return p, nil
 	})
 }
@@ -55,7 +57,7 @@ func NewPlugin() *Plugin {
 // pair, is what reserves a marker. A missing ProjectID never bypasses the guard:
 // direct internal API endpoints need the same protection as project URL paths.
 func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
-	if err := reserveGrant(a); err != nil {
+	if err := reserveGrant(a); err != nil && !p.allowGrantRegistration(ctx, a) {
 		return err
 	}
 	if a.GetOperation() == admission.Update || a.GetOperation() == admission.Delete {
