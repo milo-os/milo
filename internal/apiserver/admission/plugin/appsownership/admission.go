@@ -58,6 +58,9 @@ func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admissi
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership cannot be checked without the old object"))
 		}
 	}
+	if err := validateProjectReservation(a); err != nil {
+		return err
+	}
 	if p.allowStatus(ctx, a) || p.allowFinalizer(ctx, a) {
 		return nil
 	}
