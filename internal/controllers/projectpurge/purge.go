@@ -117,12 +117,20 @@ func (s Status) Unmarked() []string {
 }
 
 // NoteDeletes records the outcome of deleting the named namespaces on their
-// blockers: a refused delete keeps its namespace unmarked and names why.
+// blockers. A delete that went through set the namespace's deletion mark; a
+// refused delete keeps its namespace unmarked and names why.
 func (s *Status) NoteDeletes(deleted []string, refused map[string]error) {
+	asked := sets.NewString(deleted...)
 	for i := range s.Blockers {
-		if err := refused[s.Blockers[i].Namespace]; err != nil && s.Blockers[i].Resource == "" {
-			s.Blockers[i].Detail = "delete refused: " + err.Error()
+		b := &s.Blockers[i]
+		if b.Resource != "" || !asked.Has(b.Namespace) {
+			continue
 		}
+		if err := refused[b.Namespace]; err != nil {
+			b.Detail = "delete refused: " + err.Error()
+			continue
+		}
+		b.Marked = true
 	}
 }
 
