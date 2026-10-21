@@ -193,6 +193,11 @@ type apiFixture struct {
 }
 
 func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixture {
+	return startAPIFixtureWithArgs(t, config, nil)
+}
+
+// Test-only variation of native server arguments (for example a denying authorizer).
+func startAPIFixtureWithArgs(t *testing.T, config *appsownership.Configuration, args func([]string) []string) *apiFixture {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts isolated Milo HTTP server")
@@ -211,7 +216,7 @@ func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixt
 	require.NoError(t, err)
 	writer := csv.NewWriter(file)
 	tokens := map[string]string{}
-	for _, identity := range []string{apiFixtureSetupName, "customer", "native-status", "native-finalizer", "wrong-status-uid", "wrong-finalizer-uid", "system-admin"} {
+	for _, identity := range []string{apiFixtureSetupName, "customer", "native-status", "native-finalizer", "wrong-status-uid", "wrong-finalizer-uid", "system-admin", "denied-registration", "no-uid-registration"} {
 		var raw [32]byte
 		_, err := rand.Read(raw[:])
 		require.NoError(t, err)
@@ -219,6 +224,9 @@ func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixt
 		uid := identity + "-uid"
 		if identity == apiFixtureSetupName {
 			uid = apiFixtureSetupUID
+		}
+		if identity == "no-uid-registration" {
+			uid = ""
 		}
 		username, groups := identity, "system:authenticated"
 		if identity == "wrong-status-uid" {
@@ -250,6 +258,9 @@ func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixt
 		configPath := filepath.Join(dir, "admission.json")
 		require.NoError(t, os.WriteFile(configPath, raw, 0600))
 		serverArgs = append(serverArgs, "--admission-control-config-file="+configPath)
+	}
+	if args != nil {
+		serverArgs = args(serverArgs)
 	}
 	cfg, signal, ackPath := startAPIFixtureProcess(t, ctx, serverArgs, tokens[apiFixtureSetupName])
 	root := cfg.Host

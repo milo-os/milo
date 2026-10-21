@@ -6,6 +6,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'cmd/milo/apiserver/testdata/appsownership/**'
+      - 'internal/apiserver/admission/plugin/appsownership/contracts/**'
       - '.github/workflows/testing.yaml'
 
 jobs:

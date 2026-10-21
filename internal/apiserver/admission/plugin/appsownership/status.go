@@ -34,10 +34,11 @@ type StatusWriter struct {
 }
 
 type Configuration struct {
-	APIVersion       string            `json:"apiVersion"`
-	Kind             string            `json:"kind"`
-	StatusWriters    []StatusWriter    `json:"statusWriters"`
-	FinalizerWriters []FinalizerWriter `json:"finalizerWriters"`
+	APIVersion        string            `json:"apiVersion"`
+	Kind              string            `json:"kind"`
+	GrantRegistration string            `json:"grantRegistration,omitempty"`
+	StatusWriters     []StatusWriter    `json:"statusWriters"`
+	FinalizerWriters  []FinalizerWriter `json:"finalizerWriters"`
 }
 
 func readConfiguration(reader io.Reader) (Configuration, error) {
@@ -54,6 +55,9 @@ func readConfiguration(reader io.Reader) (Configuration, error) {
 	}
 	if config.APIVersion != "apiserver.miloapis.com/v1alpha1" || config.Kind != "AppsOwnershipConfiguration" || len(config.StatusWriters)+len(config.FinalizerWriters) > 32 {
 		return Configuration{}, fmt.Errorf("Apps ownership configuration must have the supported version/kind and at most 32 native writer rules")
+	}
+	if config.GrantRegistration != "" && config.GrantRegistration != GrantRegistrationV1 {
+		return Configuration{}, fmt.Errorf("unsupported Apps grant registration contract")
 	}
 	seen := map[StatusWriter]bool{}
 	for _, rule := range config.StatusWriters {
