@@ -360,10 +360,10 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	bootstrapper := projectstorage.NewNamespaceBootstrapper(config.ControlPlane.Generic.LoopbackClientConfig, projectNamespaceBootstrapTimeout)
 
 	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, bootstrapper)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, bootstrapper, config.ProjectCommitFence)
 
 	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, bootstrapper)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, bootstrapper, config.ProjectCommitFence)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {

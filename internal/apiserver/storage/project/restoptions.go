@@ -16,13 +16,14 @@ func WithProjectAwareDecorator(inner generic.RESTOptionsGetter) generic.RESTOpti
 
 // WithProjectAwareDecoratorAndBootstrapper wraps the RESTOptionsGetter with project-aware storage
 // and bootstraps project namespaces through the shared bootstrapper.
-func WithProjectAwareDecoratorAndBootstrapper(inner generic.RESTOptionsGetter, bootstrapper *NamespaceBootstrapper) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, bootstrapper: bootstrapper}
+func WithProjectAwareDecoratorAndBootstrapper(inner generic.RESTOptionsGetter, bootstrapper *NamespaceBootstrapper, fences ...*etcdshared.CommitFence) generic.RESTOptionsGetter {
+	return roGetter{inner: inner, bootstrapper: bootstrapper, fences: fences}
 }
 
 type roGetter struct {
 	inner        generic.RESTOptionsGetter
 	bootstrapper *NamespaceBootstrapper
+	fences       []*etcdshared.CommitFence
 }
 
 // NOTE: matches your two-arg signature (GroupResource, runtime.Object).
@@ -37,6 +38,6 @@ func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object
 	}
 
 	// Ensure we always wrap with our project-aware decorator.
-	opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.bootstrapper)
+	opts.Decorator = ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), g.bootstrapper, g.fences...)
 	return opts, nil
 }

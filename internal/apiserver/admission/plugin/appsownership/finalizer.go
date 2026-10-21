@@ -53,7 +53,7 @@ func (p *Plugin) allowFinalizer(ctx context.Context, a admission.Attributes) boo
 		adding := oldCount == 0 && newCount == 1 && oldMeta.GetDeletionTimestamp() == nil
 		removing := oldCount == 1 && newCount == 0 && oldMeta.GetDeletionTimestamp() != nil
 		if adding || removing {
-			return p.liveOwnershipProject(ctx, projectUID)
+			return p.liveOwnershipProject(ctx, a, projectUID)
 		}
 	}
 	return false

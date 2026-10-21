@@ -184,14 +184,6 @@ func startStatusProbe(t *testing.T, ctx context.Context, finalizers ...appsowner
 	etcd := &envtest.Etcd{Path: etcdPath, StartTimeout: 20 * time.Second, StopTimeout: 10 * time.Second}
 	require.NoError(t, etcd.Start())
 	t.Cleanup(func() { require.NoError(t, etcd.Stop()) })
-	dir := t.TempDir()
-	tokenFile := filepath.Join(dir, "tokens.csv")
-	tokens := map[string]string{}
-	writeTokenFile(t, tokenFile, tokens)
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	keyPath := filepath.Join(dir, "sa.key")
-	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600))
 	rules := []appsownership.StatusWriter{
 		{Username: "system:serviceaccount:apps-system:controller", UID: "apps-controller-uid", Group: "compute.datumapis.com", Version: "v1alpha", Resource: "workloads", Kind: "Workload"},
 		{Username: "system:serviceaccount:apps-system:controller", UID: "apps-controller-uid", Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes", Kind: "HTTPRoute"},
@@ -201,12 +193,25 @@ func startStatusProbe(t *testing.T, ctx context.Context, finalizers ...appsowner
 	if len(finalizers) > 0 {
 		rules = nil
 	}
-	config, err := json.Marshal(map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AdmissionConfiguration", "plugins": []any{map[string]any{"name": appsownership.PluginName, "configuration": appsownership.Configuration{APIVersion: "apiserver.miloapis.com/v1alpha1", Kind: "AppsOwnershipConfiguration", StatusWriters: rules, FinalizerWriters: finalizers}}}})
+	return startNativeProbeReplica(t, ctx, etcd.URL.String(), appsownership.Configuration{APIVersion: "apiserver.miloapis.com/v1alpha1", Kind: "AppsOwnershipConfiguration", StatusWriters: rules, FinalizerWriters: finalizers})
+}
+
+func startNativeProbeReplica(t *testing.T, ctx context.Context, endpoint string, ownership appsownership.Configuration) (string, *http.Client, map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "tokens.csv")
+	tokens := map[string]string{}
+	writeTokenFile(t, tokenFile, tokens)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	keyPath := filepath.Join(dir, "sa.key")
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600))
+	config, err := json.Marshal(map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AdmissionConfiguration", "plugins": []any{map[string]any{"name": appsownership.PluginName, "configuration": ownership}}})
 	require.NoError(t, err)
 	configPath := filepath.Join(dir, "admission.json")
 	require.NoError(t, os.WriteFile(configPath, config, 0o600))
 	port := freeTCPPort(t)
-	flags, err := json.Marshal([]string{"--etcd-servers=" + etcd.URL.String(), "--bind-address=127.0.0.1", fmt.Sprintf("--secure-port=%d", port), "--cert-dir=" + filepath.Join(dir, "certs"), "--token-auth-file=" + tokenFile, "--anonymous-auth=false", "--authorization-mode=AlwaysAllow", "--service-account-issuer=https://milo.apps-status.test", "--api-audiences=milo-apps-status-test", "--service-account-signing-key-file=" + keyPath, "--service-account-key-file=" + keyPath, "--storage-media-type=application/json", "--watch-cache=false", "--admission-control-config-file=" + configPath})
+	flags, err := json.Marshal([]string{"--etcd-servers=" + endpoint, "--bind-address=127.0.0.1", fmt.Sprintf("--secure-port=%d", port), "--cert-dir=" + filepath.Join(dir, "certs"), "--token-auth-file=" + tokenFile, "--anonymous-auth=false", "--authorization-mode=AlwaysAllow", "--service-account-issuer=https://milo.apps-status.test", "--api-audiences=milo-apps-status-test", "--service-account-signing-key-file=" + keyPath, "--service-account-key-file=" + keyPath, "--storage-media-type=application/json", "--watch-cache=false", "--admission-control-config-file=" + configPath})
 	require.NoError(t, err)
 	serverCtx, stop := context.WithCancel(ctx)
 	command := exec.CommandContext(serverCtx, os.Args[0], "-test.run=^TestAppsOwnershipHTTPChild$")
@@ -248,7 +253,7 @@ func startStatusProbe(t *testing.T, ctx context.Context, finalizers ...appsowner
 		require.Truef(t, time.Now().Before(deadline), "Milo startup timed out: %s", logs.String())
 		time.Sleep(100 * time.Millisecond)
 	}
-	return root, client, tokens, etcd.URL.Host
+	return root, client, tokens, endpoint
 }
 
 func findStatusRootProject(t *testing.T, ctx context.Context, endpoint, name string) (string, []byte, int64) {

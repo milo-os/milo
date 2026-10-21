@@ -1,6 +1,7 @@
 package projectstorage
 
 import (
+	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -14,7 +15,7 @@ import (
 
 // ProjectAwareDecorator builds per-project storage isolation using etcd prefix separation.
 // When bootstrapper is non-nil, it ensures the milo-system namespace exists in project control planes.
-func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, bootstrapper *NamespaceBootstrapper) generic.StorageDecorator {
+func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, bootstrapper *NamespaceBootstrapper, fences ...*etcdshared.CommitFence) generic.StorageDecorator {
 	if gr.Group == "" && gr.Resource == "namespaces" {
 		bootstrapper = nil
 	}
@@ -29,8 +30,13 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 		indexers *cache.Indexers, // <— from client-go/tools/cache
 	) (storage.Interface, factory.DestroyFunc, error) {
 
+		// The root registration path is explicit: project children cannot replace it.
+		rootInner := inner
+		if len(fences) > 0 && fences[0] != nil {
+			rootInner = etcdshared.StorageWithSharedCacher(etcdshared.FenceOptions{Manager: fences[0], Root: true})
+		}
 		// Build default child (no project in ctx).
-		defS, defDestroy, err := inner(cfg, resourcePrefix, keyFunc, newFunc, newListFunc, getAttrs, triggerFn, indexers)
+		defS, defDestroy, err := rootInner(cfg, resourcePrefix, keyFunc, newFunc, newListFunc, getAttrs, triggerFn, indexers)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -55,6 +61,9 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 				"": {s: defS, destroy: defDestroy},
 			},
 			versioner: defS.Versioner(),
+		}
+		if len(fences) > 0 {
+			mux.commitFence = fences[0]
 		}
 		return mux, mux.destroyAll, nil
 	}

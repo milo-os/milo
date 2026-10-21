@@ -1,6 +1,7 @@
 package etcdshared
 
 import (
+	"fmt"
 	"sync"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -25,7 +26,7 @@ import (
 // client. It is a copy of the unexported newETCD3Storage in the upstream
 // factory package with one change: the client is acquired from the refcounted
 // shared cache instead of dialing a fresh connection per (project x resource).
-func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func() runtime.Object, resourcePrefix string) (storage.Interface, factory.DestroyFunc, error) {
+func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func() runtime.Object, resourcePrefix string, keyFunc func(runtime.Object) (string, error), fences ...FenceOptions) (storage.Interface, factory.DestroyFunc, error) {
 	compactor, stopCompactor, err := startCompactorOnce(c.Transport, c.CompactionInterval)
 	if err != nil {
 		return nil, nil, err
@@ -59,6 +60,27 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 	perStoreBase.Watcher = clientv3.NewWatcher(client.Client)
 	perStoreClient := &kubernetes.Client{Client: perStoreBase}
 	perStoreClient.Kubernetes = perStoreClient
+	var fence *CommitFence
+	if len(fences) > 0 {
+		fence = fences[0].Manager
+	}
+	if fence != nil {
+		if fences[0].Root && fences[0].Project != "" {
+			stopCompactor()
+			perStoreBase.Watcher.Close()
+			releaseClient()
+			return nil, nil, fmt.Errorf("root storage cannot be project scoped")
+		}
+		if fences[0].Root && c.GroupResource == rootProjectResource {
+			if err := fence.registerRoot(c, keyFunc, client.KV); err != nil {
+				stopCompactor()
+				perStoreBase.Watcher.Close()
+				releaseClient()
+				return nil, nil, err
+			}
+		}
+		perStoreClient.Kubernetes = &fencedClient{Interface: perStoreClient, kv: client.KV, manager: fence, transport: transportKey(c.Transport)}
+	}
 
 	transformer := c.Transformer
 	if transformer == nil {
@@ -92,13 +114,16 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.AllowUnsafeMalformedObjectDeletion) {
 		st = etcd3.NewStoreWithUnsafeCorruptObjectDeletion(st, c.GroupResource)
 	}
+	if fence != nil {
+		st = &fencedStorage{Interface: st, manager: fence, project: fences[0].Project, config: c, resourcePrefix: resourcePrefix}
+	}
 	return st, destroyFunc, nil
 }
 
 // StorageWithSharedCacher mirrors genericregistry.StorageWithCacher but builds
 // the raw store from the transport-keyed shared etcd client. The cacher wrapping
 // is identical to upstream and never touches the client.
-func StorageWithSharedCacher() generic.StorageDecorator {
+func StorageWithSharedCacher(fences ...FenceOptions) generic.StorageDecorator {
 	return func(
 		storageConfig *storagebackend.ConfigForResource,
 		resourcePrefix string,
@@ -109,7 +134,7 @@ func StorageWithSharedCacher() generic.StorageDecorator {
 		triggerFuncs storage.IndexerFuncs,
 		indexers *cache.Indexers) (storage.Interface, factory.DestroyFunc, error) {
 
-		s, d, err := newRawStorage(*storageConfig, newFunc, newListFunc, resourcePrefix)
+		s, d, err := newRawStorage(*storageConfig, newFunc, newListFunc, resourcePrefix, keyFunc, fences...)
 		if err != nil {
 			return s, d, err
 		}

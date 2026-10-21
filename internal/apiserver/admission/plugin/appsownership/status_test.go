@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.miloapis.com/milo/internal/apiserver/projectfence"
 	milorequest "go.miloapis.com/milo/pkg/request"
 	datumfilters "go.miloapis.com/milo/pkg/server/filters"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,7 +35,7 @@ func provenanceContext(t *testing.T, original user.Info, header http.Header) con
 	req.Header = header
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	require.NotNil(t, ctx)
-	return milorequest.WithProject(ctx, "project-a")
+	return milorequest.WithProject(projectfence.WithContext(ctx), "project-a")
 }
 
 func statusObject() *unstructured.Unstructured {
@@ -46,7 +47,7 @@ func statusObject() *unstructured.Unstructured {
 }
 
 func statusProject() *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "resourcemanager.miloapis.com/v1alpha1", "kind": "Project", "metadata": map[string]interface{}{"name": "project-a", "uid": "project-uid"}}}
+	return &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "resourcemanager.miloapis.com/v1alpha1", "kind": "Project", "metadata": map[string]interface{}{"name": "project-a", "uid": "project-uid", "resourceVersion": "9"}}}
 }
 
 func TestConfiguredStatusBoundary(t *testing.T) {

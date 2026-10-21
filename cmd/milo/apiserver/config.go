@@ -53,6 +53,8 @@ import (
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
+	"go.miloapis.com/milo/internal/apiserver/projectfence"
+	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
 	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
@@ -67,7 +69,8 @@ import (
 )
 
 type Config struct {
-	Options options.CompletedOptions
+	ProjectCommitFence *etcdshared.CommitFence
+	Options            options.CompletedOptions
 
 	Aggregator    *aggregatorapiserver.Config
 	ControlPlane  *controlplaneapiserver.Config
@@ -145,7 +148,8 @@ type PasskeysProviderConfig struct {
 }
 
 type completedConfig struct {
-	Options options.CompletedOptions
+	ProjectCommitFence *etcdshared.CommitFence
+	Options            options.CompletedOptions
 
 	Aggregator    aggregatorapiserver.CompletedConfig
 	ControlPlane  controlplaneapiserver.CompletedConfig
@@ -364,7 +368,8 @@ func (c *CompletedConfig) buildCoreProvider(eventsBackend *eventsbackend.Dynamic
 
 func (c *Config) Complete() (CompletedConfig, error) {
 	return CompletedConfig{&completedConfig{
-		Options: c.Options,
+		ProjectCommitFence: c.ProjectCommitFence,
+		Options:            c.Options,
 
 		Aggregator:    c.Aggregator.Complete(),
 		ControlPlane:  c.ControlPlane.Complete(),
@@ -402,8 +407,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 
 	c := &Config{
-		Options:           opts,
-		DiscoveryRegistry: registry,
+		ProjectCommitFence: etcdshared.NewCommitFence(),
+		Options:            opts,
+		DiscoveryRegistry:  registry,
 	}
 
 	miloScheme := runtime.NewScheme()
@@ -441,8 +447,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 			h = discoveryctx.DiscoveryContextFilter(h, registry)
 		}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig), // build stock chain first
-			c.RequestInfoResolver,                                // then wrap with router
+			DefaultBuildHandlerChain(projectfence.WithRequest(h), c, loopbackClientConfig), // build stock chain first
+			c.RequestInfoResolver, // then wrap with router
 		)
 	}
 
@@ -481,7 +487,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 			h = discoveryctx.DiscoveryContextFilter(h, registry)
 		}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig),
+			DefaultBuildHandlerChain(projectfence.WithRequest(h), c, loopbackClientConfig),
 			c.RequestInfoResolver,
 		)
 	}
@@ -510,7 +516,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 			h = discoveryctx.DiscoveryContextFilter(h, registry)
 		}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig),
+			DefaultBuildHandlerChain(projectfence.WithRequest(h), c, loopbackClientConfig),
 			c.RequestInfoResolver,
 		)
 	}

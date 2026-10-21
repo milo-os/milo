@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
 
+	"go.miloapis.com/milo/internal/apiserver/projectfence"
 	milorequest "go.miloapis.com/milo/pkg/request"
 	datumfilters "go.miloapis.com/milo/pkg/server/filters"
 )
@@ -104,7 +105,7 @@ func (p *Plugin) allowStatus(ctx context.Context, a admission.Attributes) bool {
 	if !ok || !sameOutsideStatus(old, next) {
 		return false
 	}
-	return p.liveOwnershipProject(ctx, projectUID)
+	return p.liveOwnershipProject(ctx, a, projectUID)
 }
 
 func validWriter(rule StatusWriter) bool {
@@ -153,17 +154,25 @@ func ownershipObjects(a admission.Attributes) (runtime.Unstructured, runtime.Uns
 	return old, next, projectUID, true
 }
 
-func (p *Plugin) liveOwnershipProject(ctx context.Context, projectUID string) bool {
+func (p *Plugin) liveOwnershipProject(ctx context.Context, a admission.Attributes, projectUID string) bool {
 	projectName, present := milorequest.ProjectID(ctx)
 	if !present || projectName == "" {
 		return false
 	}
 	// Read root scope with a hard bound. No cache and no per-App lookup. A live
-	// Project read is not an atomic transaction with project teardown or IAM.
+	// Project read is bound to native storage commit by its exact etcd revision.
+	// This is not an IAM revocation fence or a cross-backend transaction.
 	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	project, err := p.dynamicClient.Resource(schema.GroupVersionResource{Group: "resourcemanager.miloapis.com", Version: "v1alpha1", Resource: "projects"}).Get(lookupCtx, projectName, metav1.GetOptions{})
-	return err == nil && project != nil && project.GetName() == projectName && string(project.GetUID()) == projectUID && project.GetDeletionTimestamp() == nil
+	if err != nil || project == nil || project.GetName() != projectName || string(project.GetUID()) != projectUID || project.GetDeletionTimestamp() != nil {
+		return false
+	}
+	old, err := meta.Accessor(a.GetOldObject())
+	if err != nil {
+		return false
+	}
+	return projectfence.Record(ctx, projectfence.Proof{ProjectName: projectName, ProjectUID: projectUID, AppUID: old.GetLabels()[AppUIDLabel], Resource: a.GetResource().GroupResource(), Kind: a.GetKind().Kind, Name: a.GetName(), Namespace: a.GetNamespace(), UID: string(old.GetUID())}, project.GetResourceVersion())
 }
 
 func sameOutsideStatus(old, next runtime.Unstructured) bool {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 	"go.miloapis.com/milo/pkg/request"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -208,9 +209,10 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 
 // projectMux implements storage.Interface and routes to a per-project child.
 type projectMux struct {
-	mu        sync.RWMutex
-	children  map[string]*child
-	versioner storage.Versioner
+	commitFence *etcdshared.CommitFence
+	mu          sync.RWMutex
+	children    map[string]*child
+	versioner   storage.Versioner
 
 	inner        generic.StorageDecorator
 	cfg          storagebackend.ConfigForResource
@@ -241,7 +243,11 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	cfg2 := m.cfg // copy
 	cfg2.Config.Prefix = "/" + path.Join("projects", project)
 
-	s, destroy, err := m.inner(
+	inner := m.inner
+	if m.commitFence != nil {
+		inner = etcdshared.StorageWithSharedCacher(etcdshared.FenceOptions{Manager: m.commitFence, Project: project})
+	}
+	s, destroy, err := inner(
 		&cfg2,
 		m.args.resourcePrefix,
 		m.args.keyFunc,

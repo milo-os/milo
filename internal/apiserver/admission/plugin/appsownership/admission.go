@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 
+	"go.miloapis.com/milo/internal/apiserver/projectfence"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
@@ -51,6 +52,7 @@ func NewPlugin() *Plugin {
 // pair, is what reserves a marker. A missing ProjectID never bypasses the guard:
 // direct internal API endpoints need the same protection as project URL paths.
 func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
+	projectfence.Clear(ctx)
 	if a.GetOperation() == admission.Update || a.GetOperation() == admission.Delete {
 		if a.GetOldObject() == nil {
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership cannot be checked without the old object"))
