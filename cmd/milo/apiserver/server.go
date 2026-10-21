@@ -24,7 +24,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
 	genericapiserver "k8s.io/apiserver/pkg/server"
-	"k8s.io/apiserver/pkg/storage/cacher"
+	"k8s.io/apiserver/pkg/storage/cacher/consistency"
 	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/notfoundhandler"
@@ -57,6 +57,8 @@ func init() {
 	utilruntime.Must(logsapi.AddFeatureGates(utilfeature.DefaultMutableFeatureGate))
 	utilfeature.DefaultMutableFeatureGate.Set("LoggingBetaOptions=true")
 	utilfeature.DefaultMutableFeatureGate.Set("RemoteRequestHeaderUID=true")
+	// Adds a goroutine to every etcd watch, one per project watch cache, and only helps with conversion webhooks.
+	utilfeature.DefaultMutableFeatureGate.Set("ConcurrentWatchObjectDecode=false")
 }
 
 var (
@@ -126,8 +128,6 @@ func NewCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			utilfeature.DefaultMutableFeatureGate.Set("APIServerTracing=true")
 
 			if errs := completedOptions.Validate(); len(errs) != 0 {
 				return utilerrors.NewAggregate(errs)
@@ -267,7 +267,7 @@ func applyStorageFlags() error {
 	if watchCacheConsistencyCheckPeriod <= 0 {
 		return fmt.Errorf("--watch-cache-consistency-check-period must be positive, got %s", watchCacheConsistencyCheckPeriod)
 	}
-	cacher.ConsistencyCheckPeriod = watchCacheConsistencyCheckPeriod
+	consistency.CheckPeriod = watchCacheConsistencyCheckPeriod
 	klog.InfoS("Watch cache consistency check period configured", "period", watchCacheConsistencyCheckPeriod)
 
 	etcdshared.SetSharedClientPoolSize(sharedETCDClientPoolSize)
