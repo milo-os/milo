@@ -176,6 +176,31 @@ func TestPolicyBindingAdopter(t *testing.T) {
 		require.Len(t, pb.Spec.Subjects, 2, "the subject edit survives the adoption")
 	})
 
+	t.Run("D21 a User's two self-manage bindings have one owner each and go with the User through its UserPreference", func(t *testing.T) {
+		user := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "d21"}, Spec: iamv1alpha1.UserSpec{Email: "d21@example.com"}}
+		require.NoError(t, env.client.Create(env.ctx, user))
+		// The User controller makes the User the owner of its UserPreference; this test stands in for it.
+		pref := &iamv1alpha1.UserPreference{
+			ObjectMeta: metav1.ObjectMeta{Name: "userpreference-d21", OwnerReferences: []metav1.OwnerReference{
+				{APIVersion: iamv1alpha1.SchemeGroupVersion.String(), Kind: "User", Name: user.Name, UID: user.UID},
+			}},
+			Spec: iamv1alpha1.UserPreferenceSpec{UserRef: iamv1alpha1.UserReference{Name: user.Name}},
+		}
+		require.NoError(t, env.client.Create(env.ctx, pref))
+		selfManage := env.bindingIn(t, "milo-system", "user-self-manage-d21", iamv1alpha1.ResourceReference{
+			APIGroup: iamv1alpha1.SchemeGroupVersion.Group, Kind: "User", Name: user.Name, UID: string(user.UID),
+		})
+		prefSelfManage := env.bindingIn(t, "milo-system", "userpreference-self-manage-d21", iamv1alpha1.ResourceReference{
+			APIGroup: iamv1alpha1.SchemeGroupVersion.Group, Kind: "UserPreference", Name: pref.Name, UID: string(pref.UID),
+		})
+		env.waitOwnedBy(t, selfManage, user.UID)
+		env.waitOwnedBy(t, prefSelfManage, pref.UID)
+		require.NoError(t, env.client.Delete(env.ctx, user))
+		env.waitGone(t, pref)
+		env.waitGone(t, selfManage)
+		env.waitGone(t, prefSelfManage)
+	})
+
 	t.Run("stress: a burst of 60 bindings, made serially and in parallel, are all adopted and none is deleted", func(t *testing.T) {
 		const n = 30
 		var wg sync.WaitGroup
@@ -253,7 +278,7 @@ func startAdopterEnv(t *testing.T, preload func(*adopterEnv)) *adopterEnv {
 	t.Cleanup(cancel)
 	require.NoError(t, gctest.Start(ctx, cfg, gctest.Options{}))
 	env := &adopterEnv{ctx: ctx, client: direct}
-	for _, ns := range []string{adopterNamespace, adopterOther} {
+	for _, ns := range []string{adopterNamespace, adopterOther, "milo-system"} {
 		require.NoError(t, direct.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))
 	}
 	require.NoError(t, direct.Create(ctx, &resourcemanagerv1alpha1.Organization{
@@ -311,6 +336,15 @@ func newBinding(name string, ref iamv1alpha1.ResourceReference, owners []metav1.
 			ResourceSelector: iamv1alpha1.ResourceSelector{ResourceRef: &ref},
 		},
 	}
+}
+
+// bindingIn creates an unowned binding in a namespace other than the tests' organization namespace.
+func (e *adopterEnv) bindingIn(t *testing.T, namespace, name string, ref iamv1alpha1.ResourceReference) *iamv1alpha1.PolicyBinding {
+	t.Helper()
+	pb := newBinding(name, ref, nil)
+	pb.Namespace = namespace
+	require.NoError(t, e.client.Create(e.ctx, pb))
+	return pb
 }
 
 func (e *adopterEnv) binding(t *testing.T, name string, ref iamv1alpha1.ResourceReference, owners []metav1.OwnerReference) *iamv1alpha1.PolicyBinding {
