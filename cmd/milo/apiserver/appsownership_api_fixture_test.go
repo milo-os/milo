@@ -15,9 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -72,7 +70,13 @@ func (g *setupGate) seal() { g.mu.Lock(); defer g.mu.Unlock(); g.sealed = true }
 func (g *setupGate) permits(a admission.Attributes) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	if g.sealed || a.GetUserInfo() == nil || a.GetUserInfo().GetName() != apiFixtureSetupName || a.GetUserInfo().GetUID() != apiFixtureSetupUID || a.GetNamespace() != apiFixtureNamespace || a.GetSubresource() != "" {
+	if g.sealed || a.GetUserInfo() == nil || a.GetUserInfo().GetName() != apiFixtureSetupName || a.GetUserInfo().GetUID() != apiFixtureSetupUID {
+		return false
+	}
+	if namespaceSetupPermitted(a) {
+		return true
+	}
+	if a.GetNamespace() != apiFixtureNamespace || a.GetSubresource() != "" {
 		return false
 	}
 	if a.GetResource() == corev1.SchemeGroupVersion.WithResource("configmaps") {
@@ -86,15 +90,16 @@ func (g *setupGate) permits(a admission.Attributes) bool {
 
 type setupValidator struct {
 	admission.Interface
-	validator admission.ValidationInterface
-	gate      *setupGate
+	validator      admission.ValidationInterface
+	gate           *setupGate
+	namespacePause *namespaceAdmissionPause
 }
 
 func (v *setupValidator) Validate(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) error {
 	if v.gate.permits(a) {
 		return nil
 	}
-	return v.validator.Validate(ctx, a, o)
+	return v.namespacePause.validate(ctx, a, func() error { return v.validator.Validate(ctx, a, o) })
 }
 
 // Child setup uses ordinary Milo options and its supported admission decorator
@@ -120,23 +125,32 @@ func TestAppsOwnershipAPIFixtureChild(t *testing.T) {
 	require.NoError(t, fs.Parse(args))
 	opts.SystemNamespaces = []string{metav1.NamespaceSystem, metav1.NamespaceDefault, SystemNamespace}
 	gate := &setupGate{}
+	pause := newNamespaceAdmissionPause(os.Getenv(apiFixtureSealEnv))
 	opts.Admission.GenericAdmission.Decorators = append(opts.Admission.GenericAdmission.Decorators, admission.DecoratorFunc(func(handler admission.Interface, name string) admission.Interface {
 		if name != appsownership.PluginName {
 			return handler
 		}
 		validator, ok := handler.(admission.ValidationInterface)
 		require.True(t, ok)
-		return &setupValidator{Interface: handler, validator: validator, gate: gate}
+		return &setupValidator{Interface: handler, validator: validator, gate: gate, namespacePause: pause}
 	}))
 	go func() {
-		var signal [1]byte
-		if _, err := io.ReadFull(os.Stdin, signal[:]); err != nil || signal[0] != 'S' {
-			return
-		}
-		gate.seal()
-		// A local acknowledgement is published only after the one-way latch closes.
-		if err := os.WriteFile(os.Getenv(apiFixtureSealEnv), []byte("sealed"), 0600); err != nil {
-			panic(err)
+		for {
+			var signal [1]byte
+			if _, err := io.ReadFull(os.Stdin, signal[:]); err != nil {
+				return
+			}
+			switch signal[0] {
+			case 'S':
+				gate.seal()
+				if err := os.WriteFile(os.Getenv(apiFixtureSealEnv), []byte("sealed"), 0600); err != nil {
+					panic(err)
+				}
+			case 'R':
+				pause.release()
+			default:
+				return
+			}
 		}
 	}()
 	completed, err := opts.Complete(context.Background(), []string{}, []net.IP{})
@@ -167,6 +181,9 @@ type apiFixture struct {
 	tokens        map[string]string
 	scheme        *runtime.Scheme
 	seal          func()
+	signal        func(byte)
+	ackPath       string
+	serverArgs    []string
 }
 
 func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixture {
@@ -228,52 +245,8 @@ func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixt
 		require.NoError(t, os.WriteFile(configPath, raw, 0600))
 		serverArgs = append(serverArgs, "--admission-control-config-file="+configPath)
 	}
-	args, err := json.Marshal(serverArgs)
-	require.NoError(t, err)
-	serverCtx, stop := context.WithCancel(ctx)
-	command := exec.CommandContext(serverCtx, os.Args[0], "-test.run=^TestAppsOwnershipAPIFixtureChild$")
-	ackPath := filepath.Join(dir, "sealed")
-	command.Env = append(os.Environ(), apiFixtureChildEnv+"=1", apiFixtureArgsEnv+"="+string(args), apiFixtureSealEnv+"="+ackPath)
-	var logs fixtureLog
-	t.Cleanup(func() {
-		if t.Failed() {
-			t.Logf("Milo child diagnostics: %s", logs.String())
-		}
-	})
-	command.Stdout = &logs
-	command.Stderr = &logs
-	pipe, err := command.StdinPipe()
-	require.NoError(t, err)
-	require.NoError(t, command.Start())
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
-	t.Cleanup(func() { stop(); _ = pipe.Close(); <-done })
-	root := fmt.Sprintf("https://127.0.0.1:%d", port)
-	cfg := &rest.Config{Host: root, BearerToken: tokens[apiFixtureSetupName], TLSClientConfig: rest.TLSClientConfig{Insecure: true}, Timeout: 5 * time.Second}
-	httpClient, err := rest.HTTPClientFor(cfg)
-	require.NoError(t, err)
-	t.Cleanup(httpClient.CloseIdleConnections)
-	deadline := time.Now().Add(60 * time.Second)
-	for {
-		select {
-		case err := <-done:
-			done <- err
-			t.Fatalf("Milo child exited: %v; %s", err, logs.String())
-		default:
-		}
-		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, root+"/healthz", nil)
-		response, err := httpClient.Do(request)
-		if err == nil {
-			response.Body.Close()
-			if response.StatusCode == http.StatusOK {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Milo did not start: %s", logs.String())
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	cfg, signal, ackPath := startAPIFixtureProcess(t, ctx, serverArgs, tokens[apiFixtureSetupName])
+	root := cfg.Host
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
 	require.NoError(t, extv1.AddToScheme(scheme))
@@ -310,11 +283,10 @@ func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixt
 	require.NoError(t, seed.Create(ctx, ns))
 	seal := func() {
 		// All setup requests have completed before closing the one-way process latch.
-		_, err := pipe.Write([]byte{'S'})
-		require.NoError(t, err)
+		signal('S')
 		require.Eventually(t, func() bool { data, err := os.ReadFile(ackPath); return err == nil && string(data) == "sealed" }, 5*time.Second, 20*time.Millisecond)
 	}
-	return &apiFixture{ctx: ctx, root: rootClient, seed: seed, customer: customer, project: project, projectConfig: projectConfig, tokens: tokens, scheme: scheme, seal: seal}
+	return &apiFixture{ctx: ctx, root: rootClient, seed: seed, customer: customer, project: project, projectConfig: projectConfig, tokens: tokens, scheme: scheme, seal: seal, signal: signal, ackPath: ackPath, serverArgs: serverArgs}
 }
 
 func TestAppsOwnershipAPIFixture(t *testing.T) {
