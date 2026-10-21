@@ -1,0 +1,236 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: appinstallgrants.apps.miloapis.com
+  annotations:
+    discovery.miloapis.com/parent-contexts: Project
+spec:
+  group: apps.miloapis.com
+  scope: Cluster
+  names:
+    plural: appinstallgrants
+    singular: appinstallgrant
+    kind: AppInstallGrant
+    listKind: AppInstallGrantList
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        required:
+        - spec
+        properties:
+          spec:
+            type: object
+            required:
+            - envelope
+            - envelopeDigest
+            - revokeRequested
+            - consumption
+            properties:
+              envelope:
+                type: object
+                required:
+                - version
+                - projectUID
+                - request
+                - templateRevision
+                - actor
+                - plan
+                - actions
+                properties:
+                  version:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    enum:
+                    - apps.miloapis.com/install-grant-envelope/v1
+                  projectUID: &id001
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    pattern: ^[^\s]+$
+                  request:
+                    type: object
+                    required:
+                    - protocol
+                    - appName
+                    - appUID
+                    - admittedGeneration
+                    - specDigest
+                    properties:
+                      protocol:
+                        type: string
+                        minLength: 1
+                        maxLength: 32
+                        enum:
+                        - install-request-v1
+                      appName: &id002
+                        type: string
+                        minLength: 1
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                      appUID: *id001
+                      admittedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 1
+                        maximum: 9007199254740991
+                      specDigest: &id003
+                        type: string
+                        minLength: 71
+                        maxLength: 71
+                        pattern: ^sha256:[0-9a-f]{64}$
+                  templateRevision:
+                    type: object
+                    required:
+                    - projectUID
+                    - templateName
+                    - templateUID
+                    - revisionName
+                    - revisionUID
+                    - digest
+                    properties:
+                      projectUID: *id001
+                      templateName: *id002
+                      templateUID: *id001
+                      revisionName: *id002
+                      revisionUID: *id001
+                      digest: *id003
+                  actor:
+                    type: object
+                    required:
+                    - username
+                    - uid
+                    - groups
+                    - extra
+                    properties:
+                      username: *id001
+                      uid: *id001
+                      groups:
+                        type: array
+                        items: *id001
+                        minItems: 0
+                        maxItems: 32
+                        x-kubernetes-list-type: atomic
+                      extra:
+                        type: object
+                        maxProperties: 16
+                        additionalProperties:
+                          type: array
+                          items: *id001
+                          minItems: 1
+                          maxItems: 16
+                  plan:
+                    type: object
+                    required:
+                    - digest
+                    - policyName
+                    - policyUID
+                    - policyDigest
+                    properties:
+                      digest: *id003
+                      policyName: *id002
+                      policyUID: *id001
+                      policyDigest: *id003
+                  actions:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - component
+                      - group
+                      - version
+                      - resource
+                      - kind
+                      - scope
+                      - namespace
+                      - name
+                      - verb
+                      - payloadDigest
+                      properties:
+                        component: *id002
+                        group:
+                          type: string
+                          minLength: 0
+                          maxLength: 253
+                          pattern: ^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$
+                        version:
+                          type: string
+                          minLength: 1
+                          maxLength: 32
+                          pattern: ^[a-z][a-z0-9]*$
+                        resource:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                          pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
+                        kind:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                          pattern: ^[A-Za-z][A-Za-z0-9]*$
+                        scope:
+                          type: string
+                          minLength: 1
+                          maxLength: 10
+                          enum:
+                          - Namespaced
+                          - Cluster
+                        namespace:
+                          type: string
+                          minLength: 0
+                          maxLength: 63
+                          pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                        name: *id002
+                        verb:
+                          type: string
+                          minLength: 1
+                          maxLength: 6
+                          enum:
+                          - create
+                          - update
+                          - patch
+                          - delete
+                        payloadDigest: *id003
+                      x-kubernetes-validations:
+                      - rule: 'self.scope == ''Cluster'' ? self.namespace == ''''
+                          : self.namespace != '''''
+                        message: scope and namespace must agree
+                    minItems: 1
+                    maxItems: 32
+                x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: grant envelope is immutable
+                - rule: self.projectUID == self.templateRevision.projectUID
+                  message: source must belong to exact Project
+              envelopeDigest:
+                type: string
+                minLength: 71
+                maxLength: 71
+                pattern: ^sha256:[0-9a-f]{64}$
+                x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: envelope digest is immutable
+              revokeRequested:
+                type: boolean
+                x-kubernetes-validations:
+                - rule: '!oldSelf || self'
+                  message: requested revocation is irreversible
+                - rule: oldSelf.hasValue() || !self
+                  optionalOldSelf: true
+                  message: new grants cannot start revoked
+              consumption:
+                type: string
+                minLength: 1
+                maxLength: 8
+                enum:
+                - Disabled
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
