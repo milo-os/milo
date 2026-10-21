@@ -27,7 +27,7 @@ func deleteLateNamespaces(ctx context.Context, d namespaceDeleter, cfg *rest.Con
 	if err != nil {
 		return err
 	}
-	cleanup.NoteRefusals(refused)
+	cleanup.NoteDeletes(late, refused)
 	return nil
 }
 

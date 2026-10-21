@@ -36,6 +36,14 @@ func TestDeleteLateNamespaces_DeletesOnlyTheUnmarkedNamespaces(t *testing.T) {
 	if len(d.calls) != 1 || len(d.calls[0]) != 1 || d.calls[0][0] != "late" {
 		t.Fatalf("expected one delete call for late, got %v", d.calls)
 	}
+	// The delete sets the mark, so this poll's status already says so: no second
+	// status write at the next pass.
+	if got := cleanup.Unmarked(); len(got) != 0 {
+		t.Fatalf("expected the deleted namespace to read as marked, got %v", got)
+	}
+	if msg := cleanup.Message(); !strings.Contains(msg, `namespace "late" is still terminating`) {
+		t.Fatalf("expected the status to say the deleted namespace is terminating, got %q", msg)
+	}
 }
 
 func TestDeleteLateNamespaces_CallsNothingWhenEveryNamespaceIsMarked(t *testing.T) {

@@ -256,15 +256,18 @@ func TestDeleteNamespaces_ReturnsEachRefusal(t *testing.T) {
 	}
 }
 
-func TestStatusMessage_NamesARefusedDelete(t *testing.T) {
-	status := Status{Blockers: []Blocker{{Namespace: "reserved"}, {Namespace: "late"}}}
-	status.NoteRefusals(map[string]error{"reserved": errors.New("held by a reservation")})
+func TestStatus_NoteDeletesMarksADeletedNamespaceAndNamesARefusal(t *testing.T) {
+	status := Status{Blockers: []Blocker{{Namespace: "late"}, {Namespace: "reserved"}}}
+	status.NoteDeletes([]string{"late", "reserved"}, map[string]error{"reserved": errors.New("held by a reservation")})
 
-	msg := status.Message()
-	if !strings.Contains(msg, "held by a reservation") {
-		t.Fatalf("expected the message to name the refusal, got %q", msg)
+	if got := status.Unmarked(); len(got) != 1 || got[0] != "reserved" {
+		t.Fatalf("expected only the refused namespace to stay unmarked, got %v", got)
 	}
-	if strings.Count(msg, "held by a reservation") != 1 {
-		t.Fatalf("expected only the refused namespace to carry the refusal, got %q", msg)
+	msg := status.Message()
+	if !strings.Contains(msg, `namespace "late" is still terminating`) {
+		t.Fatalf("expected a deleted namespace to read as still terminating, got %q", msg)
+	}
+	if !strings.Contains(msg, `namespace "reserved" is not yet deleted (delete refused: held by a reservation)`) {
+		t.Fatalf("expected the refused namespace to name its refusal, got %q", msg)
 	}
 }
