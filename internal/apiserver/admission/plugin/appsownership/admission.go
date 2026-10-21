@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/client-go/dynamic"
@@ -18,6 +19,9 @@ const (
 	PluginName      = "AppsOwnershipEnforcement"
 	ProjectUIDLabel = "apps.miloapis.com/project-uid"
 	AppUIDLabel     = "apps.miloapis.com/app-uid"
+	// NamespaceReservationKey has no authorized acquisition/removal writer.
+	// Presence on any kind must also block optional native writer exceptions.
+	NamespaceReservationKey = "apps.miloapis.com/namespace-reservation"
 )
 
 type Plugin struct {
@@ -56,13 +60,11 @@ func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admissi
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership cannot be checked without the old object"))
 		}
 	}
-	if p.allowStatus(ctx, a) || p.allowFinalizer(ctx, a) {
-		return nil
-	}
 	objects := []runtime.Object{a.GetOldObject()}
 	if a.GetOperation() != admission.Delete {
 		objects = append(objects, a.GetObject())
 	}
+	accessors := make([]metav1.Object, 0, len(objects))
 	for _, obj := range objects {
 		if obj == nil {
 			continue
@@ -71,6 +73,17 @@ func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admissi
 		if err != nil {
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership metadata cannot be inspected"))
 		}
+		_, labelPresent := accessor.GetLabels()[NamespaceReservationKey]
+		_, annotationPresent := accessor.GetAnnotations()[NamespaceReservationKey]
+		if labelPresent || annotationPresent {
+			return admission.NewForbidden(a, fmt.Errorf("Apps ownership namespace reservation is reserved; acquisition, mutation and removal remain disabled"))
+		}
+		accessors = append(accessors, accessor)
+	}
+	if p.allowStatus(ctx, a) || p.allowFinalizer(ctx, a) {
+		return nil
+	}
+	for _, accessor := range accessors {
 		for _, key := range []string{ProjectUIDLabel, AppUIDLabel} {
 			_, labelPresent := accessor.GetLabels()[key]
 			_, annotationPresent := accessor.GetAnnotations()[key]
