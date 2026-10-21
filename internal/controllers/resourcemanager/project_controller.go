@@ -71,6 +71,10 @@ type ProjectController struct {
 	ControlPlaneClient client.Client
 	InfraClient        client.Client
 
+	// Destructive cleanup decisions must not use informer-cache absence.
+	ControlPlaneReader client.Reader
+	InfraReader        client.Reader
+
 	// Base (root) API config used to derive per-project clients.
 	BaseConfig *rest.Config
 
@@ -104,6 +108,13 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 			cleanupCond := apimeta.FindStatusCondition(project.Status.Conditions, resourcemanagerv1alpha.ProjectResourceCleanup)
 
+			// Once cleanup is durably complete, the PCP may already be gone.
+			// Do not require its API to answer before finishing reclamation.
+			if cleanupCond != nil && cleanupCond.Status == metav1.ConditionFalse &&
+				cleanupCond.Reason == resourcemanagerv1alpha.ProjectCleanupCompleteReason {
+				return r.finishProjectReclamation(ctx, &project)
+			}
+
 			// If awaiting completion, check whether resources have drained.
 			if cleanupCond != nil && cleanupCond.Status == metav1.ConditionTrue &&
 				cleanupCond.Reason == resourcemanagerv1alpha.ProjectCleanupAwaitingCompletionReason {
@@ -130,31 +141,7 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 						}
 					}
 
-					// The control plane is only reclaimed once nothing is left
-					// in it, so consumers can finish their own cleanup against
-					// a control plane that still answers.
-					if r.InfraClient != nil {
-						var pcp infrastructurev1alpha1.ProjectControlPlane
-						if err := r.InfraClient.Get(ctx, types.NamespacedName{
-							Namespace: project.Namespace,
-							Name:      project.Name,
-						}, &pcp); err == nil && pcp.DeletionTimestamp.IsZero() {
-							_ = r.InfraClient.Delete(ctx, &pcp)
-						}
-					}
-
-					// Re-fetch to get current resourceVersion after status update
-					if err := r.ControlPlaneClient.Get(ctx, req.NamespacedName, &project); err != nil {
-						return ctrl.Result{}, fmt.Errorf("re-fetch project: %w", err)
-					}
-
-					// Remove finalizer with fresh object
-					before := project.DeepCopy()
-					controllerutil.RemoveFinalizer(&project, projectFinalizer)
-					if err := r.ControlPlaneClient.Patch(ctx, &project, client.MergeFrom(before)); err != nil {
-						return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
-					}
-					return ctrl.Result{}, nil
+					return r.finishProjectReclamation(ctx, &project)
 				}
 
 				// Resources still exist. The project stays in Terminating and
@@ -525,6 +512,8 @@ func hasResource(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ProjectController) SetupWithManager(mgr ctrl.Manager, infraCluster cluster.Cluster) error {
 	r.InfraClient = infraCluster.GetClient()
+	r.InfraReader = infraCluster.GetAPIReader()
+	r.ControlPlaneReader = mgr.GetAPIReader()
 	r.ControlPlaneClient = mgr.GetClient()
 	r.BaseConfig = mgr.GetConfig()
 	r.Purger = projectpurge.New()
