@@ -17,7 +17,7 @@ import (
 )
 
 func TestGrantFamilyReserved(t *testing.T) {
-	for _, registration := range []string{"", GrantRegistrationV1} {
+	for _, registration := range []string{"", GrantRegistrationV1, PendingRequestsV1} {
 		for _, identity := range []string{"customer", "system-admin", "native-status", "native-finalizer"} {
 			for _, version := range []string{"v1alpha1", "v1", "unknown"} {
 				for _, sub := range []string{"", "status", "finalizers", "scale"} {
@@ -25,7 +25,11 @@ func TestGrantFamilyReserved(t *testing.T) {
 						for _, namespace := range []string{"", "default"} {
 							attrs := admission.NewAttributesRecord(nil, nil, schema.GroupVersionKind{Group: GrantGroup, Version: version, Kind: "Unknown"}, namespace, "", schema.GroupVersionResource{Group: GrantGroup, Version: version, Resource: GrantResource}, sub, op, nil, false, &user.DefaultInfo{Name: identity, UID: "principal-uid", Groups: []string{user.SystemPrivilegedGroup}})
 							p := NewPlugin()
-							p.grantRegistration = registration
+							if registration == PendingRequestsV1 {
+								p.pendingRequests = registration
+							} else {
+								p.grantRegistration = registration
+							}
 							rule := StatusWriter{Username: identity, UID: "principal-uid", Group: GrantGroup, Version: version, Resource: GrantResource, Kind: "Unknown"}
 							p.statusWriters = []StatusWriter{rule}
 							p.finalizerWriters = []FinalizerWriter{{StatusWriter: rule, Finalizer: "example.test/native"}}

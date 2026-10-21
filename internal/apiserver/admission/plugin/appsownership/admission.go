@@ -30,6 +30,7 @@ type Plugin struct {
 	finalizerWriters  []FinalizerWriter
 	dynamicClient     dynamic.Interface
 	grantRegistration string
+	pendingRequests   string
 }
 
 var _ admission.ValidationInterface = &Plugin{}
@@ -44,6 +45,7 @@ func Register(plugins *admission.Plugins) {
 		p.statusWriters = config.StatusWriters
 		p.finalizerWriters = config.FinalizerWriters
 		p.grantRegistration = config.GrantRegistration
+		p.pendingRequests = config.PendingRequests
 		return p, nil
 	})
 }
@@ -58,6 +60,9 @@ func NewPlugin() *Plugin {
 // direct internal API endpoints need the same protection as project URL paths.
 func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
 	if err := reserveGrant(a); err != nil && !p.allowGrantRegistration(ctx, a) {
+		return err
+	}
+	if err := p.validatePending(ctx, a); err != nil {
 		return err
 	}
 	if a.GetOperation() == admission.Update || a.GetOperation() == admission.Delete {

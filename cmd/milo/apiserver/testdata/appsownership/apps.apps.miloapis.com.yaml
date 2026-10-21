@@ -1,0 +1,303 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: apps.apps.miloapis.com
+  annotations:
+    discovery.miloapis.com/parent-contexts: Project
+spec:
+  group: apps.miloapis.com
+  scope: Cluster
+  names:
+    plural: apps
+    singular: app
+    kind: App
+    listKind: AppList
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            properties:
+              templateRef:
+                type: object
+                properties:
+                  projectRevision:
+                    type: object
+                    properties:
+                      projectUID:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                        pattern: ^[^\s]+$
+                      templateName:
+                        type: string
+                        minLength: 1
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                      templateUID:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                        pattern: ^[^\s]+$
+                      revisionName:
+                        type: string
+                        minLength: 1
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                      revisionUID:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                        pattern: ^[^\s]+$
+                      digest:
+                        type: string
+                        minLength: 71
+                        maxLength: 71
+                        pattern: ^sha256:[0-9a-f]{64}$
+                    required:
+                    - projectUID
+                    - templateName
+                    - templateUID
+                    - revisionName
+                    - revisionUID
+                    - digest
+                  publishedVersion:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                      uid:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                        pattern: ^[^\s]+$
+                      digest:
+                        type: string
+                        minLength: 71
+                        maxLength: 71
+                        pattern: ^sha256:[0-9a-f]{64}$
+                    required:
+                    - name
+                    - uid
+                    - digest
+                x-kubernetes-validations:
+                - rule: has(self.projectRevision) != has(self.publishedVersion)
+                  message: select exactly one immutable template snapshot
+              inputsJSON:
+                type: string
+                minLength: 2
+                maxLength: 262144
+              inputsDigest:
+                type: string
+                minLength: 71
+                maxLength: 71
+                pattern: ^sha256:[0-9a-f]{64}$
+              uninstallPolicy:
+                type: string
+                enum:
+                - Delete
+                - Retain
+                default: Delete
+            required:
+            - templateRef
+            - inputsJSON
+            - inputsDigest
+            - uninstallPolicy
+          status:
+            type: object
+            properties:
+              projectUID:
+                type: string
+                minLength: 1
+                maxLength: 256
+                pattern: ^[^\s]+$
+                x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: Project UID is immutable
+              admittedGeneration:
+                type: integer
+                format: int64
+                minimum: 0
+              observedGeneration:
+                type: integer
+                format: int64
+                minimum: 0
+              phase:
+                type: string
+                enum:
+                - Pending
+                - Accepted
+                - Reconciling
+                - Ready
+                - Blocked
+                - Deleting
+                - Releasing
+              latestRevision:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                  uid:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    pattern: ^[^\s]+$
+                required:
+                - name
+                - uid
+              inventory:
+                type: array
+                maxItems: 64
+                items:
+                  type: object
+                  properties:
+                    component:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    group:
+                      type: string
+                      minLength: 0
+                      maxLength: 253
+                    version:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z][a-z0-9]*$
+                    kind:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[A-Za-z][A-Za-z0-9]*$
+                    resource:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
+                    scope:
+                      type: string
+                      enum:
+                      - Cluster
+                      - Namespaced
+                    namespace:
+                      type: string
+                      maxLength: 63
+                      pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                    uid:
+                      type: string
+                      minLength: 1
+                      maxLength: 256
+                      pattern: ^[^\s]+$
+                  required:
+                  - component
+                  - group
+                  - version
+                  - kind
+                  - resource
+                  - scope
+                  - name
+                  - uid
+                  - namespace
+                  x-kubernetes-validations:
+                  - rule: 'self.scope == ''Namespaced'' ? self.namespace != '''' :
+                      self.namespace == '''''
+                    message: namespace must be nonempty exactly for namespaced resources
+                x-kubernetes-list-type: map
+                x-kubernetes-list-map-keys:
+                - group
+                - resource
+                - namespace
+                - name
+                x-kubernetes-validations:
+                - rule: self.all(x, self.filter(y, y.uid == x.uid).size() == 1)
+                  message: inventory UIDs must be unique
+                - rule: self.all(x, self.filter(y, y.component == x.component).size()
+                    == 1)
+                  message: inventory components must be unique
+              conditions:
+                type: array
+                maxItems: 32
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      minLength: 1
+                      maxLength: 316
+                    status:
+                      type: string
+                      enum:
+                      - 'True'
+                      - 'False'
+                      - Unknown
+                    observedGeneration:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                      minLength: 1
+                      maxLength: 1024
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                    message:
+                      type: string
+                      minLength: 0
+                      maxLength: 32768
+                  required:
+                  - type
+                  - status
+                  - lastTransitionTime
+                  - reason
+                  - message
+                x-kubernetes-list-type: map
+                x-kubernetes-list-map-keys:
+                - type
+            x-kubernetes-validations:
+            - rule: '!has(self.observedGeneration) || self.observedGeneration == 0
+                || (has(self.admittedGeneration) && self.observedGeneration <= self.admittedGeneration
+                && has(self.latestRevision))'
+              message: observed generation requires admitted generation and exact
+                revision
+            - rule: '!has(self.phase) || self.phase != ''Ready'' || (has(self.admittedGeneration)
+                && self.admittedGeneration > 0 && has(self.observedGeneration) &&
+                self.admittedGeneration == self.observedGeneration)'
+              message: Ready requires current observation
+            - rule: has(self.projectUID)
+              message: status requires Project UID
+        required:
+        - spec
+        x-kubernetes-validations:
+        - rule: '!has(self.status) || !has(self.status.projectUID) || !has(self.spec.templateRef.projectRevision)
+            || self.spec.templateRef.projectRevision.projectUID == self.status.projectUID'
+          message: template pin and status must refer to the same Project
+        - rule: '!has(oldSelf.status) || !has(oldSelf.status.projectUID) || (has(self.status)
+            && has(self.status.projectUID) && self.status.projectUID == oldSelf.status.projectUID)'
+          message: once bound, status and its Project UID cannot be removed or changed
+    subresources:
+      status: {}

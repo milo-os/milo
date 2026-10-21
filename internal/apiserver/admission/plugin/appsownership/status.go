@@ -36,6 +36,7 @@ type StatusWriter struct {
 type Configuration struct {
 	APIVersion        string            `json:"apiVersion"`
 	Kind              string            `json:"kind"`
+	PendingRequests   string            `json:"pendingRequests,omitempty"`
 	GrantRegistration string            `json:"grantRegistration,omitempty"`
 	StatusWriters     []StatusWriter    `json:"statusWriters"`
 	FinalizerWriters  []FinalizerWriter `json:"finalizerWriters"`
@@ -59,6 +60,9 @@ func readConfiguration(reader io.Reader) (Configuration, error) {
 	if config.GrantRegistration != "" && config.GrantRegistration != GrantRegistrationV1 {
 		return Configuration{}, fmt.Errorf("unsupported Apps grant registration contract")
 	}
+	if config.PendingRequests != "" && config.PendingRequests != PendingRequestsV1 {
+		return Configuration{}, fmt.Errorf("unsupported pending App contract")
+	}
 	seen := map[StatusWriter]bool{}
 	for _, rule := range config.StatusWriters {
 		if !validWriter(rule) || seen[rule] {
@@ -81,7 +85,7 @@ var _ admission.InitializationValidator = &Plugin{}
 
 func (p *Plugin) SetDynamicClient(client dynamic.Interface) { p.dynamicClient = client }
 func (p *Plugin) ValidateInitialization() error {
-	if (len(p.statusWriters) > 0 || len(p.finalizerWriters) > 0) && p.dynamicClient == nil {
+	if (len(p.statusWriters) > 0 || len(p.finalizerWriters) > 0 || p.pendingRequests != "") && p.dynamicClient == nil {
 		return fmt.Errorf("%s: configured native writers require the root Project client", PluginName)
 	}
 	return nil

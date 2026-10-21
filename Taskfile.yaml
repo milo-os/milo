@@ -302,8 +302,8 @@ tasks:
       - sh: test -n "$KUBEBUILDER_ASSETS" && test -x "$KUBEBUILDER_ASSETS/etcd"
         msg: Set KUBEBUILDER_ASSETS to an installed envtest 1.33.0 asset directory.
     cmds:
-      - go test -race ./cmd/milo/apiserver -run '^(TestAppsOwnership(APIFixture|CannotBeDisabled)|TestAppsNativeWritersAPIFixture|TestAppsNamespaceReservationAPIFixture|TestAppsGrantReservationAPIFixture|TestAppsGrantRegistrationAPIFixture|TestDefaultChainPreservesAuthenticationProvenance)$' -count=1 -timeout=240s
-      - go test -race ./internal/apiserver/admission/plugin/appsownership ./pkg/server/filters -count=1
+      - go test -race ./cmd/milo/apiserver -run '^(TestAppsOwnership(APIFixture|CannotBeDisabled)|TestAppsNativeWritersAPIFixture|TestAppsNamespaceReservationAPIFixture|TestAppsGrantReservationAPIFixture|TestAppsGrantRegistrationAPIFixture|TestAppsPendingCustodyAPIFixture|TestDefaultChainPreservesAuthenticationProvenance)$' -count=1 -timeout=240s
+      - go test -race ./internal/apiserver/admission/plugin/appsownership/... ./pkg/server/filters -count=1
 
   test:unit:
     desc: Run unit tests

@@ -98,21 +98,27 @@ func registrationRoot(ctx context.Context, a admission.Attributes) bool {
 	return true
 }
 
-func registrationMetadata(obj *extv1.CustomResourceDefinition) bool {
+func registrationMetadata(obj, expected *extv1.CustomResourceDefinition) bool {
 	m := &obj.ObjectMeta
-	return m.Name == GrantCRDName && m.Namespace == "" && m.GenerateName == "" && m.SelfLink == "" && len(m.Labels) == 0 && reflect.DeepEqual(m.Annotations, expectedGrantCRD.Annotations) && len(m.OwnerReferences) == 0 && len(m.Finalizers) == 0 && m.DeletionTimestamp == nil && m.DeletionGracePeriodSeconds == nil
+	return m.Name == expected.Name && m.Namespace == "" && m.GenerateName == "" && m.SelfLink == "" && len(m.Labels) == 0 && reflect.DeepEqual(m.Annotations, expected.Annotations) && len(m.OwnerReferences) == 0 && len(m.Finalizers) == 0 && m.DeletionTimestamp == nil && m.DeletionGracePeriodSeconds == nil
 }
 
 func (p *Plugin) allowGrantRegistration(ctx context.Context, a admission.Attributes) bool {
-	if p.grantRegistration != GrantRegistrationV1 || a.GetResource() != (schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}) || a.GetKind() != (extv1.SchemeGroupVersion.WithKind("CustomResourceDefinition")) || a.GetName() != GrantCRDName || a.GetNamespace() != "" || !registrationRoot(ctx, a) {
+	return p.grantRegistration == GrantRegistrationV1 && allowExactRegistration(ctx, a, expectedGrantCRD)
+}
+
+// Same native registration/status predicate for independently pinned contracts.
+func allowExactRegistration(ctx context.Context, a admission.Attributes, expected *extv1.CustomResourceDefinition) bool {
+	if a.GetResource() != (schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}) || a.GetKind() != (extv1.SchemeGroupVersion.WithKind("CustomResourceDefinition")) || a.GetName() != expected.Name || a.GetNamespace() != "" || !registrationRoot(ctx, a) {
 		return false
 	}
+
 	ri, ok := request.RequestInfoFrom(ctx)
 	if !ok || !ri.IsResourceRequest || ri.APIGroup != "apiextensions.k8s.io" || ri.APIVersion != "v1" || ri.Resource != "customresourcedefinitions" || ri.Subresource != a.GetSubresource() || ri.Namespace != "" {
 		return false
 	}
 	next, ok := registrationCRD(a.GetObject())
-	if !ok || !registrationMetadata(next) || !reflect.DeepEqual(next.Spec, expectedGrantCRD.Spec) {
+	if !ok || !registrationMetadata(next, expected) || !reflect.DeepEqual(next.Spec, expected.Spec) {
 		return false
 	}
 	switch {
@@ -120,11 +126,11 @@ func (p *Plugin) allowGrantRegistration(ctx context.Context, a admission.Attribu
 		// Native SSA PATCH may invoke Create admission. It is not a bootstrap POST.
 		return ri.Verb == "create" && ri.Name == "" && a.GetOldObject() == nil && next.ResourceVersion == "" && next.Generation == 1 && reflect.DeepEqual(next.Status, extv1.CustomResourceDefinitionStatus{StoredVersions: []string{"v1alpha1"}})
 	case a.GetOperation() == admission.Update && a.GetSubresource() == "status":
-		if (ri.Verb != "update" && ri.Verb != "patch") || ri.Name != GrantCRDName {
+		if (ri.Verb != "update" && ri.Verb != "patch") || ri.Name != expected.Name {
 			return false
 		}
 		old, ok := registrationCRD(a.GetOldObject())
-		if !ok || !registrationMetadata(old) || !reflect.DeepEqual(old.Spec, expectedGrantCRD.Spec) || old.UID == "" || next.UID != old.UID || old.ResourceVersion == "" || next.ResourceVersion != old.ResourceVersion || !registrationStatus(old.Status) || !registrationStatus(next.Status) {
+		if !ok || !registrationMetadata(old, expected) || !reflect.DeepEqual(old.Spec, expected.Spec) || old.UID == "" || next.UID != old.UID || old.ResourceVersion == "" || next.ResourceVersion != old.ResourceVersion || !registrationStatus(old.Status, expected) || !registrationStatus(next.Status, expected) {
 			return false
 		}
 		before, after := old.ObjectMeta.DeepCopy(), next.ObjectMeta.DeepCopy()
@@ -133,7 +139,7 @@ func (p *Plugin) allowGrantRegistration(ctx context.Context, a admission.Attribu
 		if !reflect.DeepEqual(before, after) {
 			return false
 		}
-		if reflect.DeepEqual(old.Status.AcceptedNames, expectedGrantCRD.Spec.Names) && !reflect.DeepEqual(next.Status.AcceptedNames, old.Status.AcceptedNames) {
+		if reflect.DeepEqual(old.Status.AcceptedNames, expected.Spec.Names) && !reflect.DeepEqual(next.Status.AcceptedNames, old.Status.AcceptedNames) {
 			return false
 		}
 		return true
@@ -142,11 +148,11 @@ func (p *Plugin) allowGrantRegistration(ctx context.Context, a admission.Attribu
 	}
 }
 
-func registrationStatus(s extv1.CustomResourceDefinitionStatus) bool {
+func registrationStatus(s extv1.CustomResourceDefinitionStatus, contract *extv1.CustomResourceDefinition) bool {
 	if !reflect.DeepEqual(s.StoredVersions, []string{"v1alpha1"}) || len(s.Conditions) > 4 {
 		return false
 	}
-	n, expected := s.AcceptedNames, expectedGrantCRD.Spec.Names
+	n, expected := s.AcceptedNames, contract.Spec.Names
 	if (n.Plural != "" && n.Plural != expected.Plural) || (n.Singular != "" && n.Singular != expected.Singular) || (n.Kind != "" && n.Kind != expected.Kind) || (n.ListKind != "" && n.ListKind != expected.ListKind) || len(n.ShortNames) != 0 || len(n.Categories) != 0 {
 		return false
 	}
