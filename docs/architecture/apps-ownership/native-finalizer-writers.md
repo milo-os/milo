@@ -148,3 +148,8 @@ the affected race tests and vet passed again. No weakened source is committed.
 Removing the optional rules restores default-deny behavior and may stall native
 cleanup/status reporting. It must not remove the compiled guard or clear ownership.
 No deployment, identity provisioning, production rollout, or native install occurs.
+
+Lead verification at implementation commit `873478b52d5aada6fd96d8ad5ad03c5c9bac6b31`:
+unit ownership/provenance race tests passed (1.884s/2.327s), and the combined
+real Milo/etcd HTTP regressions passed again in 64.513s. No live cluster or
+trusted writer configuration changed.
