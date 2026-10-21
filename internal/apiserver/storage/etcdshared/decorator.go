@@ -101,10 +101,18 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 		releaseClient()
 		return nil, nil, err
 	}
+	var invalidateReservation func()
+	var closeReservationView func()
 	var once sync.Once
 	destroyFunc := func() {
 		once.Do(func() {
+			if invalidateReservation != nil {
+				invalidateReservation()
+			}
 			stopCompactor()
+			if closeReservationView != nil {
+				closeReservationView()
+			}
 			store.Close()
 			perStoreBase.Watcher.Close()
 			releaseClient()
@@ -116,6 +124,22 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 	}
 	if fence != nil {
 		st = &fencedStorage{Interface: st, manager: fence, project: fences[0].Project, config: c, resourcePrefix: resourcePrefix}
+	}
+	if fence != nil && fences[0].Root && c.GroupResource == rootProjectResource {
+		// A private second view uses exactly the same backend, key preparation,
+		// transformer and codec; its decoder inspects plaintext before CRD
+		// metadata repair. It never opens a second transport or public route.
+		view, viewErr := etcd3.New(perStoreClient, compactor, c.Codec, newFunc, newListFunc, c.Prefix, resourcePrefix, c.GroupResource, transformer, c.LeaseManagerConfig, reservationDecoder{Decoder: etcd3.NewDefaultDecoder(c.Codec, versioner)}, versioner)
+		if viewErr != nil {
+			destroyFunc()
+			return nil, nil, viewErr
+		}
+		closeReservationView = view.Close
+		invalidateReservation, err = fence.registerReservationStorage(c, keyFunc, view)
+		if err != nil {
+			destroyFunc()
+			return nil, nil, err
+		}
 	}
 	return st, destroyFunc, nil
 }

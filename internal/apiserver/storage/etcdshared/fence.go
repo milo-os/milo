@@ -24,9 +24,11 @@ var rootProjectResource = schema.GroupResource{Group: "resourcemanager.miloapis.
 // CommitFence belongs to one API server configuration. Root registration comes
 // exclusively from the actual root Project storage decorator, never a child.
 type CommitFence struct {
-	mu      sync.RWMutex
-	root    *rootProjectStore
-	invalid bool
+	mu                 sync.RWMutex
+	root               *rootProjectStore
+	invalid            bool
+	reservation        *rootReservationStore
+	reservationInvalid bool
 }
 type rootProjectStore struct {
 	transport     string
