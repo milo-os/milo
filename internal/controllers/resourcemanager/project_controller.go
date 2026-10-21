@@ -157,6 +157,10 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					return ctrl.Result{}, nil
 				}
 
+				// A namespace that appeared after the purge's sweep is deleted
+				// now, not at the slow re-sweep.
+				r.clearLateNamespaces(ctx, projCfg, project.Name, &cleanup)
+
 				// Resources still exist. The project stays in Terminating and
 				// names what is holding it, so the component responsible for
 				// the finalizer is identifiable.

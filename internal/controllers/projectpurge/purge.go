@@ -76,14 +76,21 @@ type Blocker struct {
 	// Detail is the namespace controller's own account of what is left, when
 	// it has one.
 	Detail string
+	// Marked reports, for a namespace (Resource empty), whether it carries a
+	// deletion mark. An unmarked namespace appeared after the purge's sweep.
+	Marked bool
 }
 
 func (b Blocker) String() string {
 	if b.Resource == "" {
-		if b.Detail != "" {
-			return fmt.Sprintf("namespace %q is still terminating (%s)", b.Namespace, b.Detail)
+		state := "is still terminating"
+		if !b.Marked {
+			state = "is not yet deleted"
 		}
-		return fmt.Sprintf("namespace %q is still terminating", b.Namespace)
+		if b.Detail != "" {
+			return fmt.Sprintf("namespace %q %s (%s)", b.Namespace, state, b.Detail)
+		}
+		return fmt.Sprintf("namespace %q %s", b.Namespace, state)
 	}
 	if len(b.Finalizers) > 0 {
 		return fmt.Sprintf("%s %q (finalizers: %s)", b.Resource, b.Namespace+"/"+b.Name, strings.Join(b.Finalizers, ", "))
@@ -96,6 +103,35 @@ func (b Blocker) String() string {
 type Status struct {
 	Complete bool
 	Blockers []Blocker
+}
+
+// Unmarked names the namespaces that are present without a deletion mark.
+func (s Status) Unmarked() []string {
+	var names []string
+	for _, b := range s.Blockers {
+		if b.Resource == "" && !b.Marked {
+			names = append(names, b.Namespace)
+		}
+	}
+	return names
+}
+
+// NoteDeletes records the outcome of deleting the named namespaces on their
+// blockers. A delete that went through set the namespace's deletion mark; a
+// refused delete keeps its namespace unmarked and names why.
+func (s *Status) NoteDeletes(deleted []string, refused map[string]error) {
+	asked := sets.NewString(deleted...)
+	for i := range s.Blockers {
+		b := &s.Blockers[i]
+		if b.Resource != "" || !asked.Has(b.Namespace) {
+			continue
+		}
+		if err := refused[b.Namespace]; err != nil {
+			b.Detail = "delete refused: " + err.Error()
+			continue
+		}
+		b.Marked = true
+	}
 }
 
 // Message renders the blockers for a status condition.
@@ -183,22 +219,57 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 	}
 
 	// Phase B: delete namespaces themselves (sets DeletionTimestamp)
-	if err := runParallel(deadline, o.Parallel, namespaces, func(ctx context.Context, ns string) error {
+	return firstRefusal(deleteNamespaces(deadline, core, namespaces, o.Parallel))
+}
+
+// DeleteNamespaces deletes the named namespaces of a project's control plane,
+// never a protected one, and returns each refused delete by namespace.
+func (p *Purger) DeleteNamespaces(ctx context.Context, cfg *rest.Config, names []string) (map[string]error, error) {
+	core, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("typed core: %w", err)
+	}
+	return deleteNamespaces(ctx, core, names, 8), nil
+}
+
+// deleteNamespaces deletes each named namespace that is not protected. A
+// namespace already gone, or already marked, is no error.
+func deleteNamespaces(ctx context.Context, core kubernetes.Interface, names []string, parallel int) map[string]error {
+	bg := metav1.DeletePropagationBackground
+	var mu sync.Mutex
+	refused := map[string]error{}
+	_ = runParallel(ctx, parallel, names, func(ctx context.Context, ns string) error {
 		if _, ok := protected[ns]; ok {
 			return nil
 		}
-		if err := core.CoreV1().Namespaces().Delete(ctx, ns, delOpts); !ignorable(err) {
-			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-				return fmt.Errorf("rbac forbids deleting namespace %q: %w", ns, err)
-			}
-			return fmt.Errorf("delete namespace %q: %w", ns, err)
+		err := core.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{PropagationPolicy: &bg})
+		if ignorable(err) {
+			return nil
 		}
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			err = fmt.Errorf("rbac forbids deleting namespace %q: %w", ns, err)
+		} else {
+			err = fmt.Errorf("delete namespace %q: %w", ns, err)
+		}
+		mu.Lock()
+		refused[ns] = err
+		mu.Unlock()
 		return nil
-	}); err != nil {
-		return err
-	}
+	})
+	return refused
+}
 
-	return nil
+// firstRefusal returns the refusal of the first namespace by name, or nil.
+func firstRefusal(refused map[string]error) error {
+	names := make([]string, 0, len(refused))
+	for ns := range refused {
+		names = append(names, ns)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil
+	}
+	return refused[names[0]]
 }
 
 // Status reports whether every resource in a project's control plane is gone.
@@ -250,7 +321,7 @@ func purgeStatus(
 			drainedInPlace = append(drainedInPlace, ns.Name)
 			continue
 		}
-		blockers = append(blockers, Blocker{Namespace: ns.Name, Detail: namespaceDetail(ns)})
+		blockers = append(blockers, Blocker{Namespace: ns.Name, Detail: namespaceDetail(ns), Marked: ns.DeletionTimestamp != nil})
 	}
 
 	// Namespaces that cannot be deleted still have to be empty, otherwise the

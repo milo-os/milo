@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -59,6 +60,17 @@ func namespace(name string, conditions ...corev1.NamespaceCondition) *corev1.Nam
 	}
 }
 
+// terminating is a namespace that carries a deletion mark, as the namespace
+// controller sees it while it drains the namespace.
+func terminating(name string, conditions ...corev1.NamespaceCondition) *corev1.Namespace {
+	ns := namespace(name, conditions...)
+	now := metav1.Now()
+	ns.DeletionTimestamp = &now
+	ns.Finalizers = []string{"kubernetes"}
+	ns.Status.Phase = corev1.NamespaceTerminating
+	return ns
+}
+
 func TestPurgeStatus_CompleteWhenOnlyEmptyProtectedNamespacesRemain(t *testing.T) {
 	core := fake.NewSimpleClientset(namespace("default"))
 	status, err := purgeStatus(context.Background(), core, newDynamicClient(), testDiscovery())
@@ -73,7 +85,7 @@ func TestPurgeStatus_CompleteWhenOnlyEmptyProtectedNamespacesRemain(t *testing.T
 func TestPurgeStatus_NamespaceStillTerminatingBlocks(t *testing.T) {
 	core := fake.NewSimpleClientset(
 		namespace("default"),
-		namespace("demo", corev1.NamespaceCondition{
+		terminating("demo", corev1.NamespaceCondition{
 			Type:    corev1.NamespaceFinalizersRemaining,
 			Status:  corev1.ConditionTrue,
 			Message: "Some content in the namespace has finalizers remaining: example.com/hold in 1 resource instances",
@@ -152,5 +164,110 @@ func TestStatusMessage_TruncatesLongBlockerLists(t *testing.T) {
 	}
 	if msg := status.Message(); !strings.Contains(msg, "and 3 more") {
 		t.Fatalf("expected the message to be truncated, got %q", msg)
+	}
+}
+
+func TestPurgeStatus_UnmarkedNamespaceIsNotYetDeleted(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("default"), namespace("late"))
+
+	status, err := purgeStatus(context.Background(), core, newDynamicClient(), testDiscovery())
+	if err != nil {
+		t.Fatalf("purgeStatus: %v", err)
+	}
+	if got := status.Unmarked(); len(got) != 1 || got[0] != "late" {
+		t.Fatalf("expected the namespace without a deletion mark to be unmarked, got %v", got)
+	}
+	if msg := status.Message(); !strings.Contains(msg, `namespace "late" is not yet deleted`) {
+		t.Fatalf("expected the message to say the namespace is not yet deleted, got %q", msg)
+	}
+}
+
+func TestPurgeStatus_MarkedNamespaceIsStillTerminating(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("default"), terminating("demo"))
+
+	status, err := purgeStatus(context.Background(), core, newDynamicClient(), testDiscovery())
+	if err != nil {
+		t.Fatalf("purgeStatus: %v", err)
+	}
+	if got := status.Unmarked(); len(got) != 0 {
+		t.Fatalf("expected a namespace with a deletion mark not to be unmarked, got %v", got)
+	}
+	if msg := status.Message(); !strings.Contains(msg, `namespace "demo" is still terminating`) {
+		t.Fatalf("expected the message to say the namespace is still terminating, got %q", msg)
+	}
+}
+
+func TestDeleteNamespaces_DeletesTheNamedNamespacesButNeverAProtectedOne(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("default"), namespace("late"))
+
+	refused := deleteNamespaces(context.Background(), core, []string{"late", "default"}, 2)
+	if len(refused) != 0 {
+		t.Fatalf("expected no refusal, got %v", refused)
+	}
+	var deleted []string
+	for _, a := range core.Actions() {
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "namespaces" {
+			deleted = append(deleted, a.(k8stesting.DeleteAction).GetName())
+		}
+	}
+	if len(deleted) != 1 || deleted[0] != "late" {
+		t.Fatalf("expected exactly one delete, of late, got %v", deleted)
+	}
+}
+
+// The second delete of a namespace that is already terminating answers with the
+// namespace and no error at the pinned Kubernetes (v1.35.0
+// pkg/registry/core/namespace/storage/storage.go L250-L252), and a namespace
+// already gone answers NotFound. Neither is a refusal.
+func TestDeleteNamespaces_GoneOrAlreadyMarkedIsNoError(t *testing.T) {
+	core := fake.NewSimpleClientset()
+	core.PrependReactor("delete", "namespaces", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		switch a.(k8stesting.DeleteAction).GetName() {
+		case "gone":
+			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "gone")
+		default:
+			return true, terminating(a.(k8stesting.DeleteAction).GetName()), nil
+		}
+	})
+
+	if refused := deleteNamespaces(context.Background(), core, []string{"gone", "draining"}, 2); len(refused) != 0 {
+		t.Fatalf("expected no refusal, got %v", refused)
+	}
+}
+
+func TestDeleteNamespaces_ReturnsEachRefusal(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("late"))
+	core.PrependReactor("delete", "namespaces", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		switch a.(k8stesting.DeleteAction).GetName() {
+		case "reserved":
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, "reserved", errors.New("held by a reservation"))
+		case "flaky":
+			return true, nil, apierrors.NewServiceUnavailable("etcd is not ready")
+		}
+		return false, nil, nil
+	})
+
+	refused := deleteNamespaces(context.Background(), core, []string{"late", "reserved", "flaky"}, 2)
+	if len(refused) != 2 || refused["reserved"] == nil || refused["flaky"] == nil {
+		t.Fatalf("expected the reserved and the flaky deletes to be refused, got %v", refused)
+	}
+	if _, err := core.CoreV1().Namespaces().Get(context.Background(), "late", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected late to be deleted beside the refusals, got %v", err)
+	}
+}
+
+func TestStatus_NoteDeletesMarksADeletedNamespaceAndNamesARefusal(t *testing.T) {
+	status := Status{Blockers: []Blocker{{Namespace: "late"}, {Namespace: "reserved"}}}
+	status.NoteDeletes([]string{"late", "reserved"}, map[string]error{"reserved": errors.New("held by a reservation")})
+
+	if got := status.Unmarked(); len(got) != 1 || got[0] != "reserved" {
+		t.Fatalf("expected only the refused namespace to stay unmarked, got %v", got)
+	}
+	msg := status.Message()
+	if !strings.Contains(msg, `namespace "late" is still terminating`) {
+		t.Fatalf("expected a deleted namespace to read as still terminating, got %q", msg)
+	}
+	if !strings.Contains(msg, `namespace "reserved" is not yet deleted (delete refused: held by a reservation)`) {
+		t.Fatalf("expected the refused namespace to name its refusal, got %q", msg)
 	}
 }
