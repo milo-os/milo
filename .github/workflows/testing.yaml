@@ -5,6 +5,8 @@ on:
       - '**/*.go'
       - 'go.mod'
       - 'go.sum'
+      - 'cmd/milo/apiserver/testdata/appsownership/**'
+      - '.github/workflows/testing.yaml'
 
 jobs:
   iam_integration_tests:
