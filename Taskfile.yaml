@@ -296,6 +296,15 @@ tasks:
         KUBECONFIG=.milo/kubeconfig "{{.TOOL_DIR}}/chainsaw" test $TEST_PATHS --selector "requires!=authorization-provider"
     silent: true
 
+  test:apps-ownership-api:
+    desc: Run ownership guard tests against a disposable local Milo API (no cluster required)
+    preconditions:
+      - sh: test -n "$KUBEBUILDER_ASSETS" && test -x "$KUBEBUILDER_ASSETS/etcd"
+        msg: Set KUBEBUILDER_ASSETS to an installed envtest 1.33.0 asset directory.
+    cmds:
+      - go test -race ./cmd/milo/apiserver -run '^TestAppsOwnership(APIFixture|CannotBeDisabled)' -count=1 -timeout=150s
+      - go test -race ./internal/apiserver/admission/plugin/appsownership -count=1
+
   test:unit:
     desc: Run unit tests
     cmds:
