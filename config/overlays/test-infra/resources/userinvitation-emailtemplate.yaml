@@ -1,0 +1,21 @@
+# The email template the controller manager sends user invitations with (its --user-invitation-email-template
+# default). Applied to the Milo API server by 'task dev:setup' for the user-invitation tests.
+apiVersion: notification.miloapis.com/v1alpha1
+kind: EmailTemplate
+metadata:
+  name: emailtemplates.notification.miloapis.com-userinvitationemailtemplate
+  namespace: milo-system
+spec:
+  subject: "You have been invited"
+  textBody: "You have been invited to join an organization."
+  htmlBody: "<p>You have been invited.</p>"
+  variables:
+  - name: OrganizationDisplayName
+    required: false
+    type: string
+  - name: UserInvitationName
+    required: false
+    type: string
+  - name: InviterDisplayName
+    required: false
+    type: string

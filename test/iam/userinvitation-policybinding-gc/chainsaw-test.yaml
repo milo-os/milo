@@ -19,44 +19,10 @@ spec:
   steps:
   - name: setup-prerequisites
     description: |
-      Create the Role and EmailTemplate that the UserInvitation webhook and
-      controller require, then create the Organization and invitee User.
+      Create the Organization and invitee User. The Role and EmailTemplate
+      that the UserInvitation webhook and controller require come with the
+      test environment (task dev:setup).
     try:
-    - description: Create role and email template fixtures in milo-system
-      script:
-        timeout: 30s
-        content: |
-          cat <<'FIXTURES' | kubectl apply -f -
-          apiVersion: iam.miloapis.com/v1alpha1
-          kind: Role
-          metadata:
-            name: resourcemanager.miloapis.com-organization-viewer
-            namespace: milo-system
-          spec:
-            launchStage: Beta
-            includedPermissions:
-            - resourcemanager.miloapis.com/organizations.get
-          ---
-          apiVersion: notification.miloapis.com/v1alpha1
-          kind: EmailTemplate
-          metadata:
-            name: emailtemplates.notification.miloapis.com-userinvitationemailtemplate
-            namespace: milo-system
-          spec:
-            subject: "You have been invited"
-            textBody: "You have been invited to join an organization."
-            htmlBody: "<p>You have been invited.</p>"
-            variables:
-            - name: OrganizationDisplayName
-              required: false
-              type: string
-            - name: UserInvitationName
-              required: false
-              type: string
-            - name: InviterDisplayName
-              required: false
-              type: string
-          FIXTURES
     - apply:
         file: 01-organization.yaml
     - wait:
