@@ -2,6 +2,7 @@ package etcdshared
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -10,23 +11,21 @@ import (
 	"sync"
 	"time"
 
-	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
+	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.etcd.io/etcd/client/pkg/v3/transport"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/kubernetes"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"k8s.io/klog/v2"
+	"google.golang.org/grpc/connectivity"
 
 	utilnet "k8s.io/apimachinery/pkg/util/net"
-	"k8s.io/apimachinery/pkg/util/wait"
-	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server/egressselector"
 	"k8s.io/apiserver/pkg/storage/etcd3"
-	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/component-base/metrics/legacyregistry"
 	tracing "k8s.io/component-base/tracing"
 )
 
@@ -34,11 +33,28 @@ const (
 	keepaliveTime    = 30 * time.Second
 	keepaliveTimeout = 10 * time.Second
 	dialTimeout      = 20 * time.Second
-
-	dbMetricsMonitorJitter = 0.5
 )
 
 var etcd3ClientLogger = zap.NewNop().Named("etcd-client-shared")
+
+var grpcClientMetrics = upstreamGRPCClientMetrics()
+
+// upstreamGRPCClientMetrics returns the upstream factory's unexported collector,
+// which etcd alerts read, from the error of registering an identical one.
+func upstreamGRPCClientMetrics() *grpcprom.ClientMetrics {
+	m := grpcprom.NewClientMetrics()
+	err := legacyregistry.Registerer().Register(m)
+	if err == nil {
+		return m
+	}
+	var are prometheus.AlreadyRegisteredError
+	if errors.As(err, &are) {
+		if existing, ok := are.ExistingCollector.(*grpcprom.ClientMetrics); ok {
+			return existing
+		}
+	}
+	panic(fmt.Sprintf("registering etcd grpc client metrics: %v", err))
+}
 
 // newSharedETCDClient builds a *kubernetes.Client from a transport config. It is
 // a package var so tests can substitute a dial-free fake. It is a faithful copy
@@ -68,19 +84,16 @@ var newSharedETCDClient = func(c storagebackend.TransportConfig) (*kubernetes.Cl
 		}
 	}
 	dialOptions := []grpc.DialOption{
-		grpc.WithBlock(),
-		grpc.WithChainUnaryInterceptor(grpcprom.UnaryClientInterceptor),
-		grpc.WithChainStreamInterceptor(grpcprom.StreamClientInterceptor),
+		grpc.WithChainUnaryInterceptor(grpcClientMetrics.UnaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(grpcClientMetrics.StreamClientInterceptor()),
 	}
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) {
-		tracingOpts := []otelgrpc.Option{
-			otelgrpc.WithMessageEvents(otelgrpc.ReceivedEvents, otelgrpc.SentEvents),
-			otelgrpc.WithPropagators(tracing.Propagators()),
-			otelgrpc.WithTracerProvider(c.TracerProvider),
-		}
-		dialOptions = append(dialOptions,
-			grpc.WithStatsHandler(otelgrpc.NewClientHandler(tracingOpts...)))
+	tracingOpts := []otelgrpc.Option{
+		otelgrpc.WithMessageEvents(otelgrpc.ReceivedEvents, otelgrpc.SentEvents),
+		otelgrpc.WithPropagators(tracing.Propagators()),
+		otelgrpc.WithTracerProvider(c.TracerProvider),
 	}
+	dialOptions = append(dialOptions,
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(tracingOpts...)))
 	if egressDialer != nil {
 		dialer := func(ctx context.Context, addr string) (net.Conn, error) {
 			if strings.Contains(addr, "//") {
@@ -105,7 +118,40 @@ var newSharedETCDClient = func(c storagebackend.TransportConfig) (*kubernetes.Cl
 		Logger:               etcd3ClientLogger,
 	}
 
-	return kubernetes.New(cfg)
+	kClient, err := kubernetes.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := blockUntilReady(dialTimeout, kClient); err != nil {
+		_ = kClient.Close()
+		return nil, err
+	}
+
+	return kClient, nil
+}
+
+func blockUntilReady(timeout time.Duration, client *kubernetes.Client) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	conn := client.Client.ActiveConnection()
+	if conn == nil {
+		return fmt.Errorf("no grpc connection")
+	}
+
+	for {
+		currentState := conn.GetState()
+		if currentState == connectivity.Ready {
+			return nil
+		}
+		if currentState == connectivity.Idle {
+			conn.Connect()
+		}
+		if !conn.WaitForStateChange(ctx, currentState) {
+			return fmt.Errorf("etcd grpc connection not ready: %w", ctx.Err())
+		}
+	}
 }
 
 // sharedClientPoolSize is the number of etcd connections opened per transport
@@ -136,10 +182,9 @@ func SetSharedClientPoolSize(n int) {
 }
 
 type runningClient struct {
-	clients           []*kubernetes.Client
-	stopDBSizeMonitor func()
-	next              uint64
-	refs              int
+	clients []*kubernetes.Client
+	next    uint64
+	refs    int
 }
 
 var (
@@ -160,10 +205,9 @@ func transportKey(c storagebackend.TransportConfig) string {
 // assigned round-robin; per-project isolation is enforced by the etcd key
 // prefix at the store layer, not by the connection. Each client's KV is wrapped
 // once with the latency tracker (it is stateless and request-context scoped, so
-// a single wrapper per client is safe) and a single DB-size monitor is started
-// for the pool. The returned release func closes the pool only when the last
-// reference for the transport is released.
-func acquireClient(c storagebackend.TransportConfig, dbMetricPollInterval time.Duration) (*kubernetes.Client, func(), error) {
+// a single wrapper per client is safe). The returned release func closes the
+// pool only when the last reference for the transport is released.
+func acquireClient(c storagebackend.TransportConfig) (*kubernetes.Client, func(), error) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
@@ -183,20 +227,7 @@ func acquireClient(c storagebackend.TransportConfig, dbMetricPollInterval time.D
 			pool = append(pool, client)
 		}
 
-		// The DB-size monitor dedups per endpoint internally, so one client
-		// from the pool is sufficient to drive it.
-		stopDBSizeMonitor, err := startDBSizeMonitorPerEndpoint(pool[0].Client, dbMetricPollInterval)
-		if err != nil {
-			for _, pc := range pool {
-				_ = pc.Close()
-			}
-			return nil, nil, err
-		}
-
-		rc = &runningClient{
-			clients:           pool,
-			stopDBSizeMonitor: stopDBSizeMonitor,
-		}
+		rc = &runningClient{clients: pool}
 		clients[key] = rc
 	}
 
@@ -211,7 +242,6 @@ func acquireClient(c storagebackend.TransportConfig, dbMetricPollInterval time.D
 		rc := clients[key]
 		rc.refs--
 		if rc.refs == 0 {
-			rc.stopDBSizeMonitor()
 			for _, pc := range rc.clients {
 				_ = pc.Close()
 			}
@@ -279,44 +309,5 @@ func startCompactorOnce(c storagebackend.TransportConfig, interval time.Duration
 			compactor.client.Close()
 			delete(compactors, key)
 		}
-	}, nil
-}
-
-var (
-	dbMetricsMonitorsMu sync.Mutex
-	dbMetricsMonitors   = map[string]struct{}{}
-)
-
-// startDBSizeMonitorPerEndpoint starts a loop to monitor etcd database size and
-// update etcd_db_total_size_in_bytes per endpoint. Faithful copy of the
-// upstream factory helper; deduped per endpoint within this package.
-func startDBSizeMonitorPerEndpoint(client *clientv3.Client, interval time.Duration) (func(), error) {
-	if interval == 0 {
-		return func() {}, nil
-	}
-	dbMetricsMonitorsMu.Lock()
-	defer dbMetricsMonitorsMu.Unlock()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	for _, ep := range client.Endpoints() {
-		if _, found := dbMetricsMonitors[ep]; found {
-			continue
-		}
-		dbMetricsMonitors[ep] = struct{}{}
-		endpoint := ep
-		klog.V(4).Infof("Start monitoring storage db size metric for endpoint %s with polling interval %v", endpoint, interval)
-		go wait.JitterUntilWithContext(ctx, func(context.Context) {
-			epStatus, err := client.Maintenance.Status(ctx, endpoint)
-			if err != nil {
-				klog.V(4).Infof("Failed to get storage db size for ep %s: %v", endpoint, err)
-				metrics.UpdateEtcdDbSize(endpoint, -1)
-			} else {
-				metrics.UpdateEtcdDbSize(endpoint, epStatus.DbSize)
-			}
-		}, interval, dbMetricsMonitorJitter, true)
-	}
-
-	return func() {
-		cancel()
 	}, nil
 }

@@ -31,7 +31,7 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 		return nil, nil, err
 	}
 
-	client, releaseClient, err := acquireClient(c.Transport, c.DBMetricPollInterval)
+	client, releaseClient, err := acquireClient(c.Transport)
 	if err != nil {
 		stopCompactor()
 		return nil, nil, err
@@ -40,11 +40,8 @@ func newRawStorage(c storagebackend.ConfigForResource, newFunc, newListFunc func
 	// etcd3.New calls DefaultFeatureSupportChecker.CheckClient using the client we
 	// pass it. The per-store client below has no endpoints (NewCtxClient), so the
 	// check would be a no-op. Call it explicitly for the pool client here instead.
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConsistentListFromCache) ||
-		utilfeature.DefaultFeatureGate.Enabled(genericfeatures.WatchList) {
-		etcdfeature.DefaultFeatureSupportChecker.CheckClient(
-			client.Ctx(), client.Client, storage.RequestWatchProgress)
-	}
+	etcdfeature.DefaultFeatureSupportChecker.CheckClient(
+		client.Ctx(), client.Client, storage.RequestWatchProgress)
 
 	// Each store gets its own gRPC watch stream over the shared TCP connection so
 	// that watch creations don't serialize across stores sharing the same pool slot.
