@@ -28,7 +28,7 @@ This suite verifies the test plan for #802:
 
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
-| 1 | [setup-prerequisites](#step-setup-prerequisites) | 0 | 13 | 0 | 0 | 0 |
+| 1 | [setup-prerequisites](#step-setup-prerequisites) | 0 | 12 | 0 | 0 | 0 |
 | 2 | [accept-after-expiry-is-rejected](#step-accept-after-expiry-is-rejected) | 0 | 5 | 0 | 0 | 0 |
 | 3 | [expired-invitation-does-not-block-reinvite](#step-expired-invitation-does-not-block-reinvite) | 0 | 3 | 0 | 0 | 0 |
 | 4 | [declined-invitation-does-not-block-reinvite](#step-declined-invitation-does-not-block-reinvite) | 0 | 7 | 0 | 0 | 0 |
@@ -37,28 +37,27 @@ This suite verifies the test plan for #802:
 
 ### Step: `setup-prerequisites`
 
-Create the shared Role and EmailTemplate fixtures in milo-system that the
-UserInvitation webhook and controller require, then create each test
-Organization (and its namespace) and invitee User.
+Create each test Organization (and its namespace) and invitee User. The
+Role and EmailTemplate that the UserInvitation webhook and controller
+require come with the test environment (task dev:setup).
 
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `script` | 0 | 0 | Create role and email template fixtures in milo-system |
+| 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `apply` | 0 | 0 | *No description* |
 | 3 | `apply` | 0 | 0 | *No description* |
-| 4 | `apply` | 0 | 0 | *No description* |
+| 4 | `wait` | 0 | 0 | *No description* |
 | 5 | `wait` | 0 | 0 | *No description* |
 | 6 | `wait` | 0 | 0 | *No description* |
-| 7 | `wait` | 0 | 0 | *No description* |
+| 7 | `apply` | 0 | 0 | *No description* |
 | 8 | `apply` | 0 | 0 | *No description* |
 | 9 | `apply` | 0 | 0 | *No description* |
-| 10 | `apply` | 0 | 0 | *No description* |
+| 10 | `wait` | 0 | 0 | *No description* |
 | 11 | `wait` | 0 | 0 | *No description* |
 | 12 | `wait` | 0 | 0 | *No description* |
-| 13 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `accept-after-expiry-is-rejected`
 

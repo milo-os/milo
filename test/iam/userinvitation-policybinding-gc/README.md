@@ -17,25 +17,25 @@ deleting both PolicyBindings before the object is removed.
 
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
-| 1 | [setup-prerequisites](#step-setup-prerequisites) | 0 | 5 | 0 | 0 | 0 |
+| 1 | [setup-prerequisites](#step-setup-prerequisites) | 0 | 4 | 0 | 0 | 0 |
 | 2 | [create-invitation-and-verify-policybindings](#step-create-invitation-and-verify-policybindings) | 0 | 3 | 0 | 0 | 0 |
 | 3 | [delete-invitation-and-verify-policybindings-cleaned-up](#step-delete-invitation-and-verify-policybindings-cleaned-up) | 0 | 3 | 0 | 0 | 0 |
 
 ### Step: `setup-prerequisites`
 
-Create the Role and EmailTemplate that the UserInvitation webhook and
-controller require, then create the Organization and invitee User.
+Create the Organization and invitee User. The Role and EmailTemplate
+that the UserInvitation webhook and controller require come with the
+test environment (task dev:setup).
 
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `script` | 0 | 0 | Create role and email template fixtures in milo-system |
-| 2 | `apply` | 0 | 0 | *No description* |
-| 3 | `wait` | 0 | 0 | *No description* |
-| 4 | `apply` | 0 | 0 | *No description* |
-| 5 | `wait` | 0 | 0 | *No description* |
+| 1 | `apply` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
+| 3 | `apply` | 0 | 0 | *No description* |
+| 4 | `wait` | 0 | 0 | *No description* |
 
 ### Step: `create-invitation-and-verify-policybindings`
 

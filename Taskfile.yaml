@@ -135,6 +135,12 @@ tasks:
         echo "👤 Creating test users in Milo API server..."
         task kubectl -- apply -f config/overlays/test-infra/resources/test-users.yaml
 
+        # The user-invitation tests invite with the shipped organization viewer role and send the controller's
+        # default email template. Installed once here, so tests that run at once never create them twice.
+        echo "📨 Installing the user-invitation role and email template in Milo API server..."
+        task kubectl -- apply -n milo-system -f config/roles/organization-viewer.yaml
+        task kubectl -- apply -f config/overlays/test-infra/resources/userinvitation-emailtemplate.yaml
+
         echo "⏳ Waiting for controller manager to be ready..."
         task test-infra:kubectl -- wait --for=condition=Ready pod -l app.kubernetes.io/name=milo-controller-manager -n milo-system --timeout=120s
 
