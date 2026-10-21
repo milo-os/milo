@@ -70,10 +70,16 @@ func (g *setupGate) seal() { g.mu.Lock(); defer g.mu.Unlock(); g.sealed = true }
 func (g *setupGate) permits(a admission.Attributes) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	if g.sealed || a.GetUserInfo() == nil || a.GetUserInfo().GetName() != apiFixtureSetupName || a.GetUserInfo().GetUID() != apiFixtureSetupUID {
+	if g.sealed {
 		return false
 	}
-	if namespaceSetupPermitted(a) {
+	if grantCRDSetupStatus(a) {
+		return true
+	}
+	if a.GetUserInfo() == nil || a.GetUserInfo().GetName() != apiFixtureSetupName || a.GetUserInfo().GetUID() != apiFixtureSetupUID {
+		return false
+	}
+	if namespaceSetupPermitted(a) || grantSetupPermitted(a) {
 		return true
 	}
 	if a.GetNamespace() != apiFixtureNamespace || a.GetSubresource() != "" {

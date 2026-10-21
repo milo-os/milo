@@ -55,6 +55,9 @@ func NewPlugin() *Plugin {
 // pair, is what reserves a marker. A missing ProjectID never bypasses the guard:
 // direct internal API endpoints need the same protection as project URL paths.
 func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
+	if err := reserveGrant(a); err != nil {
+		return err
+	}
 	if a.GetOperation() == admission.Update || a.GetOperation() == admission.Delete {
 		if a.GetOldObject() == nil {
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership cannot be checked without the old object"))

@@ -1,0 +1,57 @@
+{
+  "envelope": {
+    "version": "apps.miloapis.com/install-grant-envelope/v1",
+    "projectUID": "project-uid",
+    "request": {
+      "protocol": "install-request-v1",
+      "appName": "web",
+      "appUID": "app-uid",
+      "admittedGeneration": 1,
+      "specDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "templateRevision": {
+      "projectUID": "project-uid",
+      "templateName": "web",
+      "templateUID": "template-uid",
+      "revisionName": "web-r1",
+      "revisionUID": "revision-uid",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "actor": {
+      "username": "installer@example.test",
+      "uid": "actor-uid",
+      "groups": [
+        "authors",
+        "system:authenticated"
+      ],
+      "extra": {
+        "example.test/claim": [
+          "exact-value"
+        ]
+      }
+    },
+    "plan": {
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "policyName": "configmap-only",
+      "policyUID": "policy-uid",
+      "policyDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "actions": [
+      {
+        "component": "settings",
+        "group": "",
+        "version": "v1",
+        "resource": "configmaps",
+        "kind": "ConfigMap",
+        "scope": "Namespaced",
+        "namespace": "default",
+        "name": "web-settings",
+        "verb": "create",
+        "payloadDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ]
+  },
+  "envelopeDigest": "sha256:840cbade92953cafc8a3d8e37551a819b374ce3619e6a4bda0d512c19a8c183a",
+  "revokeRequested": false,
+  "consumption": "Disabled"
+}
