@@ -7,6 +7,7 @@ on:
       - 'go.sum'
       - 'cmd/milo/apiserver/testdata/appsownership/**'
       - 'internal/apiserver/admission/plugin/appsownership/contracts/**'
+      - 'internal/apiserver/admission/plugin/appsownership/pendingwire/**'
       - '.github/workflows/testing.yaml'
 
 jobs:
