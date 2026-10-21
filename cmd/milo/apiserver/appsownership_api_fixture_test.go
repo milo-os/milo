@@ -81,7 +81,7 @@ func (g *setupGate) permits(a admission.Attributes) bool {
 			return true
 		}
 	}
-	return a.GetResource() == schema.GroupVersionResource{Group: "compute.datumapis.com", Version: "v1alpha", Resource: "workloads"} && a.GetName() == "held-workload"
+	return (a.GetResource() == schema.GroupVersionResource{Group: "compute.datumapis.com", Version: "v1alpha", Resource: "workloads"} && a.GetName() == "held-workload") || nativeWriterSetupPermitted(a)
 }
 
 type setupValidator struct {
@@ -115,6 +115,7 @@ func TestAppsOwnershipAPIFixtureChild(t *testing.T) {
 	opts.SecureServing.AddFlags(fs)
 	opts.Authentication.AddFlags(fs)
 	opts.Authorization.AddFlags(fs)
+	fs.StringVar(&opts.Admission.GenericAdmission.ConfigFile, "admission-control-config-file", "", "ordinary admission configuration")
 	fs.StringVar(&opts.ServiceAccountSigningKeyFile, "service-account-signing-key-file", opts.ServiceAccountSigningKeyFile, "test signer path")
 	require.NoError(t, fs.Parse(args))
 	opts.SystemNamespaces = []string{metav1.NamespaceSystem, metav1.NamespaceDefault, SystemNamespace}
@@ -156,12 +157,25 @@ func (b *fixtureLog) Write(p []byte) (int, error) {
 }
 func (b *fixtureLog) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buffer.String() }
 
-func TestAppsOwnershipAPIFixture(t *testing.T) {
+type apiFixture struct {
+	ctx           context.Context
+	root          client.Client
+	seed          client.Client
+	customer      client.Client
+	project       *rm.Project
+	projectConfig *rest.Config
+	tokens        map[string]string
+	scheme        *runtime.Scheme
+	seal          func()
+}
+
+func startAPIFixture(t *testing.T, config *appsownership.Configuration) *apiFixture {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("starts isolated Milo HTTP server")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	t.Cleanup(cancel)
 	assets := os.Getenv("KUBEBUILDER_ASSETS")
 	require.NotEmpty(t, assets)
 	// Only Milo accesses this backend. Fixtures have no KV client or storage key.
@@ -174,7 +188,7 @@ func TestAppsOwnershipAPIFixture(t *testing.T) {
 	require.NoError(t, err)
 	writer := csv.NewWriter(file)
 	tokens := map[string]string{}
-	for _, identity := range []string{apiFixtureSetupName, "customer"} {
+	for _, identity := range []string{apiFixtureSetupName, "customer", "native-status", "native-finalizer", "wrong-status-uid", "wrong-finalizer-uid", "system-admin"} {
 		var raw [32]byte
 		_, err := rand.Read(raw[:])
 		require.NoError(t, err)
@@ -183,7 +197,17 @@ func TestAppsOwnershipAPIFixture(t *testing.T) {
 		if identity == apiFixtureSetupName {
 			uid = apiFixtureSetupUID
 		}
-		require.NoError(t, writer.Write([]string{tokens[identity], identity, uid, "system:authenticated"}))
+		username, groups := identity, "system:authenticated"
+		if identity == "wrong-status-uid" {
+			username = "native-status"
+		}
+		if identity == "wrong-finalizer-uid" {
+			username = "native-finalizer"
+		}
+		if identity == "system-admin" {
+			groups = "system:authenticated,system:masters"
+		}
+		require.NoError(t, writer.Write([]string{tokens[identity], username, uid, groups}))
 	}
 	writer.Flush()
 	require.NoError(t, writer.Error())
@@ -196,7 +220,15 @@ func TestAppsOwnershipAPIFixture(t *testing.T) {
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
 	require.NoError(t, listener.Close())
-	args, err := json.Marshal([]string{"--etcd-servers=" + backend.URL.String(), "--bind-address=127.0.0.1", fmt.Sprintf("--secure-port=%d", port), "--cert-dir=" + filepath.Join(dir, "certs"), "--token-auth-file=" + tokenPath, "--anonymous-auth=false", "--authorization-mode=AlwaysAllow", "--service-account-issuer=https://api-fixture.test", "--api-audiences=api-fixture-test", "--service-account-signing-key-file=" + keyPath, "--service-account-key-file=" + keyPath})
+	serverArgs := []string{"--etcd-servers=" + backend.URL.String(), "--bind-address=127.0.0.1", fmt.Sprintf("--secure-port=%d", port), "--cert-dir=" + filepath.Join(dir, "certs"), "--token-auth-file=" + tokenPath, "--anonymous-auth=false", "--authorization-mode=AlwaysAllow", "--service-account-issuer=https://api-fixture.test", "--api-audiences=api-fixture-test", "--service-account-signing-key-file=" + keyPath, "--service-account-key-file=" + keyPath}
+	if config != nil {
+		raw, err := json.Marshal(map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AdmissionConfiguration", "plugins": []any{map[string]any{"name": appsownership.PluginName, "configuration": config}}})
+		require.NoError(t, err)
+		configPath := filepath.Join(dir, "admission.json")
+		require.NoError(t, os.WriteFile(configPath, raw, 0600))
+		serverArgs = append(serverArgs, "--admission-control-config-file="+configPath)
+	}
+	args, err := json.Marshal(serverArgs)
 	require.NoError(t, err)
 	serverCtx, stop := context.WithCancel(ctx)
 	command := exec.CommandContext(serverCtx, os.Args[0], "-test.run=^TestAppsOwnershipAPIFixtureChild$")
@@ -276,6 +308,18 @@ func TestAppsOwnershipAPIFixture(t *testing.T) {
 	require.NoError(t, err)
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: apiFixtureNamespace}}
 	require.NoError(t, seed.Create(ctx, ns))
+	seal := func() {
+		// All setup requests have completed before closing the one-way process latch.
+		_, err := pipe.Write([]byte{'S'})
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { data, err := os.ReadFile(ackPath); return err == nil && string(data) == "sealed" }, 5*time.Second, 20*time.Millisecond)
+	}
+	return &apiFixture{ctx: ctx, root: rootClient, seed: seed, customer: customer, project: project, projectConfig: projectConfig, tokens: tokens, scheme: scheme, seal: seal}
+}
+
+func TestAppsOwnershipAPIFixture(t *testing.T) {
+	f := startAPIFixture(t, nil)
+	ctx, seed, customer, project := f.ctx, f.seed, f.customer, f.project
 	marks := map[string]string{appsownership.ProjectUIDLabel: string(project.UID), appsownership.AppUIDLabel: "fixture-app-uid"}
 	held := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: apiFixtureNamespace, Name: "held-configmap", Labels: marks}, Data: map[string]string{"value": "original"}}
 	require.NoError(t, seed.Create(ctx, held))
@@ -298,10 +342,7 @@ func TestAppsOwnershipAPIFixture(t *testing.T) {
 	require.False(t, terminating.DeletionTimestamp.IsZero())
 	acquire := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: apiFixtureNamespace, Name: "acquire-after-seal"}}
 	require.NoError(t, seed.Create(ctx, acquire))
-	// All setup requests have completed before closing the one-way process latch.
-	_, err = pipe.Write([]byte{'S'})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool { data, err := os.ReadFile(ackPath); return err == nil && string(data) == "sealed" }, 5*time.Second, 20*time.Millisecond)
+	f.seal()
 	deny := func(t *testing.T, err error) {
 		t.Helper()
 		require.Truef(t, apierrors.IsForbidden(err), "expected guard denial: %v", err)
