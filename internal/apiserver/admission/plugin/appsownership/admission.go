@@ -1,6 +1,6 @@
 // Package appsownership reserves the Apps ownership markers before installations
 // are enabled. It denies protected writes by default; explicitly configured
-// authenticated native controllers can only change status on existing ownership.
+// authenticated native controllers can narrowly change status or finalizers on existing ownership.
 package appsownership
 
 import (
@@ -22,20 +22,22 @@ const (
 
 type Plugin struct {
 	*admission.Handler
-	statusWriters []StatusWriter
-	dynamicClient dynamic.Interface
+	statusWriters    []StatusWriter
+	finalizerWriters []FinalizerWriter
+	dynamicClient    dynamic.Interface
 }
 
 var _ admission.ValidationInterface = &Plugin{}
 
 func Register(plugins *admission.Plugins) {
 	plugins.Register(PluginName, func(reader io.Reader) (admission.Interface, error) {
-		writers, err := readConfiguration(reader)
+		config, err := readConfiguration(reader)
 		if err != nil {
 			return nil, err
 		}
 		p := NewPlugin()
-		p.statusWriters = writers
+		p.statusWriters = config.StatusWriters
+		p.finalizerWriters = config.FinalizerWriters
 		return p, nil
 	})
 }
@@ -54,7 +56,7 @@ func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admissi
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership cannot be checked without the old object"))
 		}
 	}
-	if p.allowStatus(ctx, a) {
+	if p.allowStatus(ctx, a) || p.allowFinalizer(ctx, a) {
 		return nil
 	}
 	objects := []runtime.Object{a.GetOldObject()}

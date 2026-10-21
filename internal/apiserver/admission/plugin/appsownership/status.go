@@ -34,34 +34,42 @@ type StatusWriter struct {
 }
 
 type Configuration struct {
-	APIVersion    string         `json:"apiVersion"`
-	Kind          string         `json:"kind"`
-	StatusWriters []StatusWriter `json:"statusWriters"`
+	APIVersion       string            `json:"apiVersion"`
+	Kind             string            `json:"kind"`
+	StatusWriters    []StatusWriter    `json:"statusWriters"`
+	FinalizerWriters []FinalizerWriter `json:"finalizerWriters"`
 }
 
-func readConfiguration(reader io.Reader) ([]StatusWriter, error) {
+func readConfiguration(reader io.Reader) (Configuration, error) {
 	if reader == nil {
-		return nil, nil
+		return Configuration{}, nil
 	}
 	raw, err := io.ReadAll(io.LimitReader(reader, 64*1024+1))
 	if err != nil || len(raw) > 64*1024 {
-		return nil, fmt.Errorf("Apps ownership configuration cannot be read within 64KiB")
+		return Configuration{}, fmt.Errorf("Apps ownership configuration cannot be read within 64KiB")
 	}
 	var config Configuration
 	if err = yaml.UnmarshalStrict(raw, &config); err != nil {
-		return nil, fmt.Errorf("invalid Apps ownership configuration: %w", err)
+		return Configuration{}, fmt.Errorf("invalid Apps ownership configuration: %w", err)
 	}
-	if config.APIVersion != "apiserver.miloapis.com/v1alpha1" || config.Kind != "AppsOwnershipConfiguration" || len(config.StatusWriters) > 32 {
-		return nil, fmt.Errorf("Apps ownership configuration must have the supported version/kind and at most 32 status writers")
+	if config.APIVersion != "apiserver.miloapis.com/v1alpha1" || config.Kind != "AppsOwnershipConfiguration" || len(config.StatusWriters)+len(config.FinalizerWriters) > 32 {
+		return Configuration{}, fmt.Errorf("Apps ownership configuration must have the supported version/kind and at most 32 native writer rules")
 	}
 	seen := map[StatusWriter]bool{}
 	for _, rule := range config.StatusWriters {
-		if rule.Username == "" || len(rule.Username) > 256 || rule.UID == "" || len(rule.UID) > 128 || rule.Group == "" || len(validation.IsDNS1123Subdomain(rule.Group)) != 0 || len(validation.IsDNS1035Label(rule.Version)) != 0 || len(validation.IsDNS1035Label(rule.Resource)) != 0 || rule.Kind == "" || len(validation.IsCIdentifier(rule.Kind)) != 0 || seen[rule] {
-			return nil, fmt.Errorf("Apps ownership status writer must uniquely pin a principal and exact non-core GVR/kind")
+		if !validWriter(rule) || seen[rule] {
+			return Configuration{}, fmt.Errorf("Apps ownership status writer must uniquely pin a principal and exact non-core GVR/kind")
 		}
 		seen[rule] = true
 	}
-	return config.StatusWriters, nil
+	seenFinalizers := map[FinalizerWriter]bool{}
+	for _, rule := range config.FinalizerWriters {
+		if !validWriter(rule.StatusWriter) || !validNativeFinalizer(rule.Finalizer) || seenFinalizers[rule] {
+			return Configuration{}, fmt.Errorf("Apps ownership finalizer writer must uniquely pin a principal, exact non-core GVR/kind and qualified finalizer")
+		}
+		seenFinalizers[rule] = true
+	}
+	return config, nil
 }
 
 var _ initializer.WantsDynamicClient = &Plugin{}
@@ -69,8 +77,8 @@ var _ admission.InitializationValidator = &Plugin{}
 
 func (p *Plugin) SetDynamicClient(client dynamic.Interface) { p.dynamicClient = client }
 func (p *Plugin) ValidateInitialization() error {
-	if len(p.statusWriters) > 0 && p.dynamicClient == nil {
-		return fmt.Errorf("%s: configured status writers require the root Project client", PluginName)
+	if (len(p.statusWriters) > 0 || len(p.finalizerWriters) > 0) && p.dynamicClient == nil {
+		return fmt.Errorf("%s: configured native writers require the root Project client", PluginName)
 	}
 	return nil
 }
@@ -82,14 +90,9 @@ func (p *Plugin) allowStatus(ctx context.Context, a admission.Attributes) bool {
 	if len(p.statusWriters) == 0 || p.dynamicClient == nil || a.GetOperation() != admission.Update || a.GetSubresource() != "status" {
 		return false
 	}
-	provenance, ok := datumfilters.AuthenticationProvenanceFrom(ctx)
-	effective := a.GetUserInfo()
-	if !ok || provenance.User == nil || effective == nil || provenance.ImpersonationRequested || provenance.User.GetName() != effective.GetName() || provenance.User.GetUID() != effective.GetUID() {
-		return false
-	}
 	matched := false
 	for _, rule := range p.statusWriters {
-		if rule.Username == provenance.User.GetName() && rule.UID == provenance.User.GetUID() && a.GetResource() == (schema.GroupVersionResource{Group: rule.Group, Version: rule.Version, Resource: rule.Resource}) && a.GetKind() == (schema.GroupVersionKind{Group: rule.Group, Version: rule.Version, Kind: rule.Kind}) {
+		if matchesNativeWriter(ctx, a, rule) {
 			matched = true
 			break
 		}
@@ -97,34 +100,60 @@ func (p *Plugin) allowStatus(ctx context.Context, a admission.Attributes) bool {
 	if !matched {
 		return false
 	}
+	old, next, projectUID, ok := ownershipObjects(a)
+	if !ok || !sameOutsideStatus(old, next) {
+		return false
+	}
+	return p.liveOwnershipProject(ctx, projectUID)
+}
+
+func validWriter(rule StatusWriter) bool {
+	return !(rule.Username == "" || len(rule.Username) > 256 || rule.UID == "" || len(rule.UID) > 128 || rule.Group == "" || len(validation.IsDNS1123Subdomain(rule.Group)) != 0 || len(validation.IsDNS1035Label(rule.Version)) != 0 || len(validation.IsDNS1035Label(rule.Resource)) != 0 || rule.Kind == "" || len(validation.IsCIdentifier(rule.Kind)) != 0)
+}
+
+func matchesNativeWriter(ctx context.Context, a admission.Attributes, rule StatusWriter) bool {
+	provenance, ok := datumfilters.AuthenticationProvenanceFrom(ctx)
+	effective := a.GetUserInfo()
+	return ok && provenance.User != nil && effective != nil && !provenance.ImpersonationRequested &&
+		provenance.User.GetName() == effective.GetName() && provenance.User.GetUID() == effective.GetUID() &&
+		rule.Username == provenance.User.GetName() && rule.UID == provenance.User.GetUID() &&
+		a.GetResource() == (schema.GroupVersionResource{Group: rule.Group, Version: rule.Version, Resource: rule.Resource}) &&
+		a.GetKind() == (schema.GroupVersionKind{Group: rule.Group, Version: rule.Version, Kind: rule.Kind})
+}
+
+func ownershipObjects(a admission.Attributes) (runtime.Unstructured, runtime.Unstructured, string, bool) {
 	old, okOld := a.GetOldObject().(runtime.Unstructured)
 	next, okNext := a.GetObject().(runtime.Unstructured)
 	if !okOld || !okNext {
-		return false
+		return nil, nil, "", false
 	}
 	oldMeta, err := meta.Accessor(old)
 	if err != nil {
-		return false
+		return nil, nil, "", false
 	}
 	nextMeta, err := meta.Accessor(next)
 	if err != nil {
-		return false
+		return nil, nil, "", false
 	}
 	projectUID := oldMeta.GetLabels()[ProjectUIDLabel]
 	appUID := oldMeta.GetLabels()[AppUIDLabel]
 	if projectUID == "" || appUID == "" || len(validation.IsValidLabelValue(projectUID)) != 0 || len(validation.IsValidLabelValue(appUID)) != 0 || oldMeta.GetUID() == "" || nextMeta.GetUID() != oldMeta.GetUID() || oldMeta.GetName() != a.GetName() || oldMeta.GetNamespace() != a.GetNamespace() || len(oldMeta.GetOwnerReferences()) != 0 {
-		return false
+		return nil, nil, "", false
 	}
 	for _, obj := range []metav1.Object{oldMeta, nextMeta} {
 		for _, key := range []string{ProjectUIDLabel, AppUIDLabel} {
 			if _, exists := obj.GetAnnotations()[key]; exists {
-				return false
+				return nil, nil, "", false
 			}
 		}
 	}
-	if old.GetObjectKind().GroupVersionKind() != a.GetKind() || next.GetObjectKind().GroupVersionKind() != a.GetKind() || !sameOutsideStatus(old, next) {
-		return false
+	if old.GetObjectKind().GroupVersionKind() != a.GetKind() || next.GetObjectKind().GroupVersionKind() != a.GetKind() {
+		return nil, nil, "", false
 	}
+	return old, next, projectUID, true
+}
+
+func (p *Plugin) liveOwnershipProject(ctx context.Context, projectUID string) bool {
 	projectName, present := milorequest.ProjectID(ctx)
 	if !present || projectName == "" {
 		return false

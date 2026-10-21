@@ -177,7 +177,7 @@ func TestAppsStatusWriterHTTPIntegration(t *testing.T) {
 	requireAppsOwnershipDenial(t, body)
 }
 
-func startStatusProbe(t *testing.T, ctx context.Context) (string, *http.Client, map[string]string, string) {
+func startStatusProbe(t *testing.T, ctx context.Context, finalizers ...appsownership.FinalizerWriter) (string, *http.Client, map[string]string, string) {
 	t.Helper()
 	etcdPath, err := findEtcdBinary()
 	require.NoError(t, err)
@@ -197,7 +197,11 @@ func startStatusProbe(t *testing.T, ctx context.Context) (string, *http.Client, 
 		{Username: "system:serviceaccount:apps-system:controller", UID: "apps-controller-uid", Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes", Kind: "HTTPRoute"},
 		{Username: "system:serviceaccount:apps-system:controller", UID: "apps-controller-uid", Group: "gateway.networking.k8s.io", Version: "v1beta1", Resource: "httproutes", Kind: "HTTPRoute"},
 	}
-	config, err := json.Marshal(map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AdmissionConfiguration", "plugins": []any{map[string]any{"name": appsownership.PluginName, "configuration": appsownership.Configuration{APIVersion: "apiserver.miloapis.com/v1alpha1", Kind: "AppsOwnershipConfiguration", StatusWriters: rules}}}})
+	// A finalizer probe must not gain status authority.
+	if len(finalizers) > 0 {
+		rules = nil
+	}
+	config, err := json.Marshal(map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AdmissionConfiguration", "plugins": []any{map[string]any{"name": appsownership.PluginName, "configuration": appsownership.Configuration{APIVersion: "apiserver.miloapis.com/v1alpha1", Kind: "AppsOwnershipConfiguration", StatusWriters: rules, FinalizerWriters: finalizers}}}})
 	require.NoError(t, err)
 	configPath := filepath.Join(dir, "admission.json")
 	require.NoError(t, os.WriteFile(configPath, config, 0o600))

@@ -16,7 +16,9 @@ exact non-core `group`, `version`, plural `resource`, and `kind`. Wildcards,
 subresource suffixes, missing identities, duplicates, unknown fields, more than
 32 rules and files over 64 KiB fail startup. An absent configuration means zero
 exceptions. A configured plugin without its root dynamic client fails startup.
-Rules are process-start configuration; changing them requires a Milo restart.
+Optional [native finalizer rules](native-finalizer-writers.md) are configured
+separately and share the combined 32-rule limit; a status rule grants no finalizer
+access. Rules are process-start configuration; changing them requires a Milo restart.
 
 An exception requires all of the following:
 

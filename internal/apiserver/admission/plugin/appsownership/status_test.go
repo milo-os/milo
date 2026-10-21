@@ -219,7 +219,7 @@ statusWriters:
 `
 	rules, err := readConfiguration(strings.NewReader(valid))
 	require.NoError(t, err)
-	require.Equal(t, []StatusWriter{statusRule}, rules)
+	require.Equal(t, []StatusWriter{statusRule}, rules.StatusWriters)
 	for _, raw := range []string{"", "{}", valid + "unknown: true\n", strings.Replace(valid, "uid: native-uid", "uid: ''", 1), strings.Replace(valid, "group: compute.datumapis.com", "group: '*'", 1), strings.Replace(valid, "resource: workloads", "resource: workloads/status", 1), valid + "statusWriters: []\n", strings.Repeat(" ", 64*1024+1)} {
 		_, err := readConfiguration(strings.NewReader(raw))
 		require.Error(t, err)
