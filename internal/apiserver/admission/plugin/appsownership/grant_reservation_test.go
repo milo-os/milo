@@ -17,13 +17,22 @@ import (
 )
 
 func TestGrantFamilyReserved(t *testing.T) {
-	for _, version := range []string{"v1alpha1", "v1", "unknown"} {
-		for _, sub := range []string{"", "status", "finalizers", "scale"} {
-			for _, op := range []admission.Operation{admission.Create, admission.Update, admission.Delete} {
-				for _, namespace := range []string{"", "default"} {
-					attrs := admission.NewAttributesRecord(nil, nil, schema.GroupVersionKind{Group: GrantGroup, Version: version, Kind: "Unknown"}, namespace, "", schema.GroupVersionResource{Group: GrantGroup, Version: version, Resource: GrantResource}, sub, op, nil, false, &user.DefaultInfo{Name: "system-admin", UID: "trusted", Groups: []string{user.SystemPrivilegedGroup}})
-					err := NewPlugin().Validate(context.Background(), attrs, nil)
-					require.ErrorContains(t, err, grantReservationMessage)
+	for _, registration := range []string{"", GrantRegistrationV1} {
+		for _, identity := range []string{"customer", "system-admin", "native-status", "native-finalizer"} {
+			for _, version := range []string{"v1alpha1", "v1", "unknown"} {
+				for _, sub := range []string{"", "status", "finalizers", "scale"} {
+					for _, op := range []admission.Operation{admission.Create, admission.Update, admission.Delete} {
+						for _, namespace := range []string{"", "default"} {
+							attrs := admission.NewAttributesRecord(nil, nil, schema.GroupVersionKind{Group: GrantGroup, Version: version, Kind: "Unknown"}, namespace, "", schema.GroupVersionResource{Group: GrantGroup, Version: version, Resource: GrantResource}, sub, op, nil, false, &user.DefaultInfo{Name: identity, UID: "principal-uid", Groups: []string{user.SystemPrivilegedGroup}})
+							p := NewPlugin()
+							p.grantRegistration = registration
+							rule := StatusWriter{Username: identity, UID: "principal-uid", Group: GrantGroup, Version: version, Resource: GrantResource, Kind: "Unknown"}
+							p.statusWriters = []StatusWriter{rule}
+							p.finalizerWriters = []FinalizerWriter{{StatusWriter: rule, Finalizer: "example.test/native"}}
+							err := p.Validate(context.Background(), attrs, nil)
+							require.ErrorContains(t, err, grantReservationMessage, "registration=%q identity=%s version=%s subresource=%s operation=%s", registration, identity, version, sub, op)
+						}
+					}
 				}
 			}
 		}
