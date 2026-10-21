@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -61,6 +63,47 @@ type ResourceClaimOwnershipController struct {
 
 	// newDynamicClient builds the client that reads a claim's owner; nil means dynamic.NewForConfig.
 	newDynamicClient func(*rest.Config) (dynamic.Interface, error)
+
+	// ownerReadBackoff spaces the reads of each granted claim whose owner is not stored yet.
+	ownerReadBackoff     workqueue.TypedRateLimiter[mcreconcile.Request]
+	ownerReadBackoffOnce sync.Once
+}
+
+const (
+	// ownerReadFirstWait is the first wait for an owner that is not stored yet. Admission holds the owner's
+	// create until its claim is granted, so the owner is usually stored milliseconds after the grant.
+	ownerReadFirstWait = 50 * time.Millisecond
+	// ownerReadMaxWait caps the doubling wait between owner reads.
+	ownerReadMaxWait = 2 * time.Second
+)
+
+// claimBackoff is one reconcile's handle on a claim's owner-read backoff. The reconcile forgets the claim
+// when it ends, unless it is waiting for the owner, so the limiter holds only the claims that wait now.
+type claimBackoff struct {
+	limiter workqueue.TypedRateLimiter[mcreconcile.Request]
+	req     mcreconcile.Request
+	waiting bool
+}
+
+// next returns the wait before the claim's next owner read.
+func (b *claimBackoff) next() time.Duration {
+	b.waiting = true
+	return b.limiter.When(b.req)
+}
+
+// end forgets the claim unless next was called.
+func (b *claimBackoff) end() {
+	if !b.waiting {
+		b.limiter.Forget(b.req)
+	}
+}
+
+// backoffFor returns the claim's backoff handle for one reconcile.
+func (r *ResourceClaimOwnershipController) backoffFor(req mcreconcile.Request) *claimBackoff {
+	r.ownerReadBackoffOnce.Do(func() {
+		r.ownerReadBackoff = workqueue.NewTypedItemExponentialFailureRateLimiter[mcreconcile.Request](ownerReadFirstWait, ownerReadMaxWait)
+	})
+	return &claimBackoff{limiter: r.ownerReadBackoff, req: req}
 }
 
 // +kubebuilder:rbac:groups=quota.miloapis.com,resources=resourceclaims,verbs=get;list;watch;update;patch;delete
@@ -75,6 +118,9 @@ func (r *ResourceClaimOwnershipController) Reconcile(ctx context.Context, req mc
 		logger = logger.WithValues("cluster", req.ClusterName)
 		ctx = log.IntoContext(ctx, logger)
 	}
+
+	backoff := r.backoffFor(req)
+	defer backoff.end()
 
 	cluster, err := r.Manager.GetCluster(ctx, req.ClusterName)
 	if err != nil {
@@ -132,8 +178,7 @@ func (r *ResourceClaimOwnershipController) Reconcile(ctx context.Context, req mc
 		// Owner missing; evaluate grace and max age
 		grace := r.getOwnershipGracePeriod()
 		if claimAge < grace {
-			// Short requeue to check again soon
-			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: backoff.next()}, nil
 		}
 
 		// Beyond grace: try once more to resolve owner and rescue

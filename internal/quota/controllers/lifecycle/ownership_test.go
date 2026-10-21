@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -338,5 +339,87 @@ func (tc timelineCase) check(t *testing.T, claim *quotav1alpha1.ResourceClaim, a
 	}
 	if at > tc.wantOwnedBy {
 		t.Errorf("owner reference set at %v; want by %v", at, tc.wantOwnedBy)
+	}
+}
+
+// TestResourceClaimOwnershipController_BackoffEndsWithEveryExit starts each claim one step into its backoff and
+// checks that every exit but "owner not stored yet" forgets it, so a later claim of the same name starts again
+// at the first wait.
+func TestResourceClaimOwnershipController_BackoffEndsWithEveryExit(t *testing.T) {
+	now := time.Now()
+	owned := widgetClaim("claim", now)
+	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "test.miloapis.com/v1", Kind: "Widget", Name: "widget", UID: "widget-uid"}}
+	deleting := widgetClaim("claim", now)
+	deleting.Finalizers = []string{"test.miloapis.com/hold"}
+	deleting.DeletionTimestamp = &metav1.Time{Time: now}
+	notGranted := widgetClaim("claim", now)
+	notGranted.Status.Conditions = nil
+
+	cases := []struct {
+		name         string
+		claim        *quotav1alpha1.ResourceClaim // nil: the claim is gone
+		ownerStored  bool
+		noRESTMapper bool
+		wantErr      bool
+		wantSteps    int
+	}{
+		{name: "claim gone"},
+		{name: "claim deleting", claim: deleting},
+		{name: "manual claim", claim: grantedManualClaim("claim", "default")},
+		{name: "claim not granted", claim: notGranted},
+		{name: "claim already owned", claim: owned},
+		{name: "owner found", claim: widgetClaim("claim", now), ownerStored: true},
+		{name: "orphan past max age deleted", claim: widgetClaim("claim", now.Add(-time.Minute))},
+		{name: "owner read error", claim: widgetClaim("claim", now), noRESTMapper: true, wantErr: true},
+		{name: "owner not stored yet", claim: widgetClaim("claim", now), wantSteps: 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var objs []client.Object
+			if tc.claim != nil {
+				objs = append(objs, tc.claim)
+			}
+			f := newOwnerFixture(t, func() bool { return tc.ownerStored }, objs...)
+			if tc.noRESTMapper {
+				f.r.restMapper = nil
+			}
+			req := claimRequest("claim")
+			f.r.backoffFor(req).next()
+
+			if _, err := f.r.Reconcile(context.Background(), req); (err != nil) != tc.wantErr {
+				t.Fatalf("Reconcile() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got := f.r.ownerReadBackoff.NumRequeues(req); got != tc.wantSteps {
+				t.Errorf("backoff steps after the reconcile = %d; want %d", got, tc.wantSteps)
+			}
+		})
+	}
+}
+
+// TestResourceClaimOwnershipController_BackoffPerCluster checks that claims of the same name in two project
+// control planes keep separate backoffs.
+func TestResourceClaimOwnershipController_BackoffPerCluster(t *testing.T) {
+	ctx := context.Background()
+	f := newOwnerFixture(t, func() bool { return false }, widgetClaim("claim", time.Now()))
+	a, b := claimRequest("claim"), claimRequest("claim")
+	a.ClusterName, b.ClusterName = "project-a", "project-b"
+
+	var waitsA []time.Duration
+	for range 2 {
+		res, err := f.r.Reconcile(ctx, a)
+		if err != nil {
+			t.Fatalf("Reconcile(a): %v", err)
+		}
+		waitsA = append(waitsA, res.RequeueAfter)
+	}
+	resB, err := f.r.Reconcile(ctx, b)
+	if err != nil {
+		t.Fatalf("Reconcile(b): %v", err)
+	}
+
+	want := []time.Duration{ownerReadFirstWait, 2 * ownerReadFirstWait, ownerReadFirstWait}
+	if got := append(waitsA, resB.RequeueAfter); !slices.Equal(got, want) {
+		t.Errorf("waits a, a, b = %v; want %v", got, want)
 	}
 }
