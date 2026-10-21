@@ -1,6 +1,6 @@
 // Package appsownership reserves the Apps ownership markers before installations
-// are enabled. This bootstrap guard has no trusted writers: neither service
-// identities, system:masters, nor an impersonated identity can bypass it.
+// are enabled. It denies protected writes by default; explicitly configured
+// authenticated native controllers can only change status on existing ownership.
 package appsownership
 
 import (
@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/client-go/dynamic"
 )
 
 const (
@@ -19,13 +20,23 @@ const (
 	AppUIDLabel     = "apps.miloapis.com/app-uid"
 )
 
-type Plugin struct{ *admission.Handler }
+type Plugin struct {
+	*admission.Handler
+	statusWriters []StatusWriter
+	dynamicClient dynamic.Interface
+}
 
 var _ admission.ValidationInterface = &Plugin{}
 
 func Register(plugins *admission.Plugins) {
-	plugins.Register(PluginName, func(_ io.Reader) (admission.Interface, error) {
-		return NewPlugin(), nil
+	plugins.Register(PluginName, func(reader io.Reader) (admission.Interface, error) {
+		writers, err := readConfiguration(reader)
+		if err != nil {
+			return nil, err
+		}
+		p := NewPlugin()
+		p.statusWriters = writers
+		return p, nil
 	})
 }
 
@@ -37,11 +48,14 @@ func NewPlugin() *Plugin {
 // server-side apply requests. Presence, rather than a nonempty value or complete
 // pair, is what reserves a marker. A missing ProjectID never bypasses the guard:
 // direct internal API endpoints need the same protection as project URL paths.
-func (p *Plugin) Validate(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
+func (p *Plugin) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
 	if a.GetOperation() == admission.Update || a.GetOperation() == admission.Delete {
 		if a.GetOldObject() == nil {
 			return admission.NewForbidden(a, fmt.Errorf("Apps ownership cannot be checked without the old object"))
 		}
+	}
+	if p.allowStatus(ctx, a) {
+		return nil
 	}
 	objects := []runtime.Object{a.GetOldObject()}
 	if a.GetOperation() != admission.Delete {

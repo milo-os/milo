@@ -159,6 +159,9 @@ func NewCommand() *cobra.Command {
 	s.Features.AddFlags(namedFlagSets.FlagSet("features"))
 	s.Authentication.AddFlags(namedFlagSets.FlagSet("authentication"))
 	s.Authorization.AddFlags(namedFlagSets.FlagSet("authorization"))
+	// Expose plugin configuration without exposing switches that remove the
+	// mandatory Apps ownership guard. Empty configuration retains deny-all.
+	namedFlagSets.FlagSet("admission").StringVar(&s.Admission.GenericAdmission.ConfigFile, "admission-control-config-file", s.Admission.GenericAdmission.ConfigFile, "Path to an AdmissionConfiguration file; Apps ownership remains mandatory.")
 	s.Metrics.AddFlags(namedFlagSets.FlagSet("metrics"))
 	logsapi.AddFlags(s.Logs, namedFlagSets.FlagSet("logs"))
 	s.Traces.AddFlags(namedFlagSets.FlagSet("traces"))
