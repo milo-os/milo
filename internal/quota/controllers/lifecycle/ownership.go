@@ -58,6 +58,9 @@ type ResourceClaimOwnershipController struct {
 
 	// RESTMapper for reliable GVK<->GVR resolution and scope detection
 	restMapper meta.RESTMapper
+
+	// newDynamicClient builds the client that reads a claim's owner; nil means dynamic.NewForConfig.
+	newDynamicClient func(*rest.Config) (dynamic.Interface, error)
 }
 
 // +kubebuilder:rbac:groups=quota.miloapis.com,resources=resourceclaims,verbs=get;list;watch;update;patch;delete
@@ -233,7 +236,7 @@ func (r *ResourceClaimOwnershipController) resolveOwner(ctx context.Context, clu
 		return nil, schema.GroupVersionKind{}, "", fmt.Errorf("RESTMapper not initialized")
 	}
 
-	dynamicClient, err := dynamic.NewForConfig(cluster.GetConfig())
+	dynamicClient, err := r.dynamicClientFor(cluster.GetConfig())
 	if err != nil {
 		return nil, schema.GroupVersionKind{}, "", fmt.Errorf("failed to create dynamic client for cluster: %w", err)
 	}
@@ -269,6 +272,14 @@ func (r *ResourceClaimOwnershipController) resolveOwner(ctx context.Context, clu
 		obj.SetKind(gvk.Kind)
 	}
 	return obj, gvk, ownerNS, nil
+}
+
+// dynamicClientFor returns the client that reads a claim's owner in a cluster.
+func (r *ResourceClaimOwnershipController) dynamicClientFor(cfg *rest.Config) (dynamic.Interface, error) {
+	if r.newDynamicClient != nil {
+		return r.newDynamicClient(cfg)
+	}
+	return dynamic.NewForConfig(cfg)
 }
 
 // applyOwnerReferenceSSA sets a single controller ownerReference on the claim using Server-Side Apply.
