@@ -2,13 +2,10 @@ package projectpurge
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -274,10 +271,11 @@ func firstRefusal(refused map[string]error) error {
 
 // Status reports whether every resource in a project's control plane is gone.
 // A project has drained once its namespaces have been removed and the
-// namespaces that cannot be deleted hold nothing. Only errors that definitively
-// indicate the per-project API server is gone (e.g. connection refused) are
-// treated as complete. All other errors (timeouts, 500s, 429s, RBAC issues,
-// context cancellation) are returned so the controller can retry.
+// namespaces that cannot be deleted hold nothing. An unreachable endpoint or
+// failed list/discovery is not evidence that stored resources are gone. Every
+// read failure is returned so the controller retains the project and retries;
+// reclaiming a permanently lost control plane requires a separate recovery
+// decision, never an inference from a transport error.
 func (p *Purger) Status(ctx context.Context, cfg *rest.Config, project string) (Status, error) {
 	core, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -307,9 +305,6 @@ func purgeStatus(
 ) (Status, error) {
 	nsList, err := core.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		if isServerGone(err) {
-			return Status{Complete: true}, nil
-		}
 		return Status{}, fmt.Errorf("listing namespaces: %w", err)
 	}
 
@@ -386,9 +381,6 @@ func remainingContent(
 		for _, ns := range namespaces {
 			list, err := dyn.Resource(r.gvr).Namespace(ns).List(ctx, metav1.ListOptions{Limit: maxReportedBlockers})
 			if err != nil {
-				if ignorable(err) {
-					continue
-				}
 				if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 					return fmt.Errorf("rbac forbids listing %s in ns=%s: %w", r.gvr, ns, err)
 				}
@@ -419,7 +411,7 @@ func remainingContent(
 // deletion is intentionally omitted.
 func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
 	lists, err := discoverResources()
-	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
+	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
@@ -427,7 +419,7 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 	for _, l := range lists {
 		gv, err := schema.ParseGroupVersion(l.GroupVersion)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("invalid discovered group version: %w", err)
 		}
 		for _, ar := range l.APIResources {
 			verbs := sets.NewString(ar.Verbs...)
@@ -451,26 +443,6 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 		}
 	}
 	return namespaced, nil
-}
-
-// isServerGone returns true when the error indicates the remote API server is
-// permanently unreachable — connection refused, or the API endpoint itself no
-// longer exists. Transient failures (timeouts, 500s, throttling, RBAC) return
-// false so the caller retries.
-func isServerGone(err error) bool {
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		if errors.Is(opErr.Err, syscall.ECONNREFUSED) {
-			return true
-		}
-	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return true
-	}
-	if apierrors.IsNotFound(err) {
-		return true
-	}
-	return false
 }
 
 // helper (generic, named)

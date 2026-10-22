@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"syscall"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/discovery"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -131,18 +134,54 @@ func TestPurgeStatus_ContentInProtectedNamespaceBlocks(t *testing.T) {
 	}
 }
 
-func TestPurgeStatus_ServerGoneIsComplete(t *testing.T) {
-	core := fake.NewSimpleClientset()
-	core.PrependReactor("list", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, syscall.ECONNREFUSED
-	})
-
-	status, err := purgeStatus(context.Background(), core, newDynamicClient(), testDiscovery())
-	if err != nil {
-		t.Fatalf("purgeStatus: %v", err)
+func TestPurgeStatus_UnavailableNamespaceListIsNotComplete(t *testing.T) {
+	for _, listErr := range []error{
+		syscall.ECONNREFUSED,
+		apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, ""),
+		apierrors.NewMethodNotSupported(schema.GroupResource{Resource: "namespaces"}, "list"),
+	} {
+		t.Run(listErr.Error(), func(t *testing.T) {
+			core := fake.NewSimpleClientset()
+			core.PrependReactor("list", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, listErr })
+			status, err := purgeStatus(context.Background(), core, newDynamicClient(), testDiscovery())
+			if err == nil || status.Complete {
+				t.Fatalf("failed list treated as drained: status=%+v err=%v", status, err)
+			}
+		})
 	}
-	if !status.Complete {
-		t.Fatal("expected a project whose API server is gone to be complete")
+}
+
+func TestPurgeStatus_PartialDiscoveryIsNotComplete(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("default"))
+	partial := func() ([]*metav1.APIResourceList, error) {
+		lists, _ := testDiscovery()()
+		return lists, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+			{Group: "unavailable.example", Version: "v1"}: errors.New("backend unavailable"),
+		}}
+	}
+	status, err := purgeStatus(context.Background(), core, newDynamicClient(), partial)
+	if err == nil || status.Complete {
+		t.Fatalf("partial discovery treated as drained: status=%+v err=%v", status, err)
+	}
+	if _, err := namespacedResources(partial); err == nil {
+		t.Fatal("partial discovery must also block starting purge")
+	}
+}
+
+func TestPurgeStatus_DiscoveredResourceListFailureIsNotComplete(t *testing.T) {
+	for _, listErr := range []error{
+		apierrors.NewNotFound(configMapGVR.GroupResource(), ""),
+		apierrors.NewMethodNotSupported(configMapGVR.GroupResource(), "list"),
+	} {
+		t.Run(listErr.Error(), func(t *testing.T) {
+			core := fake.NewSimpleClientset(namespace("default"))
+			dyn := newDynamicClient()
+			dyn.PrependReactor("list", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, listErr })
+			status, err := purgeStatus(context.Background(), core, dyn, testDiscovery())
+			if err == nil || status.Complete {
+				t.Fatalf("failed content list treated as drained: status=%+v err=%v", status, err)
+			}
+		})
 	}
 }
 
