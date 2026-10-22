@@ -1,0 +1,68 @@
+package milo
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
+)
+
+// A bounded diagnostic, not an acceptance test: records that cache sync is
+// currently bounded only by manager cancellation. A production outage must not
+// need manager shutdown to let the next project engage.
+func TestAppsUnavailableCacheExperiment(t *testing.T) {
+	p, project := newTestProvider(metav1.ConditionTrue, nil)
+	entered := make(chan context.Context, 1)
+	p.opts.ClusterOptions = append(p.opts.ClusterOptions, func(o *cluster.Options) {
+		o.NewCache = func(_ *rest.Config, _ cache.Options) (cache.Cache, error) {
+			return &appsStalledCache{entered: entered}, nil
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(project)})
+		done <- err
+	}()
+	select {
+	case syncContext := <-entered:
+		_, bounded := syncContext.Deadline()
+		require.False(t, bounded, "upstream now bounds cache sync; revisit this diagnostic")
+		t.Log("OBSERVED: Ready project cache sync receives no deadline; the sole discovery worker remains occupied until manager context cancellation")
+	case <-time.After(time.Second * 5):
+		t.Fatal("did not reach cache sync")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("unexpected early return: %v", err)
+	default:
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "failed to sync cache")
+	case <-time.After(time.Second * 5):
+		t.Fatal("provider did not stop after cancellation")
+	}
+	require.Empty(t, p.projects)
+}
+
+type appsStalledCache struct {
+	cache.Cache
+	entered chan context.Context
+}
+
+func (c *appsStalledCache) Start(ctx context.Context) error { <-ctx.Done(); return nil }
+func (c *appsStalledCache) WaitForCacheSync(ctx context.Context) bool {
+	c.entered <- ctx
+	<-ctx.Done()
+	return false
+}

@@ -377,6 +377,9 @@ func (c *Config) Complete() (CompletedConfig, error) {
 }
 
 func NewConfig(opts options.CompletedOptions) (*Config, error) {
+	if err := validateAppsOwnershipAdmission(opts.Admission); err != nil {
+		return nil, err
+	}
 	var registry *discoveryctx.Registry
 	if utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter) {
 		registry = discoveryctx.NewRegistry()
