@@ -1,0 +1,36 @@
+name: Prometheus Rules Tests
+
+on:
+  push:
+    paths:
+      - 'config/telemetry/alerts/**'
+      - 'test/prometheus-rules/**'
+      - 'Taskfile.yaml'
+      - '.github/workflows/test-prometheus-rules.yaml'
+
+jobs:
+  test-prometheus-rules:
+    runs-on: ubuntu-latest
+    env:
+      PROMETHEUS_VERSION: 3.13.2
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install promtool
+        run: |
+          curl -fsSL -o /tmp/prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          tar -xzf /tmp/prometheus.tar.gz -C /tmp
+          sudo install -m 0755 "/tmp/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+          yq --version
+
+      - name: Run the rule tests against the rules that ship
+        run: task test-prometheus-rules

@@ -573,7 +573,20 @@ tasks:
             test_name=$(basename "$test_file")
             echo "🔍 Testing: $test_file"
 
-            if ! OUTPUT=$(cd "$test_dir" && promtool test rules "$test_name" 2>&1); then
+            # A test names the PrometheusRule that ships. promtool reads bare rule groups, so each named
+            # resource's spec is written beside a copy of the test, and the test runs against what deploys.
+            work=$(mktemp -d)
+            for rule_file in $(yq '.rule_files[]' "$test_file"); do
+              if yq -e '.kind == "PrometheusRule"' "$test_dir/$rule_file" >/dev/null 2>&1; then
+                yq '.spec' "$test_dir/$rule_file" > "$work/$(echo "$rule_file" | tr '/' '_')"
+              else
+                echo "❌ '$test_file' names '$rule_file', which is not a PrometheusRule"
+                HAS_ERRORS=1
+              fi
+            done
+            yq '.rule_files |= map(sub("/"; "_"))' "$test_file" > "$work/$test_name"
+
+            if ! OUTPUT=$(cd "$work" && promtool test rules "$test_name" 2>&1); then
               echo ""
               echo "❌ Test failed for '$test_file':"
               echo "----------------------------------------"
@@ -584,6 +597,7 @@ tasks:
             else
               echo "✅ $test_file passed"
             fi
+            rm -rf "$work"
           done
 
           if [ "$HAS_ERRORS" -eq 1 ]; then

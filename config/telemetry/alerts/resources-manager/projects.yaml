@@ -20,3 +20,22 @@ spec:
             runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
             summary: "Project {{ $labels.resource_name }} is stuck creating for over 60 seconds"
             description: "Project {{ $labels.resource_name }} has been in creation state for {{ $value }} seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
+
+        # A deleted project waits until every resource in its control plane is gone, and the purge never removes a
+        # finalizer, so a finalizer that no component serves holds the project for good. A normal deletion drains in
+        # minutes. The gauges are set by the leader only; a pod that lost the lease keeps its last values, so only the
+        # pod that holds the lease is read.
+        - alert: ProjectStuckDeleting
+          expr: |
+            (milo_resourcemanager_project_deletion_pending_seconds > 3600)
+            and on (pod, project) (milo_resourcemanager_project_deletion_blocking_resources > 0)
+            and on (pod) (leader_election_master_status{name="datum-controller-manager"} == 1)
+          for: 15m
+          labels:
+            severity: warning
+            service: milo
+            team: platform
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-deleting.md"
+            summary: "Project {{ $labels.project }} has been deleting for more than an hour"
+            description: "Project {{ $labels.project }} has waited {{ $value | humanizeDuration }} for its resources to drain. Its ResourceCleanup condition names each resource still holding it and the finalizer that holds it."

@@ -1,104 +1,116 @@
 rule_files:
-  - projects-slo-rules.yaml
+  - ../../../../config/telemetry/alerts/resources-manager/projects.yaml
 
 evaluation_interval: 30s
 
+# ProjectStuckCreatingSLOViolation fires once a project has been older than 60 seconds without Ready for the rule's
+# `for: 2m`. Each series below starts at the creation time it names, so the alert fires 2 minutes after the first
+# evaluation that finds the project older than 60 seconds.
 tests:
-  # Test for ProjectStuckCreatingSLOViolation - Project created more than 60s ago but not ready
+  # Created 60 seconds before the start: older than 60 seconds from 1m, so it fires at 3m
   - interval: 1m
     input_series:
-      # Project created 120 seconds ago (eval_time 60s - 120s = timestamp -60)
       - series: 'milo_projects_created_timestamp{resource_name="test-project"}'
-        values: '-60+0x3'
-      # Project status condition Ready is False (0)
+        values: '-60+0x5'
       - series: 'milo_projects_status_condition{resource_name="test-project", type="Ready"}'
-        values: '0+0x3'
+        values: '0+0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 3m
         alertname: ProjectStuckCreatingSLOViolation
         exp_alerts:
           - exp_labels:
               severity: critical
               slo_violation: "true"
+              service: milo
+              team: platform
               resource_name: test-project
             exp_annotations:
               runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
               summary: "Project test-project is stuck creating for over 60 seconds"
-              description: "Project test-project has been in creation state for 120 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
+              description: "Project test-project has been in creation state for 240 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
 
-  # Test for ProjectStuckCreatingSLOViolation - Project ready (should NOT alert)
+  # A ready project never alerts
   - interval: 1m
     input_series:
-      # Project created 120 seconds ago
       - series: 'milo_projects_created_timestamp{resource_name="ready-project"}'
-        values: '-60+0x3'
-      # Project status condition Ready is True (1)
+        values: '-60+0x5'
       - series: 'milo_projects_status_condition{resource_name="ready-project", type="Ready"}'
-        values: '1+0x3'
+        values: '1+0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 3m
         alertname: ProjectStuckCreatingSLOViolation
         exp_alerts: []
 
-  # Edge case test - Project created exactly 60s ago (should NOT alert)
+  # Created at the start: exactly 60 seconds old at 1m, which is not over 60, so older than 60 seconds first at 1m30s;
+  # pending, not firing, at 3m, and firing from 3m30s
   - interval: 1m
     input_series:
-      # Project created exactly 60 seconds ago (time() - created = 60)
-      # If eval_time is 1m (60s), then created should be 0
       - series: 'milo_projects_created_timestamp{resource_name="edge-case-project"}'
-        values: '0+0x3'
-      # Project status condition Ready is False (0)
+        values: '0+0x5'
       - series: 'milo_projects_status_condition{resource_name="edge-case-project", type="Ready"}'
-        values: '0+0x3'
+        values: '0+0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 3m
         alertname: ProjectStuckCreatingSLOViolation
         exp_alerts: []
-
-  # Test for ProjectStuckCreatingSLOViolation - Project created 90s ago but not ready (should alert)
-  - interval: 1m
-    input_series:
-      # Project created 90 seconds ago (eval_time 60s - 90s = timestamp -30)
-      - series: 'milo_projects_created_timestamp{resource_name="stuck-project"}'
-        values: '-30+0x3'
-      # Project status condition Ready is False (0)
-      - series: 'milo_projects_status_condition{resource_name="stuck-project", type="Ready"}'
-        values: '0+0x3'
-    alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 3m30s
         alertname: ProjectStuckCreatingSLOViolation
         exp_alerts:
           - exp_labels:
               severity: critical
               slo_violation: "true"
+              service: milo
+              team: platform
+              resource_name: edge-case-project
+            exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
+              summary: "Project edge-case-project is stuck creating for over 60 seconds"
+              description: "Project edge-case-project has been in creation state for 210 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
+
+  # Created 30 seconds before the start: older than 60 seconds from 1m, so it fires at 3m
+  - interval: 1m
+    input_series:
+      - series: 'milo_projects_created_timestamp{resource_name="stuck-project"}'
+        values: '-30+0x5'
+      - series: 'milo_projects_status_condition{resource_name="stuck-project", type="Ready"}'
+        values: '0+0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProjectStuckCreatingSLOViolation
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo_violation: "true"
+              service: milo
+              team: platform
               resource_name: stuck-project
             exp_annotations:
               runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
               summary: "Project stuck-project is stuck creating for over 60 seconds"
-              description: "Project stuck-project has been in creation state for 90 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
+              description: "Project stuck-project has been in creation state for 210 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
 
-  # Test with multiple projects - only the stuck one should alert
+  # Two projects created 90 seconds before the start: only the one that is not ready alerts
   - interval: 1m
     input_series:
-      # Stuck project created 150 seconds ago
       - series: 'milo_projects_created_timestamp{resource_name="multi-stuck-project"}'
-        values: '-90+0x3'
+        values: '-90+0x5'
       - series: 'milo_projects_status_condition{resource_name="multi-stuck-project", type="Ready"}'
-        values: '0+0x3'
-      # Ready project created 150 seconds ago but is ready
+        values: '0+0x5'
       - series: 'milo_projects_created_timestamp{resource_name="multi-ready-project"}'
-        values: '-90+0x3'
+        values: '-90+0x5'
       - series: 'milo_projects_status_condition{resource_name="multi-ready-project", type="Ready"}'
-        values: '1+0x3'
+        values: '1+0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 3m
         alertname: ProjectStuckCreatingSLOViolation
         exp_alerts:
           - exp_labels:
               severity: critical
               slo_violation: "true"
+              service: milo
+              team: platform
               resource_name: multi-stuck-project
             exp_annotations:
               runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-creating-slo-violation.md"
               summary: "Project multi-stuck-project is stuck creating for over 60 seconds"
-              description: "Project multi-stuck-project has been in creation state for 150 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."
+              description: "Project multi-stuck-project has been in creation state for 270 seconds without reaching Ready status, which exceeds the 60-second SLO threshold."

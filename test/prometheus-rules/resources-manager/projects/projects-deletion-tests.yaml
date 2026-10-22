@@ -1,0 +1,79 @@
+rule_files:
+  - ../../../../config/telemetry/alerts/resources-manager/projects.yaml
+
+evaluation_interval: 30s
+
+# ProjectStuckDeleting fires once the controller manager's leader has reported a project deleting for more than an
+# hour, still held by at least one resource, for the rule's `for: 15m`. The gauges are the leader's: a pod that lost
+# the lease keeps its last values, and the rule reads only the pod that holds the lease.
+tests:
+  # Deleting for 3660 s at 1m and growing, one blocker: pending from 1m, firing from 16m
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_deletion_pending_seconds{pod="cm-a", project="stuck-project"}'
+        values: '3600+60x20'
+      - series: 'milo_resourcemanager_project_deletion_blocking_resources{pod="cm-a", project="stuck-project"}'
+        values: '1+0x20'
+      - series: 'leader_election_master_status{pod="cm-a", name="datum-controller-manager"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ProjectStuckDeleting
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ProjectStuckDeleting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: milo
+              team: platform
+              pod: cm-a
+              project: stuck-project
+            exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-stuck-deleting.md"
+              summary: "Project stuck-project has been deleting for more than an hour"
+              description: "Project stuck-project has waited 1h 16m 0s for its resources to drain. Its ResourceCleanup condition names each resource still holding it and the finalizer that holds it."
+
+  # A normal deletion: 120 seconds, then the project is gone and its series with it
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_deletion_pending_seconds{pod="cm-a", project="normal-project"}'
+        values: '60 120 _x18'
+      - series: 'milo_resourcemanager_project_deletion_blocking_resources{pod="cm-a", project="normal-project"}'
+        values: '1 1 _x18'
+      - series: 'leader_election_master_status{pod="cm-a", name="datum-controller-manager"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ProjectStuckDeleting
+        exp_alerts: []
+
+  # Past an hour with nothing left to drain: about to finish, not stuck
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_deletion_pending_seconds{pod="cm-a", project="draining-project"}'
+        values: '3700+60x20'
+      - series: 'milo_resourcemanager_project_deletion_blocking_resources{pod="cm-a", project="draining-project"}'
+        values: '0+0x20'
+      - series: 'leader_election_master_status{pod="cm-a", name="datum-controller-manager"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ProjectStuckDeleting
+        exp_alerts: []
+
+  # A past leader's frozen gauge: the pod lost the lease and keeps its last value; the new leader has none
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_deletion_pending_seconds{pod="cm-b", project="finished-project"}'
+        values: '5000+0x20'
+      - series: 'milo_resourcemanager_project_deletion_blocking_resources{pod="cm-b", project="finished-project"}'
+        values: '1+0x20'
+      - series: 'leader_election_master_status{pod="cm-b", name="datum-controller-manager"}'
+        values: '0+0x20'
+      - series: 'leader_election_master_status{pod="cm-a", name="datum-controller-manager"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ProjectStuckDeleting
+        exp_alerts: []
