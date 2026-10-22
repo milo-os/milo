@@ -75,7 +75,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	// Register JSON logging format
 	_ "k8s.io/component-base/logs/json/register"
@@ -661,13 +660,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			// controller-manager replica, not only the elected leader -- see the
 			// TODO in pkg/multicluster-runtime/milo/nonleader.go
 			// (datum-cloud/compute#117).
-			mcMgr, err := mcmanager.New(ctrlConfig, miloprovider.WithoutAutoStart(provider), mcmanager.Options{
-				Scheme: Scheme,
-				Logger: logger.WithName("multicluster"),
-				Metrics: metricsserver.Options{
-					BindAddress: "0", // Avoid port conflict with main manager
-				},
-			})
+			mcMgr, err := newQuotaManager(ctrlConfig, miloprovider.WithoutAutoStart(provider), logger.WithName("multicluster"), controllerContext.RESTMapper)
 			if err != nil {
 				logger.Error(err, "Error creating multicluster manager")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
