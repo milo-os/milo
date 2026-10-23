@@ -260,10 +260,12 @@ func (c *Cache) ReadinessCheck() healthz.HealthChecker {
 // or for one just deleted. A name storage does not hold is NotFound; any
 // other failure of the GET is an InternalError, as upstream returns it.
 func (c *Cache) Lookup(ctx context.Context, name string) (Project, error) {
-	if e, ok := c.store.lookup(name); ok && !c.liveLookupForced(name, e.project) {
+	e, seen := c.store.lookup(name)
+	if seen && !c.liveLookupForced(name, e.project) {
 		return e.project, nil
 	}
 	u, err := c.client.Resource(ProjectGVR).Get(ctx, name, metav1.GetOptions{})
+	countLiveLookup(ctx, seen, err)
 	if apierrors.IsNotFound(err) {
 		return Project{}, err
 	}
@@ -290,6 +292,21 @@ func (c *Cache) liveLookupForced(name string, cached Project) bool {
 // Project's DELETE, before the reflector can have seen the deletion.
 func (c *Cache) ForceLiveLookup(name string) {
 	c.forceLive.Add(name, true, forceLiveLookupTTL)
+}
+
+// LiveFromView returns the Project the reflector shows live under name, and
+// false when it holds none, shows it deleting, or the name's DELETE was
+// recorded in the last forceLiveLookupTTL: then only storage could say which
+// Project the name refers to. It never reads storage.
+func (c *Cache) LiveFromView(name string) (Project, bool) {
+	e, ok := c.store.lookup(name)
+	if !ok || e.project.Deleting {
+		return Project{}, false
+	}
+	if _, forced := c.forceLive.Get(name); forced {
+		return Project{}, false
+	}
+	return e.project, true
 }
 
 // Project returns the named Project's state, and false when the cache holds no

@@ -225,9 +225,12 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 // volume. A writer that retries a refused write in a loop would otherwise log at its own rate.
 const refusalLogInterval = 10 * time.Second
 
-// ProjectLookup tells the storage which Project a name refers to now.
+// ProjectLookup tells the storage which Project a name refers to now: Lookup
+// reads storage when the view cannot answer, and LiveFromView answers from the
+// view alone.
 type ProjectLookup interface {
 	Lookup(ctx context.Context, name string) (projectstate.Project, error)
+	LiveFromView(name string) (projectstate.Project, bool)
 }
 
 // projectMux implements storage.Interface and routes to a per-project child.
@@ -325,11 +328,10 @@ func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
 	return m.childForProject(project)
 }
 
-// admit looks up the Project a request into its plane names. A write into a
+// admit looks up the Project a write into its plane names. A write into a
 // Project that storage does not hold, or that cannot be read, is refused. A
 // live Project is bootstrapped where this kind bootstraps; a deleting one is
-// not. A request that neither writes nor bootstraps looks nothing up, since
-// it would use neither answer.
+// not. A read refuses nothing, so it asks the view alone.
 //
 // Upstream's NamespaceLifecycle refuses only a create into a missing
 // namespace and lets an update through (k8s.io/apiserver v0.37.1,
@@ -342,18 +344,32 @@ func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
 // design, so an update to one of them in a gone Project is refused,
 // and counted with reason NotFound.
 func (m *projectMux) admit(ctx context.Context, project string) error {
-	verb, writes := writeVerb(ctx)
-	if !writes && m.bootstrapper == nil {
+	verb, writes := projectstate.WriteVerb(ctx)
+	if !writes {
+		m.bootstrapFromView(ctx, project)
 		return nil
 	}
 	p, err := m.projects.Lookup(ctx, project)
-	if err != nil && writes {
+	if err != nil {
 		return m.refuse(ctx, project, verb, err)
 	}
-	if err == nil && !p.Deleting {
+	if !p.Deleting {
 		m.bootstrapper.Ensure(ctx, project, p.UID)
 	}
 	return nil
+}
+
+// bootstrapFromView bootstraps a read's Project only when the view shows it
+// live and its name has no recorded DELETE. A storage read would decide only
+// the bootstrap, and the first write into a Project the view has not seen
+// bootstraps it after its own lookup.
+func (m *projectMux) bootstrapFromView(ctx context.Context, project string) {
+	if m.bootstrapper == nil {
+		return
+	}
+	if p, ok := m.projects.LiveFromView(project); ok {
+		m.bootstrapper.Ensure(ctx, project, p.UID)
+	}
 }
 
 // refuse returns err for a write into project's plane, counted, and logged at
@@ -370,23 +386,6 @@ func (m *projectMux) refuse(ctx context.Context, project, verb string, err error
 			"verb", verb, "user", requestUser(ctx), "reason", reason)
 	}
 	return err
-}
-
-// writeVerb returns the request's verb when the request creates or changes an
-// object: create, update or patch. Reads and deletes are served as before.
-// Storage cannot tell them apart itself: a DELETE of an object with
-// finalizers arrives as GuaranteedUpdate, as an update does, so the request's
-// own verb decides.
-func writeVerb(ctx context.Context) (string, bool) {
-	info, ok := genericapirequest.RequestInfoFrom(ctx)
-	if !ok {
-		return "", false
-	}
-	switch info.Verb {
-	case "create", "update", "patch":
-		return info.Verb, true
-	}
-	return "", false
 }
 
 // requestUser names the request's user, or "" when the context carries none.
