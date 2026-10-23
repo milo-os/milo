@@ -14,8 +14,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
-
-	"go.miloapis.com/milo/internal/apiserver/projectstate"
 )
 
 const (
@@ -27,18 +25,12 @@ const (
 	defaultBootstrapReadyTTL   = 10 * time.Minute
 )
 
-// ProjectLookup tells the bootstrapper which Project a name refers to now.
-type ProjectLookup interface {
-	Lookup(ctx context.Context, name string) (projectstate.Project, error)
-}
-
 type NamespaceBootstrapper struct {
 	timeout    time.Duration
 	retryAfter time.Duration
 	readyTTL   time.Duration
 	now        func() time.Time
 	run        func(ctx context.Context, project string) error
-	projects   ProjectLookup
 
 	ready sync.Map
 
@@ -61,16 +53,16 @@ type bootstrapAttempt struct {
 	finished time.Time
 }
 
-func NewNamespaceBootstrapper(loopbackConfig *rest.Config, timeout time.Duration, projects ProjectLookup) *NamespaceBootstrapper {
+func NewNamespaceBootstrapper(loopbackConfig *rest.Config, timeout time.Duration) *NamespaceBootstrapper {
 	if loopbackConfig == nil {
 		return nil
 	}
 	return newNamespaceBootstrapper(timeout, func(ctx context.Context, project string) error {
 		return createMiloSystemNamespace(ctx, loopbackConfig, project)
-	}, projects)
+	})
 }
 
-func newNamespaceBootstrapper(timeout time.Duration, run func(ctx context.Context, project string) error, projects ProjectLookup) *NamespaceBootstrapper {
+func newNamespaceBootstrapper(timeout time.Duration, run func(ctx context.Context, project string) error) *NamespaceBootstrapper {
 	if timeout <= 0 {
 		timeout = DefaultNamespaceBootstrapTimeout
 	}
@@ -80,40 +72,31 @@ func newNamespaceBootstrapper(timeout time.Duration, run func(ctx context.Contex
 		readyTTL:   defaultBootstrapReadyTTL,
 		now:        time.Now,
 		run:        run,
-		projects:   projects,
 		attempts:   map[bootstrapKey]*bootstrapAttempt{},
 	}
 }
 
-// Ensure creates milo-system in the project's control plane unless this
-// process holds a fresh ready mark for the Project. A Project being deleted is
-// never bootstrapped, so milo-system is not written into a plane the purge is
-// emptying. When the Project cannot be found or read, nothing is
-// bootstrapped and the lookup's error is returned; the caller decides whether
-// it refuses the request. A failed bootstrap returns no error, as before.
-func (b *NamespaceBootstrapper) Ensure(ctx context.Context, project string) error {
+// Ensure creates milo-system in the control plane of the live Project named
+// project with uid, unless this process holds a fresh ready mark for it. The
+// caller has looked the Project up; a failed bootstrap fails no request.
+func (b *NamespaceBootstrapper) Ensure(ctx context.Context, project string, uid types.UID) {
 	if b == nil || project == "" {
-		return nil
+		return
 	}
-	p, err := b.projects.Lookup(ctx, project)
-	if err != nil || p.Deleting {
-		return err
-	}
-	key := bootstrapKey{name: project, uid: p.UID}
+	key := bootstrapKey{name: project, uid: uid}
 	now := b.now()
 	if expiry, ok := b.ready.Load(key); ok && now.Before(expiry.(time.Time)) {
-		return nil
+		return
 	}
 
 	a := b.attemptFor(key, now)
 	if a == nil {
-		return nil
+		return
 	}
 	select {
 	case <-a.done:
 	case <-ctx.Done():
 	}
-	return nil
 }
 
 // attemptFor returns the attempt a caller for key waits on: the one in flight,

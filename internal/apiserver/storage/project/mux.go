@@ -7,8 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/pkg/request"
 
+	"golang.org/x/time/rate"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
@@ -21,6 +24,7 @@ import (
 	k8slegacy "k8s.io/component-base/metrics/legacyregistry"
 
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 )
 
 // -------------------- metrics --------------------
@@ -65,6 +69,15 @@ var (
 		[]string{"result"},
 	)
 
+	unknownProjectWritesRefused = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name:           "projectstorage_unknown_project_writes_refused_total",
+			Help:           "Writes refused because their Project could not be found (NotFound) or read (InternalError)",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"resource_group", "resource_kind", "reason"},
+	)
+
 	reinitErrors = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "projectstorage_reinitializing_errors_total",
@@ -76,7 +89,8 @@ var (
 )
 
 func init() {
-	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration, reinitErrors)
+	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration,
+		unknownProjectWritesRefused, reinitErrors)
 }
 
 func isReinitErr(err error) bool {
@@ -207,6 +221,15 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 
 // -------------------- mux --------------------
 
+// refusalLogInterval bounds the refusal log line to one per kind in that time; the counter carries the
+// volume. A writer that retries a refused write in a loop would otherwise log at its own rate.
+const refusalLogInterval = 10 * time.Second
+
+// ProjectLookup tells the storage which Project a name refers to now.
+type ProjectLookup interface {
+	Lookup(ctx context.Context, name string) (projectstate.Project, error)
+}
+
 // projectMux implements storage.Interface and routes to a per-project child.
 type projectMux struct {
 	mu        sync.RWMutex
@@ -216,7 +239,9 @@ type projectMux struct {
 	inner        generic.StorageDecorator
 	cfg          storagebackend.ConfigForResource
 	args         decoratorArgs
+	projects     ProjectLookup
 	bootstrapper *NamespaceBootstrapper
+	refusalLog   *rate.Limiter
 }
 
 func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
@@ -290,24 +315,21 @@ func (m *projectMux) destroyAll() {
 }
 
 func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
-	if proj, ok := request.ProjectID(ctx); ok && proj != "" {
-		s, err := m.childForProject(proj)
-		if err != nil {
-			return nil, err
-		}
-		if err := m.bootstrapper.Ensure(ctx, proj); err != nil && writesAnObject(ctx) {
-			return nil, err
-		}
-		return s, nil
+	project, ok := request.ProjectID(ctx)
+	if !ok || project == "" {
+		return m.childForProject("")
 	}
-	return m.childForProject("")
+	if err := m.admit(ctx, project); err != nil {
+		return nil, err
+	}
+	return m.childForProject(project)
 }
 
-// writesAnObject reports whether the request creates or changes an object: a
-// create, an update or a patch. Reads and deletes are served as before.
-// Storage cannot tell them apart itself: a DELETE of an object with
-// finalizers arrives as GuaranteedUpdate, as an update does, so the request's
-// own verb decides.
+// admit looks up the Project a request into its plane names. A write into a
+// Project that storage does not hold, or that cannot be read, is refused. A
+// live Project is bootstrapped where this kind bootstraps; a deleting one is
+// not. A request that neither writes nor bootstraps looks nothing up, since
+// it would use neither answer.
 //
 // Upstream's NamespaceLifecycle refuses only a create into a missing
 // namespace and lets an update through (k8s.io/apiserver v0.37.1,
@@ -317,17 +339,62 @@ func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
 // one that changes, so an update and a patch are refused too. That strands no
 // namespaced object: the Project's finalizer holds until the purge has
 // emptied every namespace. The purge leaves cluster-scoped objects by
-// design, so an update to one of them in a gone Project is refused.
-func writesAnObject(ctx context.Context) bool {
+// design, so an update to one of them in a gone Project is refused,
+// and counted with reason NotFound.
+func (m *projectMux) admit(ctx context.Context, project string) error {
+	verb, writes := writeVerb(ctx)
+	if !writes && m.bootstrapper == nil {
+		return nil
+	}
+	p, err := m.projects.Lookup(ctx, project)
+	if err != nil && writes {
+		return m.refuse(ctx, project, verb, err)
+	}
+	if err == nil && !p.Deleting {
+		m.bootstrapper.Ensure(ctx, project, p.UID)
+	}
+	return nil
+}
+
+// refuse returns err for a write into project's plane, counted, and logged at
+// most once per refusalLogInterval for this kind.
+func (m *projectMux) refuse(ctx context.Context, project, verb string, err error) error {
+	reason := "InternalError"
+	if apierrors.IsNotFound(err) {
+		reason = "NotFound"
+	}
+	unknownProjectWritesRefused.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, reason).Inc()
+	if m.refusalLog.Allow() {
+		klog.InfoS("Refused a write into a project control plane whose Project cannot be found",
+			"project", project, "group", m.args.resourceGroup, "resource", m.args.resourceKind,
+			"verb", verb, "user", requestUser(ctx), "reason", reason)
+	}
+	return err
+}
+
+// writeVerb returns the request's verb when the request creates or changes an
+// object: create, update or patch. Reads and deletes are served as before.
+// Storage cannot tell them apart itself: a DELETE of an object with
+// finalizers arrives as GuaranteedUpdate, as an update does, so the request's
+// own verb decides.
+func writeVerb(ctx context.Context) (string, bool) {
 	info, ok := genericapirequest.RequestInfoFrom(ctx)
 	if !ok {
-		return false
+		return "", false
 	}
 	switch info.Verb {
 	case "create", "update", "patch":
-		return true
+		return info.Verb, true
 	}
-	return false
+	return "", false
+}
+
+// requestUser names the request's user, or "" when the context carries none.
+func requestUser(ctx context.Context) string {
+	if u, ok := genericapirequest.UserFrom(ctx); ok {
+		return u.GetName()
+	}
+	return ""
 }
 
 // ---------- storage.Interface forwarding ----------
