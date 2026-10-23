@@ -2,12 +2,16 @@ package etcdshared
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
+	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/kubernetes"
 
 	"k8s.io/apiserver/pkg/storage/storagebackend"
+	"k8s.io/component-base/metrics/legacyregistry"
 )
 
 func newFakeClient() *kubernetes.Client {
@@ -43,11 +47,11 @@ func TestAcquireClient_SharedAcrossProjects(t *testing.T) {
 	calls := withFakeClientConstructor(t)
 	tc := mkTransport("https://etcd:2379")
 
-	c1, rel1, err := acquireClient(tc, 0)
+	c1, rel1, err := acquireClient(tc)
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
-	c2, rel2, err := acquireClient(tc, 0)
+	c2, rel2, err := acquireClient(tc)
 	if err != nil {
 		t.Fatalf("second acquire: %v", err)
 	}
@@ -83,11 +87,11 @@ func TestAcquireClient_SharedAcrossProjects(t *testing.T) {
 func TestAcquireClient_DistinctTransportsDoNotShare(t *testing.T) {
 	calls := withFakeClientConstructor(t)
 
-	cA, relA, err := acquireClient(mkTransport("https://a:2379"), 0)
+	cA, relA, err := acquireClient(mkTransport("https://a:2379"))
 	if err != nil {
 		t.Fatalf("acquire A: %v", err)
 	}
-	cB, relB, err := acquireClient(mkTransport("https://b:2379"), 0)
+	cB, relB, err := acquireClient(mkTransport("https://b:2379"))
 	if err != nil {
 		t.Fatalf("acquire B: %v", err)
 	}
@@ -110,16 +114,27 @@ func TestAcquireClient_ReClosedAfterFullReleaseCycle(t *testing.T) {
 	calls := withFakeClientConstructor(t)
 	tc := mkTransport("https://etcd:2379")
 
-	_, rel1, _ := acquireClient(tc, 0)
+	_, rel1, _ := acquireClient(tc)
 	rel1()
 	if *calls != sharedClientPoolSize {
 		t.Fatalf("expected one pool dialed (%d clients), got %d", sharedClientPoolSize, *calls)
 	}
 
 	// After the entry was torn down, a fresh acquire dials a new pool.
-	_, rel2, _ := acquireClient(tc, 0)
+	_, rel2, _ := acquireClient(tc)
 	if *calls != 2*sharedClientPoolSize {
 		t.Fatalf("expected re-dial after teardown (%d clients), got %d", 2*sharedClientPoolSize, *calls)
 	}
 	rel2()
+}
+
+func TestGRPCClientMetrics_IsTheRegisteredCollector(t *testing.T) {
+	err := legacyregistry.Registerer().Register(grpcprom.NewClientMetrics())
+	var are prometheus.AlreadyRegisteredError
+	if !errors.As(err, &are) {
+		t.Fatalf("Register(identical collector) = %v, want an AlreadyRegisteredError", err)
+	}
+	if are.ExistingCollector != grpcClientMetrics {
+		t.Errorf("registered collector = %p, want grpcClientMetrics (%p)", are.ExistingCollector, grpcClientMetrics)
+	}
 }

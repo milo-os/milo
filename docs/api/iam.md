@@ -700,7 +700,7 @@ PlatformAccessSpec defines the desired access state for a user on the platform.
     </thead>
     <tbody><tr>
         <td><b>state</b></td>
-        <td>string</td>
+        <td>enum</td>
         <td>
           State is the desired platform access state for the user.
 Valid transitions:
@@ -710,6 +710,7 @@ Valid transitions:
   Approved → Rejected  (admin disapproves)
   Suspended → Approved (admin reactivates)<br/>
           <br/>
+            <i>Enum</i>: Pending, Approved, Rejected, Suspended<br/>
             <i>Default</i>: Pending<br/>
         </td>
         <td>true</td>
@@ -3640,18 +3641,22 @@ populated by the auth provider or any service that provides a user avatar URL.<b
         <td>false</td>
       </tr><tr>
         <td><b>lastLoginProvider</b></td>
-        <td>string</td>
+        <td>enum</td>
         <td>
           LastLoginProvider records the identity provider that was most recently used by the
 user to log in (e.g., "github", "google", "passkey", or "email"). This field is set
 by the auth provider based on authentication events.<br/>
+          <br/>
+            <i>Enum</i>: github, google, passkey, email<br/>
         </td>
         <td>false</td>
       </tr><tr>
         <td><b>platformAccess</b></td>
-        <td>string</td>
+        <td>enum</td>
         <td>
           PlatformAccess represents the user's access state on the platform.<br/>
+          <br/>
+            <i>Enum</i>: Pending, Approved, Rejected, Suspended<br/>
         </td>
         <td>false</td>
       </tr><tr>

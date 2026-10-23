@@ -63,10 +63,12 @@ import (
 	"k8s.io/controller-manager/pkg/informerfactory"
 	"k8s.io/controller-manager/pkg/leadermigration"
 	"k8s.io/klog/v2"
+	configv1alpha1 "k8s.io/kube-controller-manager/config/v1alpha1"
 	"k8s.io/kubernetes/cmd/kube-controller-manager/app/config"
 	"k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
 	"k8s.io/kubernetes/cmd/kube-controller-manager/names"
 	kubectrlmgrconfig "k8s.io/kubernetes/pkg/controller/apis/config"
+	kubectrlmgrconfigscheme "k8s.io/kubernetes/pkg/controller/apis/config/scheme"
 	garbagecollector "k8s.io/kubernetes/pkg/controller/garbagecollector"
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	controllerruntime "sigs.k8s.io/controller-runtime"
@@ -412,10 +414,12 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 	c.EventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: c.Client.CoreV1().Events("")})
 	defer c.EventBroadcaster.Shutdown()
 
-	if cfgz, err := configz.New(ConfigzName); err == nil {
-		cfgz.Set(c.ComponentConfig)
-	} else {
+	if cfgz, err := configz.New(ConfigzName); err != nil {
 		logger.Error(err, "Unable to register configz")
+	} else if externalConfig, err := kubectrlmgrconfigscheme.Scheme.ConvertToVersion(&c.ComponentConfig, configv1alpha1.SchemeGroupVersion); err != nil {
+		logger.Error(err, "Unable to convert configz")
+	} else if err := cfgz.Set(externalConfig); err != nil {
+		logger.Error(err, "Unable to set configz")
 	}
 
 	log.SetLogger(logger)

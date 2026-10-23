@@ -9,6 +9,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -414,6 +415,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	apiResourceConfigSource := controlplane.DefaultAPIResourceConfigSource()
 	apiResourceConfigSource.DisableResources(corev1.SchemeGroupVersion.WithResource("serviceaccounts"))
 	apiResourceConfigSource.DisableResources(corev1.SchemeGroupVersion.WithResource("resourcequotas"))
+	// Not served, and quota admission would wait forever on informers for it.
+	apiResourceConfigSource.DisableVersions(resourcev1.SchemeGroupVersion)
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.EventsProxy) {
 		apiResourceConfigSource.DisableResources(corev1.SchemeGroupVersion.WithResource("events"))
@@ -426,6 +429,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		[]*runtime.Scheme{legacyscheme.Scheme, apiextensionsapiserver.Scheme, aggregatorscheme.Scheme, miloScheme},
 		apiResourceConfigSource,
 		openAPIDefinitions,
+		nil,
 	)
 	if err != nil {
 		return nil, err
@@ -455,7 +459,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		Convertor: legacyscheme.Scheme,
 	}
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit})
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit})
 	if err != nil {
 		return nil, err
 	}
@@ -597,9 +601,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 	// 	handler = genericfilters.WithRetryAfter(handler, c.lifecycleSignals.NotAcceptingNewRequest.Signaled())
 	// }
 	handler = genericfilters.WithHTTPLogging(handler)
-	if c.FeatureGate.Enabled(genericfeatures.APIServerTracing) {
-		handler = withCustomTracing(handler, c.TracerProvider)
-	}
+	handler = withCustomTracing(handler, c.TracerProvider)
 	handler = genericapifilters.WithLatencyTrackers(handler)
 	if c.FeatureGate.Enabled(genericfeatures.APIServingWithRoutine) {
 		handler = routine.WithRoutine(handler, c.LongRunningFunc)

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/apiserver/pkg/storage/cacher"
+	"k8s.io/apiserver/pkg/storage/cacher/consistency"
 )
 
 const consistencyCheckFlag = "watch-cache-consistency-check-period"
@@ -27,8 +27,8 @@ func TestWatchCacheConsistencyCheckPeriodFlagSetsTheCacherPeriod(t *testing.T) {
 	if err := applyStorageFlags(); err != nil {
 		t.Fatalf("applyStorageFlags: %v", err)
 	}
-	if got := cacher.ConsistencyCheckPeriod; got != 2*time.Minute {
-		t.Errorf("cacher.ConsistencyCheckPeriod = %s after --%s=2m, want 2m0s", got, consistencyCheckFlag)
+	if got := consistency.CheckPeriod; got != 2*time.Minute {
+		t.Errorf("consistency.CheckPeriod = %s after --%s=2m, want 2m0s", got, consistencyCheckFlag)
 	}
 }
 
@@ -45,6 +45,6 @@ func TestWatchCacheConsistencyCheckPeriodRefusesANonPositivePeriod(t *testing.T)
 // restoreCacherPeriod puts the process-wide period back when the test ends, so tests do not leak it into each other.
 func restoreCacherPeriod(t *testing.T) {
 	t.Helper()
-	period := cacher.ConsistencyCheckPeriod
-	t.Cleanup(func() { cacher.ConsistencyCheckPeriod = period })
+	period := consistency.CheckPeriod
+	t.Cleanup(func() { consistency.CheckPeriod = period })
 }
