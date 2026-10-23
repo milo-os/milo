@@ -355,10 +355,10 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	bootstrapper := projectstorage.NewNamespaceBootstrapper(config.ControlPlane.Generic.LoopbackClientConfig, projectNamespaceBootstrapTimeout)
 
 	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, bootstrapper)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper)
 
 	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, bootstrapper)
+		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
@@ -408,7 +408,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 
 	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
 	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p))
+		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates))
 	}
 
 	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {

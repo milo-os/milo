@@ -9,7 +9,8 @@ import (
 
 // ---------- common patching logic -------------------------------------
 type baseDecorator struct {
-	inner controlplaneapiserver.RESTStorageProvider
+	inner    controlplaneapiserver.RESTStorageProvider
+	projects ProjectLookup
 }
 
 func (b baseDecorator) GroupName() string { return b.inner.GroupName() }
@@ -19,7 +20,7 @@ func (b baseDecorator) NewRESTStorage(
 	getter generic.RESTOptionsGetter,
 ) (apiserver.APIGroupInfo, error) {
 
-	getter = WithProjectAwareDecorator(getter)
+	getter = WithProjectAwareDecorator(getter, b.projects)
 
 	agi, err := b.inner.NewRESTStorage(cfg, getter)
 	if err != nil {
@@ -37,9 +38,10 @@ func (w withHook) PostStartHook() (string, apiserver.PostStartHookFunc, error) {
 }
 
 // ---------- factory ----------------------------------------------------
-func WrapProvider(p controlplaneapiserver.RESTStorageProvider) controlplaneapiserver.RESTStorageProvider {
+// WrapProvider makes p's storage project-aware, each request's Project looked up in projects.
+func WrapProvider(p controlplaneapiserver.RESTStorageProvider, projects ProjectLookup) controlplaneapiserver.RESTStorageProvider {
 	if _, ok := p.(apiserver.PostStartHookProvider); ok {
-		return withHook{baseDecorator{inner: p}}
+		return withHook{baseDecorator{inner: p, projects: projects}}
 	}
-	return baseDecorator{inner: p}
+	return baseDecorator{inner: p, projects: projects}
 }
