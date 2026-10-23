@@ -23,19 +23,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
-	"k8s.io/apiserver/pkg/admission/initializer"
 	"k8s.io/apiserver/pkg/authentication/user"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/klog/v2"
 
+	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	milorequest "go.miloapis.com/milo/pkg/request"
 )
@@ -47,26 +43,18 @@ import (
 type Plugin struct {
 	*admission.Handler
 
-	// dynamicClient is the root-scope client injected via
-	// initializer.WantsDynamicClient. This plugin only ever reads the
-	// root-scoped Project object, so no project-scoped client is needed.
-	dynamicClient dynamic.Interface
-
-	// suspensionCache maintains an in-memory, informer-backed cache of suspended projects.
-	suspensionCache *ProjectSuspensionCache
-
-	logger logr.Logger
+	// projects is the API server's shared view of Projects, injected by
+	// Milo's admission initializer. The server starts it and gates readiness
+	// on its sync.
+	projects suspensions
 }
 
-// projectGVR identifies the cluster-scoped Project resource.
-var projectGVR = schema.GroupVersionResource{
-	Group:    "resourcemanager.miloapis.com",
-	Version:  "v1alpha1",
-	Resource: "projects",
+// suspensions is the part of projectstate.Cache this plugin reads.
+type suspensions interface {
+	Suspension(name string) *projectstate.Suspension
 }
 
 var (
-	_ initializer.WantsDynamicClient    = &Plugin{}
 	_ admission.ValidationInterface     = &Plugin{}
 	_ admission.InitializationValidator = &Plugin{}
 )
@@ -87,13 +75,6 @@ var accessReviewResources = map[schema.GroupResource]bool{
 	{Group: "authorization.k8s.io", Resource: "selfsubjectrulesreviews"}:   true,
 }
 
-// suspensionState is the cached result of resolving a project's suspension
-// status from the authoritative core Project object.
-type suspensionState struct {
-	Suspended   bool
-	Suspensions []resourcemanagerv1alpha1.ProjectSuspensionInfo
-}
-
 // NewPlugin creates a new ProjectSuspensionEnforcement admission plugin.
 // It only registers for Create and Update; Delete requests are never
 // routed to Validate (see Decisions Made in the design doc: DELETE is
@@ -101,33 +82,18 @@ type suspensionState struct {
 func NewPlugin() (*Plugin, error) {
 	return &Plugin{
 		Handler: admission.NewHandler(admission.Create, admission.Update),
-		logger:  klog.NewKlogr().WithName("project-suspension-enforcement"),
 	}, nil
 }
 
-// SetDynamicClient implements initializer.WantsDynamicClient.
-func (p *Plugin) SetDynamicClient(c dynamic.Interface) {
-	p.dynamicClient = c
-	if c != nil && p.suspensionCache == nil {
-		p.suspensionCache = NewProjectSuspensionCache(c, p.logger)
-		p.suspensionCache.Start()
-	}
-}
-
-// Close stops the underlying project suspension informer cache.
-func (p *Plugin) Close() {
-	if p.suspensionCache != nil {
-		p.suspensionCache.Stop()
-	}
+// SetProjectStates receives the API server's shared view of Projects.
+func (p *Plugin) SetProjectStates(c *projectstate.Cache) {
+	p.projects = c
 }
 
 // ValidateInitialization implements admission.InitializationValidator.
 func (p *Plugin) ValidateInitialization() error {
-	if p.dynamicClient == nil {
-		return fmt.Errorf("%s: missing dynamic client", PluginName)
-	}
-	if p.suspensionCache == nil {
-		return fmt.Errorf("%s: missing suspension cache", PluginName)
+	if p.projects == nil {
+		return fmt.Errorf("%s: missing project states", PluginName)
 	}
 	return nil
 }
@@ -155,59 +121,11 @@ func (p *Plugin) Validate(ctx context.Context, attrs admission.Attributes, _ adm
 }
 
 // getSuspensionState resolves the suspension state of the project
-// identified by projectID, consulting the in-memory informer cache.
-func (p *Plugin) getSuspensionState(ctx context.Context, projectID string) *suspensionState {
-	if p.suspensionCache != nil {
-		return p.suspensionCache.GetSuspensionState(ctx, projectID)
-	}
-	return nil
-}
-
-// parseSuspensionState extracts the Suspended condition and any active
-// suspensions from a Project object retrieved via the dynamic client.
-// Returns nil if the project is not suspended.
-func parseSuspensionState(obj *unstructured.Unstructured) *suspensionState {
-	conditions, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	if err != nil || !found {
-		return nil
-	}
-
-	suspended := false
-	for _, c := range conditions {
-		m, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		condType, _, _ := unstructured.NestedString(m, "type")
-		if condType != resourcemanagerv1alpha1.ProjectSuspended {
-			continue
-		}
-		status, _, _ := unstructured.NestedString(m, "status")
-		suspended = status == string(metav1.ConditionTrue)
-		break
-	}
-
-	if !suspended {
-		return nil
-	}
-
-	var suspensions []resourcemanagerv1alpha1.ProjectSuspensionInfo
-	raw, found, err := unstructured.NestedSlice(obj.Object, "status", "suspensions")
-	if err == nil && found {
-		for _, item := range raw {
-			m, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			var info resourcemanagerv1alpha1.ProjectSuspensionInfo
-			if convErr := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &info); convErr != nil {
-				continue
-			}
-			suspensions = append(suspensions, info)
-		}
-	}
-
-	return &suspensionState{Suspended: true, Suspensions: suspensions}
+// identified by projectID from the shared view of Projects. There is no live
+// API fallback: the server's readiness check holds traffic until the view has
+// synced.
+func (p *Plugin) getSuspensionState(_ context.Context, projectID string) *projectstate.Suspension {
+	return p.projects.Suspension(projectID)
 }
 
 // isExempt reports whether the request should bypass suspension
@@ -260,7 +178,7 @@ func isAlreadyTerminating(obj runtime.Object) bool {
 // ProjectSuspendedCause in Details.Causes, distinct from other denial
 // reasons (quota, RBAC, NamespaceLifecycle's NamespaceTerminatingCause) so
 // API clients can render a specific "this project is suspended" message.
-func newSuspendedForbiddenError(attrs admission.Attributes, projectID string, s *suspensionState) error {
+func newSuspendedForbiddenError(attrs admission.Attributes, projectID string, s *projectstate.Suspension) error {
 	reasons := uniqueSortedReasons(s.Suspensions)
 	reasonList := strings.Join(reasons, ", ")
 	if reasonList == "" {

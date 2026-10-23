@@ -26,6 +26,7 @@ import (
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
 	"k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/component-base/tracing"
 	"k8s.io/klog/v2"
@@ -47,13 +48,13 @@ import (
 	svmrest "k8s.io/kubernetes/pkg/registry/storagemigration/rest"
 
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
-	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
 	passkeyregistrationlinksbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
 	passkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
+	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
 	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
 	identityapi "go.miloapis.com/milo/pkg/apis/identity"
@@ -437,15 +438,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 	loopbackClientConfig := genericConfig.LoopbackClientConfig
 
-	genericConfig.BuildHandlerChainFunc = func(h http.Handler, c *server.Config) http.Handler {
-		if registry != nil {
-			h = discoveryctx.DiscoveryContextFilter(h, registry)
-		}
-		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig), // build stock chain first
-			c.RequestInfoResolver,                                // then wrap with router
-		)
-	}
+	genericConfig.BuildHandlerChainFunc = projectRouterChain(registry, loopbackClientConfig)
 
 	serviceResolver := webhook.NewDefaultServiceResolver()
 
@@ -459,7 +452,16 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		Convertor: legacyscheme.Scheme,
 	}
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit})
+	// One watch of Projects for the whole process: admission plugins receive it
+	// through this initializer.
+	projectClient, err := dynamic.NewForConfig(rest.CopyConfig(genericConfig.LoopbackClientConfig))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create project state client: %w", err)
+	}
+	projectStates := projectstate.NewCache(projectClient)
+	projectStatesInit := initializer.ProjectStatesInitializer{States: projectStates}
+
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit})
 	if err != nil {
 		return nil, err
 	}
@@ -470,29 +472,22 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		kubeAPIs.Generic.LoopbackClientConfig.Wrap(tracing.WrapperFor(kubeAPIs.Generic.TracerProvider))
 	}
 
-	combinedInits := append(upstreamInits, loopbackInit, convertorInit)
+	combinedInits := append(upstreamInits, loopbackInit, convertorInit, projectStatesInit)
 
 	authInfoResolver := webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIs.ProxyTransport, kubeAPIs.Generic.EgressSelector, kubeAPIs.Generic.LoopbackClientConfig, kubeAPIs.Generic.TracerProvider)
 	apiExtensions, err := controlplaneapiserver.CreateAPIExtensionsConfig(*kubeAPIs.Generic, kubeAPIs.VersionedInformers, combinedInits, opts, 3, serviceResolver, authInfoResolver)
 	if err != nil {
 		return nil, err
 	}
-	apiExtensions.GenericConfig.BuildHandlerChainFunc = func(h http.Handler, c *server.Config) http.Handler {
-		if registry != nil {
-			h = discoveryctx.DiscoveryContextFilter(h, registry)
-		}
-		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig),
-			c.RequestInfoResolver,
-		)
-	}
+	apiExtensions.GenericConfig.BuildHandlerChainFunc = projectRouterChain(registry, loopbackClientConfig)
 	c.APIExtensions = apiExtensions
 
 	// Add readiness check for quota validator to ensure cache is synced before serving traffic
 	kubeAPIs.Generic.AddReadyzChecks(admissionquota.ReadinessCheck())
 
-	// Add readiness check for project suspension cache to ensure it's synced before serving traffic
-	kubeAPIs.Generic.AddReadyzChecks(projectsuspension.ReadinessCheck())
+	// Start the shared view of Projects once the server serves, and hold traffic until it has synced
+	kubeAPIs.Generic.AddPostStartHookOrDie("start-project-state-cache", projectStates.PostStartHook())
+	kubeAPIs.Generic.AddReadyzChecks(projectStates.ReadinessCheck())
 
 	// Add post-start hook to bootstrap CRDs from embedded filesystem
 	// This installs all CRDs EXCEPT infrastructure.miloapis.com group, which should remain in the infrastructure cluster
@@ -506,20 +501,26 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	aggregator.GenericConfig.BuildHandlerChainFunc = func(h http.Handler, c *server.Config) http.Handler {
-		if registry != nil {
-			h = discoveryctx.DiscoveryContextFilter(h, registry)
-		}
-		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig),
-			c.RequestInfoResolver,
-		)
-	}
+	aggregator.GenericConfig.BuildHandlerChainFunc = projectRouterChain(registry, loopbackClientConfig)
 	c.Aggregator = aggregator
 	c.Aggregator.ExtraConfig.DisableRemoteAvailableConditionController = true
 	c.Aggregator.GenericConfig.EffectiveVersion = apiservercompat.DefaultBuildEffectiveVersion()
 
 	return c, nil
+}
+
+// projectRouterChain builds the handler chain each server in the chain uses: the stock chain with Milo's filters,
+// wrapped by the project router, with the discovery context filter innermost when the registry is enabled.
+func projectRouterChain(registry *discoveryctx.Registry, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
+	return func(h http.Handler, c *server.Config) http.Handler {
+		if registry != nil {
+			h = discoveryctx.DiscoveryContextFilter(h, registry)
+		}
+		return datumfilters.ProjectRouterWithRequestInfo(
+			DefaultBuildHandlerChain(h, c, loopbackClientConfig), // build stock chain first
+			c.RequestInfoResolver,                                // then wrap with router
+		)
+	}
 }
 
 // DefaultBuildHandlerChain builds the standard Kubernetes filter chain with Milo-specific filters
