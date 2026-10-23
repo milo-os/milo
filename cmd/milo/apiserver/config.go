@@ -80,6 +80,11 @@ type Config struct {
 	// post-start hook in CreateServerChain.
 	DiscoveryRegistry *discoveryctx.Registry
 
+	// ProjectStates is the server's one view of Projects. Created in
+	// NewConfig, injected into admission plugins, started by a post-start
+	// hook, and read by the project namespace bootstrap.
+	ProjectStates *projectstate.Cache
+
 	ExtraConfig
 }
 
@@ -154,6 +159,8 @@ type completedConfig struct {
 	APIExtensions apiextensionsapiserver.CompletedConfig
 
 	DiscoveryRegistry *discoveryctx.Registry
+
+	ProjectStates *projectstate.Cache
 
 	ExtraConfig
 }
@@ -374,6 +381,8 @@ func (c *Config) Complete() (CompletedConfig, error) {
 
 		DiscoveryRegistry: c.DiscoveryRegistry,
 
+		ProjectStates: c.ProjectStates,
+
 		ExtraConfig: c.ExtraConfig,
 	}}, nil
 }
@@ -459,6 +468,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		return nil, fmt.Errorf("failed to create project state client: %w", err)
 	}
 	projectStates := projectstate.NewCache(projectClient)
+	c.ProjectStates = projectStates
 	projectStatesInit := initializer.ProjectStatesInitializer{States: projectStates}
 
 	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit})

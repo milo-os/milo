@@ -146,3 +146,80 @@ func TestPostStartHookStartsCacheAndReadinessWaitsForFirstList(t *testing.T) {
 		t.Errorf("cache listed %d times, want 1", got)
 	}
 }
+
+// waitForProject polls the cache until the named Project reads as want, or
+// as unknown when known is false.
+func waitForProject(t *testing.T, c *projectstate.Cache, name string, want projectstate.Project, known bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		got, ok := c.Project(name)
+		if ok == known && (!known || got == want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s known=%v %+v, last known=%v %+v", name, known, want, ok, got)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestCache_ProjectFollowsUIDAndDeletion covers what the namespace bootstrap
+// reads: every Project, suspended or not, by its UID and its deletion mark,
+// through a deletion and a re-creation under the same name.
+func TestCache_ProjectFollowsUIDAndDeletion(t *testing.T) {
+	live := projectstatetest.NewProject("p", false)
+	live.SetUID("uid-1")
+	c, client := projectstatetest.NewCache(t, live)
+	projects := client.Resource(projectstate.ProjectGVR)
+	ctx := context.Background()
+
+	waitForProject(t, c, "p", projectstate.Project{UID: "uid-1"}, true)
+	if _, ok := c.Project("missing"); ok {
+		t.Fatal("a project that does not exist reads as known")
+	}
+
+	deleting := live.DeepCopy()
+	deleting.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	deleting.SetResourceVersion("2")
+	if _, err := projects.Update(ctx, deleting, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("mark project deleting: %v", err)
+	}
+	waitForProject(t, c, "p", projectstate.Project{UID: "uid-1", Deleting: true}, true)
+
+	if err := projects.Delete(ctx, "p", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete project: %v", err)
+	}
+	waitForProject(t, c, "p", projectstate.Project{}, false)
+
+	recreated := projectstatetest.NewProject("p", true, resourcemanagerv1alpha1.ReasonFraud)
+	recreated.SetUID("uid-2")
+	if _, err := projects.Create(ctx, recreated, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("re-create project: %v", err)
+	}
+	waitForProject(t, c, "p", projectstate.Project{UID: "uid-2"}, true)
+	waitForSuspension(t, c, "p", true)
+}
+
+// TestCache_ResyncKeepsEveryProject covers the initial List and every
+// re-list: a Project that is not suspended is still known by its UID.
+func TestCache_ResyncKeepsEveryProject(t *testing.T) {
+	active := projectstatetest.NewProject("active", false)
+	active.SetUID("uid-a")
+	suspended := projectstatetest.NewProject("suspended", true, resourcemanagerv1alpha1.ReasonFraud)
+	suspended.SetUID("uid-s")
+	c, _ := projectstatetest.NewCache(t, active, suspended)
+
+	if got, ok := c.Project("active"); !ok || got != (projectstate.Project{UID: "uid-a"}) {
+		t.Errorf("active project after the initial List: known=%v %+v", ok, got)
+	}
+	if got, ok := c.Project("suspended"); !ok || got != (projectstate.Project{UID: "uid-s"}) {
+		t.Errorf("suspended project after the initial List: known=%v %+v", ok, got)
+	}
+	if c.Suspension("active") != nil {
+		t.Error("an active project reads as suspended")
+	}
+	if c.Suspension("suspended") == nil {
+		t.Error("a suspended project reads as not suspended")
+	}
+}

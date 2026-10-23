@@ -3,6 +3,7 @@
 package projectstatetest
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,7 +11,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
+	"k8s.io/utils/clock"
 
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -66,6 +70,26 @@ func NewProject(name string, suspended bool, reasons ...resourcemanagerv1alpha1.
 	return u
 }
 
+// NewProjectWithUID returns an active Project named name with the given UID.
+func NewProjectWithUID(name string, uid types.UID) *unstructured.Unstructured {
+	p := NewProject(name, false)
+	p.SetUID(uid)
+	return p
+}
+
+// StorageAnswers makes every live GET of a Project return obj, or err when obj
+// is nil, and counts the GETs. A started cache keeps what its reflector
+// listed, so storage and the cache's view can differ the way a lagging cache
+// does.
+func StorageAnswers(client *fake.FakeDynamicClient, obj runtime.Object, err error) *atomic.Int32 {
+	var gets atomic.Int32
+	client.PrependReactor("get", "projects", func(clienttesting.Action) (bool, runtime.Object, error) {
+		gets.Add(1)
+		return true, obj, err
+	})
+	return &gets
+}
+
 // NewClient returns a fake dynamic client that serves objects as Projects.
 func NewClient(t *testing.T, objects ...runtime.Object) *fake.FakeDynamicClient {
 	t.Helper()
@@ -80,8 +104,14 @@ func NewClient(t *testing.T, objects ...runtime.Object) *fake.FakeDynamicClient 
 // waits for its initial List, and stops it when the test ends.
 func NewCache(t *testing.T, objects ...runtime.Object) (*projectstate.Cache, *fake.FakeDynamicClient) {
 	t.Helper()
+	return NewCacheWithClock(t, clock.RealClock{}, objects...)
+}
+
+// NewCacheWithClock is NewCache with the cache's force-live list on clk.
+func NewCacheWithClock(t *testing.T, clk clock.Clock, objects ...runtime.Object) (*projectstate.Cache, *fake.FakeDynamicClient) {
+	t.Helper()
 	client := NewClient(t, objects...)
-	c := projectstate.NewCache(client)
+	c := projectstate.NewCacheWithClock(client, clk)
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	c.Start(stop)

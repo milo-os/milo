@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	generic "k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/storage"
 	storagebackend "k8s.io/apiserver/pkg/storage/storagebackend"
@@ -294,10 +295,39 @@ func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
 		if err != nil {
 			return nil, err
 		}
-		m.bootstrapper.Ensure(ctx, proj)
+		if err := m.bootstrapper.Ensure(ctx, proj); err != nil && writesAnObject(ctx) {
+			return nil, err
+		}
 		return s, nil
 	}
 	return m.childForProject("")
+}
+
+// writesAnObject reports whether the request creates or changes an object: a
+// create, an update or a patch. Reads and deletes are served as before.
+// Storage cannot tell them apart itself: a DELETE of an object with
+// finalizers arrives as GuaranteedUpdate, as an update does, so the request's
+// own verb decides.
+//
+// Upstream's NamespaceLifecycle refuses only a create into a missing
+// namespace and lets an update through (k8s.io/apiserver v0.37.1,
+// pkg/admission/plugin/namespace/lifecycle/admission.go lines 105-109,
+// kubernetes/kubernetes#140661). The request's verb cannot tell an update
+// that creates (an apply patch, or a kind that allows create on update) from
+// one that changes, so an update and a patch are refused too. That strands no
+// namespaced object: the Project's finalizer holds until the purge has
+// emptied every namespace. The purge leaves cluster-scoped objects by
+// design, so an update to one of them in a gone Project is refused.
+func writesAnObject(ctx context.Context) bool {
+	info, ok := genericapirequest.RequestInfoFrom(ctx)
+	if !ok {
+		return false
+	}
+	switch info.Verb {
+	case "create", "update", "patch":
+		return true
+	}
+	return false
 }
 
 // ---------- storage.Interface forwarding ----------
