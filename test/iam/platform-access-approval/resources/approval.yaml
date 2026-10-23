@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PlatformAccessApproval
+metadata:
+  name: access-approval-for-test-user
+spec:
+  subjectRef:
+    userRef:
+      name: access-approval-test-user
