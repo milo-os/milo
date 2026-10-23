@@ -11,13 +11,13 @@ spec:
 
   auditRules:
     - name: create-with-email
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} invited {{ audit.requestObject.spec.email }} to the platform"
 
     - name: create-fallback
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} sent a platform invitation"
 
     - name: delete
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} cancelled the platform invitation for {{ audit.objectRef.name }}"

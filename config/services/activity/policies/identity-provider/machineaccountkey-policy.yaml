@@ -13,13 +13,13 @@ spec:
 
   auditRules:
     - name: create-with-account
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.machineAccountUserName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.machineAccountUserName) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} created API key for {{ audit.requestObject.spec.machineAccountUserName }}"
 
     - name: create-fallback
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} created a machine account key"
 
     - name: delete
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} deleted API key {{ audit.objectRef.name }}"
