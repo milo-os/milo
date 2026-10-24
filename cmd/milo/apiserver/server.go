@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	crd "go.miloapis.com/milo/config/crd"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/appsownership"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
@@ -236,6 +237,7 @@ func NewOptions() *options.Options {
 		s.Admission.GenericAdmission.Plugins = admission.NewPlugins()
 	}
 
+	appsownership.Register(s.Admission.GenericAdmission.Plugins)
 	admissionquota.Register(s.Admission.GenericAdmission.Plugins)
 	projectsuspension.Register(s.Admission.GenericAdmission.Plugins)
 	// No AddReadyzChecks counterpart: this plugin holds no cache and makes no

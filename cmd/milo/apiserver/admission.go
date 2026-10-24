@@ -1,6 +1,10 @@
 package app
 
 import (
+	"fmt"
+	"slices"
+
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/appsownership"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
@@ -28,9 +32,12 @@ func GetMiloOrderedPlugins() []string {
 			// ProjectSuspensionEnforcement runs before ResourceQuotaEnforcement
 			// so a denied-for-suspension request never triggers ResourceClaim
 			// creation.
-			// Cheapest of the three — a map lookup on the request identity, no
+			// Ownership bootstrap is local and rejects reserved markers before
+			// quota side effects. Email verification is also local: a map
+			// lookup on the request identity, no
 			// client and no cache — and it is about WHO is asking, which is more
 			// fundamental than where or how much quota.
+			plugins = append(plugins, appsownership.PluginName)
 			plugins = append(plugins, emailverification.PluginName)
 			plugins = append(plugins, projectsuspension.PluginName)
 			plugins = append(plugins, admissionquota.PluginName)
@@ -43,6 +50,7 @@ func GetMiloOrderedPlugins() []string {
 
 // MiloAdmissionPlugins lists all Milo-specific admission plugins
 var MiloAdmissionPlugins = sets.New[string](
+	appsownership.PluginName,
 	admissionquota.PluginName,    // ResourceQuotaEnforcement
 	projectsuspension.PluginName, // ProjectSuspensionEnforcement
 	emailverification.PluginName, // EmailVerificationEnforcement — observes unless EmailVerifiedGate is on
@@ -68,4 +76,21 @@ func DefaultOffAdmissionPlugins() sets.Set[string] {
 
 	// Return plugins to turn OFF (all plugins minus the ones we want ON)
 	return allPlugins.Difference(defaultOnPlugins)
+}
+
+// validateAppsOwnershipAdmission prevents a startup configuration from removing
+// the bootstrap guard while leaving its reserved markers writable.
+func validateAppsOwnershipAdmission(opts *options.AdmissionOptions) error {
+	if opts == nil || opts.GenericAdmission == nil || (opts.PluginNames != nil && !slices.Contains(opts.PluginNames, appsownership.PluginName)) {
+		return fmt.Errorf("%s must remain enabled; Apps installations are not yet supported", appsownership.PluginName)
+	}
+	a := opts.GenericAdmission
+	if a.Plugins == nil ||
+		!slices.Contains(a.Plugins.Registered(), appsownership.PluginName) ||
+		!slices.Contains(a.RecommendedPluginOrder, appsownership.PluginName) ||
+		slices.Contains(a.DisablePlugins, appsownership.PluginName) ||
+		(a.DefaultOffPlugins.Has(appsownership.PluginName) && !slices.Contains(a.EnablePlugins, appsownership.PluginName)) {
+		return fmt.Errorf("%s must remain enabled; Apps installations are not yet supported", appsownership.PluginName)
+	}
+	return nil
 }
