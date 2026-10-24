@@ -171,3 +171,52 @@ func TestPlatformAccessValidator_ValidateDelete(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "deletion of PlatformAccess resources is not allowed")
 }
+
+// The fraud service records a newer evaluation on an existing PlatformAccess
+// without necessarily changing its state. Such an update must be admitted.
+func TestPlatformAccessValidator_ValidateUpdate_RiskAssessmentOnly(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().WithScheme(runtimeScheme).Build()
+	validator := &PlatformAccessValidator{client: fakeClient}
+
+	base := iamv1alpha1.PlatformAccessSpec{
+		UserRef: iamv1alpha1.UserReference{Name: "test-user"},
+		State:   iamv1alpha1.PlatformAccessStateApproved,
+	}
+	evaluatedAt := metav1.Now()
+
+	tests := []struct {
+		name  string
+		oldRA *iamv1alpha1.RiskAssessment
+		newRA *iamv1alpha1.RiskAssessment
+	}{
+		{
+			name:  "assessment added",
+			oldRA: nil,
+			newRA: &iamv1alpha1.RiskAssessment{Score: "0.12", Decision: "ACCEPTED", EvaluatedAt: &evaluatedAt, EvaluationName: "eval-1"},
+		},
+		{
+			name:  "assessment replaced",
+			oldRA: &iamv1alpha1.RiskAssessment{Score: "0.12", Decision: "ACCEPTED", EvaluationName: "eval-1"},
+			newRA: &iamv1alpha1.RiskAssessment{Score: "0.55", Decision: "REVIEW", EvaluationName: "eval-2"},
+		},
+		{
+			name:  "assessment cleared",
+			oldRA: &iamv1alpha1.RiskAssessment{Score: "0.12", Decision: "ACCEPTED", EvaluationName: "eval-1"},
+			newRA: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldSpec, newSpec := base, base
+			oldSpec.RiskAssessment = tt.oldRA
+			newSpec.RiskAssessment = tt.newRA
+			oldPA := &iamv1alpha1.PlatformAccess{ObjectMeta: metav1.ObjectMeta{Name: "test-user"}, Spec: oldSpec}
+			newPA := &iamv1alpha1.PlatformAccess{ObjectMeta: metav1.ObjectMeta{Name: "test-user"}, Spec: newSpec}
+
+			warnings, err := validator.ValidateUpdate(context.Background(), oldPA, newPA)
+			require.NoError(t, err)
+			assert.Empty(t, warnings)
+		})
+	}
+}
