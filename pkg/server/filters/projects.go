@@ -24,13 +24,15 @@ func ProjectRouterWithRequestInfo(next http.Handler, rir reqinfo.RequestInfoReso
 	)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		idx := strings.Index(r.URL.Path, projectsSeg)
-		if idx < 0 {
+		// Only intercept requests that target the valid parent API group/version:
+		// /apis/<resourcemanagerGV>/projects/<id>/control-plane/...
+		parentPrefix := "/apis/" + resourcemanagerv1alpha1.GroupVersion.String() + projectsSeg
+		if !strings.HasPrefix(r.URL.Path, parentPrefix) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		tail := r.URL.Path[idx+len(projectsSeg):] // "<id>/control-plane/..."
+		tail := strings.TrimPrefix(r.URL.Path, parentPrefix) // "<id>/control-plane/..."
 		slash := strings.IndexByte(tail, '/')
 		if slash < 0 || !strings.HasPrefix(tail[slash:], controlPlaneSeg+"/") {
 			next.ServeHTTP(w, r)
@@ -40,8 +42,7 @@ func ProjectRouterWithRequestInfo(next http.Handler, rir reqinfo.RequestInfoReso
 		projID := tail[:slash]
 
 		// Drop ".../projects/<id>/control-plane"
-		newPath := "/" + strings.TrimPrefix(
-			r.URL.Path[idx+len(projectsSeg)+slash+len(controlPlaneSeg):], "/")
+		newPath := "/" + strings.TrimPrefix(tail[slash+len(controlPlaneSeg):], "/")
 
 		// Clone request, stash project, and rewrite URL bits
 		r2 := r.Clone(projctx.WithProject(r.Context(), projID))
