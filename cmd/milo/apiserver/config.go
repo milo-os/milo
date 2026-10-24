@@ -571,6 +571,9 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 	handler = filterlatency.TrackCompleted(handler)
 	handler = impersonationfilters.WithImpersonation(handler, c.Authorization.Authorizer, c.Serializer)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "impersonation")
+	// Capture the authenticated identity before impersonation replaces it and
+	// removes the request headers. This does not grant any additional access.
+	handler = datumfilters.WithAuthenticationProvenance(handler)
 
 	failedHandler = filterlatency.TrackCompleted(failedHandler)
 	handler = filterlatency.TrackCompleted(handler)
