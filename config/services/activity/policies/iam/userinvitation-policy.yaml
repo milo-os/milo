@@ -31,50 +31,50 @@ spec:
   auditRules:
     # Create with email and organization available
     - name: create-with-email-and-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.requestObject.spec.organizationRef.name)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.requestObject.spec.organizationRef) && has(audit.requestObject.spec.organizationRef.name) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} invited {{ audit.requestObject.spec.email }} to {{ link(audit.requestObject.spec.organizationRef.name, audit.objectRef) }}"
 
     # Create with email only
     - name: create-with-email
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} invited {{ audit.requestObject.spec.email }} to the organization"
 
     # Create fallback — no email in spec
     - name: create-fallback
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} sent an invitation to the organization"
 
     # Invitation accepted with org displayname (state transition update)
     - name: accepted-with-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted' && has(audit.responseObject.status.organization.displayName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject) && type(audit.requestObject) == map && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted' && has(audit.responseObject) && type(audit.responseObject) == map && has(audit.responseObject.status) && has(audit.responseObject.status.organization) && has(audit.responseObject.status.organization.displayName) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "The invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }} was accepted"
 
     # Invitation accepted fallback
     - name: accepted
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject) && type(audit.requestObject) == map && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "The invitation for {{ audit.objectRef.name }} was accepted"
 
     # Invitation declined with org displayname (state transition update)
     - name: declined-with-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined' && has(audit.responseObject.status.organization.displayName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject) && type(audit.requestObject) == map && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined' && has(audit.responseObject) && type(audit.responseObject) == map && has(audit.responseObject.status) && has(audit.responseObject.status.organization) && has(audit.responseObject.status.organization.displayName) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "The invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }} was declined"
 
     # Invitation declined fallback
     - name: declined
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject) && type(audit.requestObject) == map && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "The invitation for {{ audit.objectRef.name }} was declined"
 
     # Generic update fallback
     - name: update
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} updated invitation {{ audit.objectRef.name }}"
 
     # Delete with org displayname — invitation cancelled
     - name: delete-with-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.status.organization.displayName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject) && type(audit.responseObject) == map && has(audit.responseObject.status) && has(audit.responseObject.status.organization) && has(audit.responseObject.status.organization.displayName) && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} cancelled the invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }}"
 
     # Delete fallback — invitation cancelled
     - name: delete
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseStatus.code) && audit.responseStatus.code >= 200 && audit.responseStatus.code < 300 && !(has(audit.requestURI) && audit.requestURI.contains('dryRun='))"
       summary: "{{ actor }} cancelled the invitation for {{ audit.objectRef.name }}"
