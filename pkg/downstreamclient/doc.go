@@ -17,6 +17,16 @@
 // collisions when aggregating resources from multiple upstream clusters into a
 // single downstream API server.
 //
+// # Reverse namespace lookup
+//
+// [UpstreamNamespaceResolver] reverses the mapping: given a downstream
+// ns-<uid> namespace name it returns the upstream cluster and namespace it was
+// projected from. [RetainingNamespaceIndex] implements it from upstream
+// namespace informers, so no credential into the downstream cluster is needed,
+// and retains entries for deleted namespaces so records about them keep
+// resolving. The contract is fail-closed: see [ErrCacheNotSynced] and
+// [ErrUpstreamNamespaceUnknown].
+//
 // Ownership is tracked through anchor ConfigMaps that carry the
 // meta.datumapis.com/* labels defined in this package. The
 // [TypedEnqueueRequestsForUpstreamOwner] handler reads those labels to
