@@ -1,0 +1,15 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: GroupMembership
+metadata:
+  name: gm-alice-eng
+  namespace: ($namespace)
+  labels:
+    iam.miloapis.com/test-metadata-update: applied
+  finalizers:
+  - iam.miloapis.com/test-finalizer
+spec:
+  userRef:
+    name: alice
+  groupRef:
+    name: eng
+    namespace: ($namespace)
