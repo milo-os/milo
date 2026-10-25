@@ -10,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
@@ -35,16 +34,8 @@ type NamespaceBootstrapper struct {
 	ready sync.Map
 
 	mu        sync.Mutex
-	attempts  map[bootstrapKey]*bootstrapAttempt
+	attempts  map[string]*bootstrapAttempt
 	lastSweep time.Time
-}
-
-// bootstrapKey names one Project: its name and its UID. The ready mark, the
-// attempt in flight and the back-off all belong to one key, so a Project
-// created again under a name starts afresh.
-type bootstrapKey struct {
-	name string
-	uid  types.UID
 }
 
 type bootstrapAttempt struct {
@@ -72,56 +63,43 @@ func newNamespaceBootstrapper(timeout time.Duration, run func(ctx context.Contex
 		readyTTL:   defaultBootstrapReadyTTL,
 		now:        time.Now,
 		run:        run,
-		attempts:   map[bootstrapKey]*bootstrapAttempt{},
+		attempts:   map[string]*bootstrapAttempt{},
 	}
 }
 
-// Ensure creates milo-system in the control plane of the live Project named
-// project with uid, unless this process holds a fresh ready mark for it. The
-// caller has looked the Project up; a failed bootstrap fails no request.
-func (b *NamespaceBootstrapper) Ensure(ctx context.Context, project string, uid types.UID) {
+func (b *NamespaceBootstrapper) Ensure(ctx context.Context, project string) {
 	if b == nil || project == "" {
 		return
 	}
-	key := bootstrapKey{name: project, uid: uid}
 	now := b.now()
-	if expiry, ok := b.ready.Load(key); ok && now.Before(expiry.(time.Time)) {
+	if expiry, ok := b.ready.Load(project); ok && now.Before(expiry.(time.Time)) {
 		return
 	}
 
-	a := b.attemptFor(key, now)
-	if a == nil {
-		return
+	b.mu.Lock()
+	b.sweepLocked(now)
+	a, ok := b.attempts[project]
+	if ok && b.finishedLocked(a) {
+		if a.err == nil || now.Sub(a.finished) < b.retryAfter {
+			b.mu.Unlock()
+			return
+		}
+		ok = false
 	}
+	if !ok {
+		a = &bootstrapAttempt{done: make(chan struct{})}
+		b.attempts[project] = a
+		go b.attempt(project, a)
+	}
+	b.mu.Unlock()
+
 	select {
 	case <-a.done:
 	case <-ctx.Done():
 	}
 }
 
-// attemptFor returns the attempt a caller for key waits on: the one in flight,
-// or a new one. It returns nil when the last attempt succeeded, or failed less
-// than retryAfter ago.
-func (b *NamespaceBootstrapper) attemptFor(key bootstrapKey, now time.Time) *bootstrapAttempt {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.sweepLocked(now)
-	a, ok := b.attempts[key]
-	if ok && b.finishedLocked(a) {
-		if a.err == nil || now.Sub(a.finished) < b.retryAfter {
-			return nil
-		}
-		ok = false
-	}
-	if !ok {
-		a = &bootstrapAttempt{done: make(chan struct{})}
-		b.attempts[key] = a
-		go b.attempt(key, a)
-	}
-	return a
-}
-
-func (b *NamespaceBootstrapper) attempt(key bootstrapKey, a *bootstrapAttempt) {
+func (b *NamespaceBootstrapper) attempt(project string, a *bootstrapAttempt) {
 	start := b.now()
 	var err error
 	defer func() {
@@ -132,7 +110,7 @@ func (b *NamespaceBootstrapper) attempt(key bootstrapKey, a *bootstrapAttempt) {
 		if err != nil {
 			result = "error"
 			klog.ErrorS(err, "Failed to bootstrap namespace in project control plane",
-				"project", key.name, "uid", key.uid, "namespace", miloSystemNamespace)
+				"project", project, "namespace", miloSystemNamespace)
 		}
 		namespaceBootstrapDuration.WithLabelValues(result).Observe(b.now().Sub(start).Seconds())
 
@@ -140,9 +118,9 @@ func (b *NamespaceBootstrapper) attempt(key bootstrapKey, a *bootstrapAttempt) {
 		a.err = err
 		a.finished = b.now()
 		if err == nil {
-			b.ready.Store(key, a.finished.Add(b.readyTTL))
-			if b.attempts[key] == a {
-				delete(b.attempts, key)
+			b.ready.Store(project, a.finished.Add(b.readyTTL))
+			if b.attempts[project] == a {
+				delete(b.attempts, project)
 			}
 		}
 		b.mu.Unlock()
@@ -151,7 +129,7 @@ func (b *NamespaceBootstrapper) attempt(key bootstrapKey, a *bootstrapAttempt) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
-	err = b.run(ctx, key.name)
+	err = b.run(ctx, project)
 }
 
 func (b *NamespaceBootstrapper) finishedLocked(a *bootstrapAttempt) bool {
@@ -168,14 +146,14 @@ func (b *NamespaceBootstrapper) sweepLocked(now time.Time) {
 		return
 	}
 	b.lastSweep = now
-	for key, a := range b.attempts {
+	for project, a := range b.attempts {
 		if b.finishedLocked(a) && now.Sub(a.finished) >= b.retryAfter {
-			delete(b.attempts, key)
+			delete(b.attempts, project)
 		}
 	}
-	b.ready.Range(func(key, expiry any) bool {
+	b.ready.Range(func(project, expiry any) bool {
 		if !now.Before(expiry.(time.Time)) {
-			b.ready.Delete(key)
+			b.ready.Delete(project)
 		}
 		return true
 	})

@@ -7,15 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/pkg/request"
 
-	"golang.org/x/time/rate"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	generic "k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/storage"
 	storagebackend "k8s.io/apiserver/pkg/storage/storagebackend"
@@ -24,7 +20,6 @@ import (
 	k8slegacy "k8s.io/component-base/metrics/legacyregistry"
 
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 )
 
 // -------------------- metrics --------------------
@@ -69,15 +64,6 @@ var (
 		[]string{"result"},
 	)
 
-	unknownProjectWritesRefused = k8smetrics.NewCounterVec(
-		&k8smetrics.CounterOpts{
-			Name:           "projectstorage_unknown_project_writes_refused_total",
-			Help:           "Writes refused because their Project could not be found (NotFound) or read (InternalError)",
-			StabilityLevel: k8smetrics.ALPHA,
-		},
-		[]string{"resource_group", "resource_kind", "reason"},
-	)
-
 	reinitErrors = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "projectstorage_reinitializing_errors_total",
@@ -89,8 +75,7 @@ var (
 )
 
 func init() {
-	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration,
-		unknownProjectWritesRefused, reinitErrors)
+	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration, reinitErrors)
 }
 
 func isReinitErr(err error) bool {
@@ -221,18 +206,6 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 
 // -------------------- mux --------------------
 
-// refusalLogInterval bounds the refusal log line to one per kind in that time; the counter carries the
-// volume. A writer that retries a refused write in a loop would otherwise log at its own rate.
-const refusalLogInterval = 10 * time.Second
-
-// ProjectLookup tells the storage which Project a name refers to now: Lookup
-// reads storage when the view cannot answer, and LiveFromView answers from the
-// view alone.
-type ProjectLookup interface {
-	Lookup(ctx context.Context, name string) (projectstate.Project, error)
-	LiveFromView(name string) (projectstate.Project, bool)
-}
-
 // projectMux implements storage.Interface and routes to a per-project child.
 type projectMux struct {
 	mu        sync.RWMutex
@@ -242,9 +215,7 @@ type projectMux struct {
 	inner        generic.StorageDecorator
 	cfg          storagebackend.ConfigForResource
 	args         decoratorArgs
-	projects     ProjectLookup
 	bootstrapper *NamespaceBootstrapper
-	refusalLog   *rate.Limiter
 }
 
 func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
@@ -318,82 +289,15 @@ func (m *projectMux) destroyAll() {
 }
 
 func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
-	project, ok := request.ProjectID(ctx)
-	if !ok || project == "" {
-		return m.childForProject("")
+	if proj, ok := request.ProjectID(ctx); ok && proj != "" {
+		s, err := m.childForProject(proj)
+		if err != nil {
+			return nil, err
+		}
+		m.bootstrapper.Ensure(ctx, proj)
+		return s, nil
 	}
-	if err := m.admit(ctx, project); err != nil {
-		return nil, err
-	}
-	return m.childForProject(project)
-}
-
-// admit looks up the Project a write into its plane names. A write into a
-// Project that storage does not hold, or that cannot be read, is refused. A
-// live Project is bootstrapped where this kind bootstraps; a deleting one is
-// not. A read refuses nothing, so it asks the view alone.
-//
-// Upstream's NamespaceLifecycle refuses only a create into a missing
-// namespace and lets an update through (k8s.io/apiserver v0.37.1,
-// pkg/admission/plugin/namespace/lifecycle/admission.go lines 105-109,
-// kubernetes/kubernetes#140661). The request's verb cannot tell an update
-// that creates (an apply patch, or a kind that allows create on update) from
-// one that changes, so an update and a patch are refused too. That strands no
-// namespaced object: the Project's finalizer holds until the purge has
-// emptied every namespace. The purge leaves cluster-scoped objects by
-// design, so an update to one of them in a gone Project is refused,
-// and counted with reason NotFound.
-func (m *projectMux) admit(ctx context.Context, project string) error {
-	verb, writes := projectstate.WriteVerb(ctx)
-	if !writes {
-		m.bootstrapFromView(ctx, project)
-		return nil
-	}
-	p, err := m.projects.Lookup(ctx, project)
-	if err != nil {
-		return m.refuse(ctx, project, verb, err)
-	}
-	if !p.Deleting {
-		m.bootstrapper.Ensure(ctx, project, p.UID)
-	}
-	return nil
-}
-
-// bootstrapFromView bootstraps a read's Project only when the view shows it
-// live and its name has no recorded DELETE. A storage read would decide only
-// the bootstrap, and the first write into a Project the view has not seen
-// bootstraps it after its own lookup.
-func (m *projectMux) bootstrapFromView(ctx context.Context, project string) {
-	if m.bootstrapper == nil {
-		return
-	}
-	if p, ok := m.projects.LiveFromView(project); ok {
-		m.bootstrapper.Ensure(ctx, project, p.UID)
-	}
-}
-
-// refuse returns err for a write into project's plane, counted, and logged at
-// most once per refusalLogInterval for this kind.
-func (m *projectMux) refuse(ctx context.Context, project, verb string, err error) error {
-	reason := "InternalError"
-	if apierrors.IsNotFound(err) {
-		reason = "NotFound"
-	}
-	unknownProjectWritesRefused.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, reason).Inc()
-	if m.refusalLog.Allow() {
-		klog.InfoS("Refused a write into a project control plane whose Project cannot be found",
-			"project", project, "group", m.args.resourceGroup, "resource", m.args.resourceKind,
-			"verb", verb, "user", requestUser(ctx), "reason", reason)
-	}
-	return err
-}
-
-// requestUser names the request's user, or "" when the context carries none.
-func requestUser(ctx context.Context) string {
-	if u, ok := genericapirequest.UserFrom(ctx); ok {
-		return u.GetName()
-	}
-	return ""
+	return m.childForProject("")
 }
 
 // ---------- storage.Interface forwarding ----------
