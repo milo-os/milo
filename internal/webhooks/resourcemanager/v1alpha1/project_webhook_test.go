@@ -31,26 +31,12 @@ func TestProjectValidator_ValidateUpdate(t *testing.T) {
 		projectUID           = "project-123"
 	)
 
-	// Create test organizations for the fake client
 	testOrg := &v1alpha1.Organization{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: orgName,
-			UID:  types.UID("org-123"),
-		},
-		Spec: v1alpha1.OrganizationSpec{},
+		ObjectMeta: metav1.ObjectMeta{Name: orgName, UID: types.UID("org-123")},
 	}
-
-	// Create test user for the fake client
 	testUser := &iamv1alpha1.User{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-user",
-			UID:  types.UID("user-123"),
-		},
-		Spec: iamv1alpha1.UserSpec{
-			Email:      "test@example.com",
-			GivenName:  "Test",
-			FamilyName: "User",
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-user", UID: types.UID("user-123")},
+		Spec:       iamv1alpha1.UserSpec{Email: "test@example.com", GivenName: "Test", FamilyName: "User"},
 	}
 
 	fakeClient := fake.NewClientBuilder().
@@ -64,152 +50,77 @@ func TestProjectValidator_ValidateUpdate(t *testing.T) {
 		ProjectOwnerRoleName: projectOwnerRoleName,
 	}
 
+	// project builds a Project with the given labels; it owns the fields ValidateUpdate reads.
+	project := func(labels map[string]string) *v1alpha1.Project {
+		return &v1alpha1.Project{
+			ObjectMeta: metav1.ObjectMeta{Name: projectName, UID: types.UID(projectUID), Labels: labels},
+			Spec:       v1alpha1.ProjectSpec{OwnerRef: v1alpha1.OwnerReference{Kind: "Organization", Name: orgName}},
+		}
+	}
+	// deleting marks a Project for deletion with the project-controller finalizer, the state whose
+	// finalizer removal a label-less legacy Project used to have refused.
+	deleting := func(p *v1alpha1.Project) *v1alpha1.Project {
+		p.DeletionTimestamp = &metav1.Time{Time: metav1.Now().Time}
+		p.Finalizers = []string{"resourcemanager.miloapis.com/project-controller"}
+		return p
+	}
+
+	withOrg := func() map[string]string {
+		return map[string]string{v1alpha1.OrganizationNameLabel: orgName, "other-label": "value"}
+	}
+
 	tests := map[string]struct {
-		oldProject     *v1alpha1.Project
-		newProject     *v1alpha1.Project
-		expectError    bool
-		errorContains  string
-		expectWarnings bool
+		oldProject    *v1alpha1.Project
+		newProject    *v1alpha1.Project
+		expectError   bool
+		errorContains string
 	}{
-		"update allowed when organization label unchanged": {
-			oldProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						v1alpha1.OrganizationNameLabel: orgName,
-						"other-label":                  "original-value",
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
-			newProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						v1alpha1.OrganizationNameLabel: orgName,
-						"other-label":                  "updated-value",
-						"new-label":                    "new-value",
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
+		"label unchanged, other labels edited": {
+			oldProject:  project(map[string]string{v1alpha1.OrganizationNameLabel: orgName, "other-label": "original-value"}),
+			newProject:  project(map[string]string{v1alpha1.OrganizationNameLabel: orgName, "other-label": "updated-value", "new-label": "new-value"}),
 			expectError: false,
 		},
-		"update blocked when organization label removed by setting labels to nil": {
-			oldProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						v1alpha1.OrganizationNameLabel: orgName,
-						"other-label":                  "value",
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
-			newProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   projectName,
-					UID:    types.UID(projectUID),
-					Labels: nil, // Labels set to nil
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
+		"label removed by setting labels to nil": {
+			oldProject:    project(withOrg()),
+			newProject:    project(nil),
 			expectError:   true,
-			errorContains: "organization label cannot be removed",
+			errorContains: "field is immutable",
 		},
-		"update blocked when organization label specifically removed": {
-			oldProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						v1alpha1.OrganizationNameLabel: orgName,
-						"other-label":                  "value",
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
-			newProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						"other-label": "value", // Organization label removed
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
+		"label removed, other labels kept": {
+			oldProject:    project(withOrg()),
+			newProject:    project(map[string]string{"other-label": "value"}),
 			expectError:   true,
-			errorContains: "organization label cannot be removed",
+			errorContains: "field is immutable",
 		},
-		"update blocked when organization label value changed": {
-			oldProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						v1alpha1.OrganizationNameLabel: orgName,
-						"other-label":                  "value",
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
-			newProject: &v1alpha1.Project{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: projectName,
-					UID:  types.UID(projectUID),
-					Labels: map[string]string{
-						v1alpha1.OrganizationNameLabel: "different-org", // Organization label changed
-						"other-label":                  "value",
-					},
-				},
-				Spec: v1alpha1.ProjectSpec{
-					OwnerRef: v1alpha1.OwnerReference{
-						Kind: "Organization",
-						Name: orgName,
-					},
-				},
-			},
+		"label value changed": {
+			oldProject:    project(withOrg()),
+			newProject:    project(map[string]string{v1alpha1.OrganizationNameLabel: "different-org", "other-label": "value"}),
 			expectError:   true,
-			errorContains: "organization label cannot be changed",
+			errorContains: "field is immutable",
+		},
+		// A Project created before the organization label existed carries none. An update that
+		// leaves it absent (such as the finalizer removal of a deleting Project) must pass: the
+		// label is unchanged.
+		"label absent on both old and new": {
+			oldProject:  project(map[string]string{"other-label": "value"}),
+			newProject:  deleting(project(map[string]string{"other-label": "value"})),
+			expectError: false,
+		},
+		// Setting a value where there was none attaches the Project to an organization, an
+		// ownership change that is not an in-place update. The immutable rule refuses it.
+		"label added to a label-less project": {
+			oldProject:    project(map[string]string{"other-label": "value"}),
+			newProject:    project(withOrg()),
+			expectError:   true,
+			errorContains: "field is immutable",
+		},
+		// A missing label counts as an empty value, so adding the label with an empty value is
+		// not a change. This pins that boundary of ValidateImmutableField; a real org value is
+		// refused by the case above.
+		"label added with an empty value is unchanged": {
+			oldProject:  project(map[string]string{"other-label": "value"}),
+			newProject:  project(map[string]string{v1alpha1.OrganizationNameLabel: "", "other-label": "value"}),
+			expectError: false,
 		},
 	}
 
@@ -223,7 +134,6 @@ func TestProjectValidator_ValidateUpdate(t *testing.T) {
 				if tt.errorContains != "" {
 					assert.Contains(t, err.Error(), tt.errorContains, "error message should contain expected text")
 				}
-				// Verify it's a field validation error
 				var statusErr *errors.StatusError
 				assert.ErrorAs(t, err, &statusErr, "error should be a StatusError")
 				assert.Equal(t, metav1.StatusReasonInvalid, statusErr.ErrStatus.Reason, "error reason should be Invalid")
@@ -231,11 +141,7 @@ func TestProjectValidator_ValidateUpdate(t *testing.T) {
 				assert.NoError(t, err, "expected no validation error")
 			}
 
-			if tt.expectWarnings {
-				assert.NotEmpty(t, warnings, "expected validation warnings")
-			} else {
-				assert.Empty(t, warnings, "expected no validation warnings")
-			}
+			assert.Empty(t, warnings, "expected no validation warnings")
 		})
 	}
 }
