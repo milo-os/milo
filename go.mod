@@ -24,7 +24,7 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/sync v0.23.0
 	golang.org/x/time v0.15.0
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	gopkg.in/go-jose/go-jose.v2 v2.6.3
 	k8s.io/api v0.37.1
 	k8s.io/apiextensions-apiserver v0.37.1
