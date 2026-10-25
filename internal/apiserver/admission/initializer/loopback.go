@@ -5,6 +5,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/client-go/rest"
+
+	"go.miloapis.com/milo/internal/apiserver/projectstate"
 )
 
 // Local duck-typed interface: any plugin with this method will match.
@@ -38,5 +40,23 @@ type ObjectConvertorInitializer struct {
 func (i ObjectConvertorInitializer) Initialize(p admission.Interface) {
 	if w, ok := p.(wantsObjectConvertor); ok && i.Convertor != nil {
 		w.SetObjectConvertor(i.Convertor)
+	}
+}
+
+// Local duck-typed interface: any plugin with this method will match.
+type wantsProjectStates interface {
+	SetProjectStates(*projectstate.Cache)
+}
+
+// ProjectStatesInitializer injects the API server's shared view of Projects
+// into admission plugins that want one, so the process keeps one watch of
+// Projects for every reader.
+type ProjectStatesInitializer struct {
+	States *projectstate.Cache
+}
+
+func (i ProjectStatesInitializer) Initialize(p admission.Interface) {
+	if w, ok := p.(wantsProjectStates); ok && i.States != nil {
+		w.SetProjectStates(i.States)
 	}
 }
