@@ -3,6 +3,7 @@ package projectpurge
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -269,5 +270,111 @@ func TestStatus_NoteDeletesMarksADeletedNamespaceAndNamesARefusal(t *testing.T) 
 	}
 	if !strings.Contains(msg, `namespace "reserved" is not yet deleted (delete refused: held by a reservation)`) {
 		t.Fatalf("expected the refused namespace to name its refusal, got %q", msg)
+	}
+}
+
+var entitlementGVR = schema.GroupVersionResource{Group: "services.miloapis.com", Version: "v1alpha1", Resource: "serviceentitlements"}
+
+func clusterDiscovery() func() ([]*metav1.APIResourceList, error) {
+	return func() ([]*metav1.APIResourceList, error) {
+		lists, _ := testDiscovery()()
+		return append(lists, &metav1.APIResourceList{
+			GroupVersion: entitlementGVR.GroupVersion().String(),
+			APIResources: []metav1.APIResource{
+				{Name: "serviceentitlements", Namespaced: false, Kind: "ServiceEntitlement", Verbs: []string{"list", "delete"}},
+				{Name: "serviceentitlements/status", Namespaced: false, Kind: "ServiceEntitlement", Verbs: []string{"get", "update"}},
+			},
+		}), nil
+	}
+}
+
+func newClusterDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			configMapGVR:   "ConfigMapList",
+			entitlementGVR: "ServiceEntitlementList",
+		},
+		objects...,
+	)
+}
+
+func entitlement(name string, finalizers ...string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion(entitlementGVR.GroupVersion().String())
+	obj.SetKind("ServiceEntitlement")
+	obj.SetName(name)
+	if len(finalizers) > 0 {
+		obj.SetFinalizers(finalizers)
+	}
+	return obj
+}
+
+func TestPurgeStatus_ClusterScopedObjectWithFinalizerBlocks(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("default"))
+	dyn := newClusterDynamicClient(
+		entitlement("compute", "services.miloapis.com/entitlement"),
+		entitlement("plain"),
+	)
+
+	status, err := purgeStatus(context.Background(), core, dyn, clusterDiscovery())
+	if err != nil {
+		t.Fatalf("purgeStatus: %v", err)
+	}
+	if status.Complete {
+		t.Fatal("expected the held entitlement to block completion")
+	}
+	if len(status.Blockers) != 1 {
+		t.Fatalf("expected one blocker, got %v", status.Blockers)
+	}
+	blocker := status.Blockers[0]
+	if blocker.Namespace != "" || blocker.Resource != "serviceentitlements" || blocker.Name != "compute" {
+		t.Fatalf("unexpected blocker %+v", blocker)
+	}
+	msg := status.Message()
+	if !strings.Contains(msg, `serviceentitlements "compute"`) || !strings.Contains(msg, "services.miloapis.com/entitlement") {
+		t.Fatalf("expected the message to name the object and its finalizer, got %q", msg)
+	}
+}
+
+func TestPurgeStatus_ClusterScopedObjectWithoutFinalizerDoesNotBlock(t *testing.T) {
+	core := fake.NewSimpleClientset(namespace("default"))
+	dyn := newClusterDynamicClient(entitlement("plain"))
+
+	status, err := purgeStatus(context.Background(), core, dyn, clusterDiscovery())
+	if err != nil {
+		t.Fatalf("purgeStatus: %v", err)
+	}
+	if !status.Complete {
+		t.Fatalf("expected complete, got blockers: %v", status.Blockers)
+	}
+}
+
+func TestDeleteClusterObjects_DeletesEveryUnmarkedObject(t *testing.T) {
+	dyn := newClusterDynamicClient(
+		entitlement("compute", "services.miloapis.com/entitlement"),
+		entitlement("plain"),
+	)
+	resources, err := clusterScopedResources(clusterDiscovery())
+	if err != nil {
+		t.Fatalf("clusterScopedResources: %v", err)
+	}
+	if len(resources) != 1 || resources[0].gvr != entitlementGVR {
+		t.Fatalf("expected only serviceentitlements, got %v", resources)
+	}
+
+	if err := deleteClusterObjects(context.Background(), dyn, resources, 2); err != nil {
+		t.Fatalf("deleteClusterObjects: %v", err)
+	}
+
+	var deleted []string
+	for _, a := range dyn.Actions() {
+		if d, ok := a.(k8stesting.DeleteAction); ok {
+			deleted = append(deleted, d.GetName())
+		}
+	}
+	sort.Strings(deleted)
+	if len(deleted) != 2 || deleted[0] != "compute" || deleted[1] != "plain" {
+		t.Fatalf("expected both entitlements to be deleted, got %v", deleted)
 	}
 }
