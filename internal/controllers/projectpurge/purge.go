@@ -64,7 +64,7 @@ const maxReportedBlockers = 10
 // the finalizers holding it, so the component responsible is identifiable.
 type Blocker struct {
 	// Namespace is the namespace an object lives in, or the namespace itself
-	// when Resource is empty.
+	// when Resource is empty. Empty for a cluster-scoped object.
 	Namespace string
 	// Resource is the plural resource name of a remaining object. Empty when
 	// the namespace itself has not finished deleting.
@@ -92,10 +92,14 @@ func (b Blocker) String() string {
 		}
 		return fmt.Sprintf("namespace %q %s", b.Namespace, state)
 	}
-	if len(b.Finalizers) > 0 {
-		return fmt.Sprintf("%s %q (finalizers: %s)", b.Resource, b.Namespace+"/"+b.Name, strings.Join(b.Finalizers, ", "))
+	name := b.Name
+	if b.Namespace != "" {
+		name = b.Namespace + "/" + b.Name
 	}
-	return fmt.Sprintf("%s %q", b.Resource, b.Namespace+"/"+b.Name)
+	if len(b.Finalizers) > 0 {
+		return fmt.Sprintf("%s %q (finalizers: %s)", b.Resource, name, strings.Join(b.Finalizers, ", "))
+	}
+	return fmt.Sprintf("%s %q", b.Resource, name)
 }
 
 // Status reports whether a project's resources have drained, and what is
@@ -150,10 +154,10 @@ func (s Status) Message() string {
 	return "Waiting for project resources to be removed: " + strings.Join(parts, "; ")
 }
 
-// StartPurge runs Phases A and B (discovery, DeleteCollection on namespaced
-// resources, delete namespaces). These are fast fire-and-forget operations that
-// issue delete commands without waiting for completion. Both phases are
-// idempotent and safe to re-run.
+// StartPurge runs Phases A, B and C (discovery, DeleteCollection on namespaced
+// resources, delete cluster-scoped objects, delete namespaces). These are fast fire-and-forget operations that issue delete
+// commands without waiting for completion. Every phase is idempotent and safe
+// to re-run.
 //
 // Namespaces are deleted, never force-finalized. Kubernetes guarantees that a
 // namespace outlives its contents and consumers resolve their own state through
@@ -218,8 +222,18 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 		return err
 	}
 
-	// Phase B: delete namespaces themselves (sets DeletionTimestamp)
-	return firstRefusal(deleteNamespaces(deadline, core, namespaces, o.Parallel))
+	// Phase B: cluster-scoped objects. Status waits for the ones that carry
+	// finalizers, so their owners finish against a control plane that still
+	// answers. A refused delete here must not keep namespaces from being
+	// deleted, so its error is returned after Phase C.
+	cluster, err := clusterScopedResources(disco.ServerPreferredResources)
+	if err != nil {
+		return err
+	}
+	clusterErr := deleteClusterObjects(deadline, dyn, cluster, o.Parallel, listOpts)
+
+	// Phase C: delete namespaces themselves (sets DeletionTimestamp)
+	return errors.Join(clusterErr, firstRefusal(deleteNamespaces(deadline, core, namespaces, o.Parallel)))
 }
 
 // DeleteNamespaces deletes the named namespaces of a project's control plane,
@@ -273,8 +287,9 @@ func firstRefusal(refused map[string]error) error {
 }
 
 // Status reports whether every resource in a project's control plane is gone.
-// A project has drained once its namespaces have been removed and the
-// namespaces that cannot be deleted hold nothing. Only errors that definitively
+// A project has drained once its namespaces have been removed, the
+// namespaces that cannot be deleted hold nothing, and no cluster-scoped object
+// carries a finalizer. Only errors that definitively
 // indicate the per-project API server is gone (e.g. connection refused) are
 // treated as complete. All other errors (timeouts, 500s, 429s, RBAC issues,
 // context cancellation) are returned so the controller can retry.
@@ -334,6 +349,18 @@ func purgeStatus(
 		}
 		blockers = append(blockers, remaining...)
 	}
+
+	// Cluster-scoped objects that carry finalizers hold the project too, so
+	// their owners can finish against a control plane that still answers.
+	cluster, err := clusterScopedResources(discoverResources)
+	if err != nil {
+		return Status{}, err
+	}
+	held, err := heldClusterObjects(ctx, dyn, cluster)
+	if err != nil {
+		return Status{}, err
+	}
+	blockers = append(blockers, held...)
 
 	sort.Slice(blockers, func(i, j int) bool {
 		a, b := blockers[i], blockers[j]
@@ -415,8 +442,8 @@ func remainingContent(
 }
 
 // namespacedResources returns the namespaced resources the purge deletes.
-// Namespaces and CRDs are handled explicitly, and cluster-scoped resource
-// deletion is intentionally omitted.
+// Namespaces and CRDs are handled explicitly, and cluster-scoped resources are
+// covered by clusterScopedResources.
 func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
@@ -451,6 +478,116 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 		}
 	}
 	return namespaced, nil
+}
+
+// clusterScopedResources returns the cluster-scoped resources the purge
+// deletes. Namespaces and CRDs are handled explicitly and skipped here.
+//
+// Like namespacedResources, only resources that support deletecollection are
+// returned. Those are the ones held in the project's own storage. Resources
+// served from elsewhere, such as a user's sessions and keys, do not support it
+// and are never deleted with a project.
+func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
+	lists, err := discoverResources()
+	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
+		return nil, fmt.Errorf("discover: %w", err)
+	}
+
+	var cluster []res
+	for _, l := range lists {
+		gv, err := schema.ParseGroupVersion(l.GroupVersion)
+		if err != nil {
+			continue
+		}
+		for _, ar := range l.APIResources {
+			verbs := sets.NewString(ar.Verbs...)
+			if !verbs.HasAll("list", "deletecollection") {
+				continue
+			}
+			if containsSlash(ar.Name) {
+				continue // skip subresources
+			}
+			if ar.Namespaced {
+				continue
+			}
+			gvr := schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: ar.Name}
+			if gvr.Group == "" && gvr.Resource == "namespaces" {
+				continue
+			}
+			if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
+				continue
+			}
+			cluster = append(cluster, res{gvr: gvr})
+		}
+	}
+	return cluster, nil
+}
+
+// heldClusterObjects lists the objects of the given cluster-scoped resources
+// that carry finalizers. Marked reports whether each one already carries a
+// deletion mark.
+func heldClusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res) ([]Blocker, error) {
+	var mu sync.Mutex
+	var blockers []Blocker
+
+	err := runParallel(ctx, 8, resources, func(ctx context.Context, r res) error {
+		list, err := dyn.Resource(r.gvr).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			if ignorable(err) {
+				return nil
+			}
+			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+				return fmt.Errorf("rbac forbids listing %s: %w", r.gvr, err)
+			}
+			return fmt.Errorf("list %s: %w", r.gvr, err)
+		}
+		for i := range list.Items {
+			item := &list.Items[i]
+			if len(item.GetFinalizers()) == 0 {
+				continue
+			}
+			mu.Lock()
+			blockers = append(blockers, Blocker{
+				Resource:   r.gvr.Resource,
+				Name:       item.GetName(),
+				Finalizers: item.GetFinalizers(),
+				Marked:     item.GetDeletionTimestamp() != nil,
+			})
+			mu.Unlock()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return blockers, nil
+}
+
+// deleteClusterObjects deletes every object of the given cluster-scoped
+// resources. A refused delete does not stop the others; every refusal is
+// returned.
+func deleteClusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res, parallel int, listOpts metav1.ListOptions) error {
+	bg := metav1.DeletePropagationBackground
+	delOpts := metav1.DeleteOptions{PropagationPolicy: &bg}
+
+	var mu sync.Mutex
+	var errs []error
+	_ = runParallel(ctx, parallel, resources, func(ctx context.Context, r res) error {
+		err := dyn.Resource(r.gvr).DeleteCollection(ctx, delOpts, listOpts)
+		if ignorable(err) {
+			return nil
+		}
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			err = fmt.Errorf("rbac forbids DeleteCollection for %s: %w", r.gvr, err)
+		} else {
+			err = fmt.Errorf("DeleteCollection %s: %w", r.gvr, err)
+		}
+		mu.Lock()
+		errs = append(errs, err)
+		mu.Unlock()
+		return nil
+	})
+	return errors.Join(errs...)
 }
 
 // isServerGone returns true when the error indicates the remote API server is
