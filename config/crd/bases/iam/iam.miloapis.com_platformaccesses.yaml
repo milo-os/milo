@@ -66,6 +66,29 @@ spec:
                 description: Reason is a human-readable explanation for the current
                   state.
                 type: string
+              riskAssessment:
+                description: |-
+                  RiskAssessment summarizes the most recent automated risk evaluation of the
+                  user. It is written by the fraud service alongside State and is copied to
+                  User.status.riskAssessment by the UserController.
+                properties:
+                  decision:
+                    description: Decision is the evaluation outcome, for example ACCEPTED,
+                      REVIEW, DEACTIVATE or REJECTED.
+                    type: string
+                  evaluatedAt:
+                    description: EvaluatedAt is when the evaluation completed.
+                    format: date-time
+                    type: string
+                  evaluationName:
+                    description: EvaluationName is the name of the evaluation this
+                      summary was taken from.
+                    type: string
+                  score:
+                    description: Score is the composite risk score as a decimal string,
+                      for example "0.12".
+                    type: string
+                type: object
               state:
                 default: Pending
                 description: |-

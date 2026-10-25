@@ -92,14 +92,16 @@ func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// Capture the current status to detect changes later
 	oldUserStatus := user.Status.DeepCopy()
 
-	// Get the user access state from PlatformAccess
-	paState, err := r.getPlatformAccessStatus(ctx, user)
+	// Project the user's access state and latest risk assessment from PlatformAccess
+	pa, err := r.getPlatformAccess(ctx, user)
 	if err != nil {
-		log.Error(err, "failed to get platform access status")
-		return ctrl.Result{}, fmt.Errorf("failed to get platform access status: %w", err)
+		log.Error(err, "failed to get platform access")
+		return ctrl.Result{}, fmt.Errorf("failed to get platform access: %w", err)
 	}
 
+	paState, riskAssessment := platformAccessProjection(pa)
 	user.Status.PlatformAccess = paState
+	user.Status.RiskAssessment = riskAssessment
 
 	// Also set/refresh Ready condition to reflect change
 	userCondition := metav1.Condition{
@@ -290,17 +292,26 @@ func (r *UserController) findPlatformAccessForUser(ctx context.Context, obj clie
 	}
 }
 
-func (r *UserController) getPlatformAccessStatus(ctx context.Context, user *iamv1alpha1.User) (iamv1alpha1.PlatformAccessState, error) {
-	log := log.FromContext(ctx).WithName("get-platform-access-status")
-
+// getPlatformAccess returns the PlatformAccess named after the user, or nil
+// when none exists yet.
+func (r *UserController) getPlatformAccess(ctx context.Context, user *iamv1alpha1.User) (*iamv1alpha1.PlatformAccess, error) {
 	pa := &iamv1alpha1.PlatformAccess{}
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: user.Name}, pa); err != nil {
 		if apierrors.IsNotFound(err) {
-			return iamv1alpha1.PlatformAccessStatePending, nil
+			return nil, nil
 		}
-		log.Error(err, "failed to get platformaccess", "user", user.Name)
-		return "", fmt.Errorf("failed to get platformaccess: %w", err)
+		return nil, fmt.Errorf("failed to get platformaccess %q: %w", user.Name, err)
 	}
+	return pa, nil
+}
 
-	return pa.Spec.State, nil
+// platformAccessProjection returns the values the User status mirrors from its
+// PlatformAccess. A user without a PlatformAccess is Pending and has no risk
+// assessment. The risk assessment is deep-copied so the User never aliases the
+// cached PlatformAccess.
+func platformAccessProjection(pa *iamv1alpha1.PlatformAccess) (iamv1alpha1.PlatformAccessState, *iamv1alpha1.RiskAssessment) {
+	if pa == nil {
+		return iamv1alpha1.PlatformAccessStatePending, nil
+	}
+	return pa.Spec.State, pa.Spec.RiskAssessment.DeepCopy()
 }
