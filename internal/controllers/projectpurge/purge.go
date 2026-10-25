@@ -230,7 +230,7 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 	if err != nil {
 		return err
 	}
-	clusterErr := deleteClusterObjects(deadline, dyn, cluster, o.Parallel)
+	clusterErr := deleteClusterObjects(deadline, dyn, cluster, o.Parallel, listOpts)
 
 	// Phase C: delete namespaces themselves (sets DeletionTimestamp)
 	return errors.Join(clusterErr, firstRefusal(deleteNamespaces(deadline, core, namespaces, o.Parallel)))
@@ -356,7 +356,7 @@ func purgeStatus(
 	if err != nil {
 		return Status{}, err
 	}
-	held, err := clusterObjects(ctx, dyn, cluster, true)
+	held, err := heldClusterObjects(ctx, dyn, cluster)
 	if err != nil {
 		return Status{}, err
 	}
@@ -482,6 +482,11 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 
 // clusterScopedResources returns the cluster-scoped resources the purge
 // deletes. Namespaces and CRDs are handled explicitly and skipped here.
+//
+// Like namespacedResources, only resources that support deletecollection are
+// returned. Those are the ones held in the project's own storage. Resources
+// served from elsewhere, such as a user's sessions and keys, do not support it
+// and are never deleted with a project.
 func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
@@ -496,7 +501,7 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 		}
 		for _, ar := range l.APIResources {
 			verbs := sets.NewString(ar.Verbs...)
-			if !verbs.HasAll("list", "delete") {
+			if !verbs.HasAll("list", "deletecollection") {
 				continue
 			}
 			if containsSlash(ar.Name) {
@@ -518,10 +523,10 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 	return cluster, nil
 }
 
-// clusterObjects lists the objects of the given cluster-scoped resources, or
-// only those that carry finalizers when heldOnly is set. Marked reports
-// whether each one already carries a deletion mark.
-func clusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res, heldOnly bool) ([]Blocker, error) {
+// heldClusterObjects lists the objects of the given cluster-scoped resources
+// that carry finalizers. Marked reports whether each one already carries a
+// deletion mark.
+func heldClusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res) ([]Blocker, error) {
 	var mu sync.Mutex
 	var blockers []Blocker
 
@@ -538,7 +543,7 @@ func clusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res,
 		}
 		for i := range list.Items {
 			item := &list.Items[i]
-			if heldOnly && len(item.GetFinalizers()) == 0 {
+			if len(item.GetFinalizers()) == 0 {
 				continue
 			}
 			mu.Lock()
@@ -559,37 +564,27 @@ func clusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res,
 }
 
 // deleteClusterObjects deletes every object of the given cluster-scoped
-// resources that is not yet marked for deletion. A refused delete does not
-// stop the others; every refusal is returned.
-func deleteClusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res, parallel int) error {
+// resources. A refused delete does not stop the others; every refusal is
+// returned.
+func deleteClusterObjects(ctx context.Context, dyn dynamic.Interface, resources []res, parallel int, listOpts metav1.ListOptions) error {
 	bg := metav1.DeletePropagationBackground
 	delOpts := metav1.DeleteOptions{PropagationPolicy: &bg}
 
 	var mu sync.Mutex
 	var errs []error
-	note := func(err error) {
+	_ = runParallel(ctx, parallel, resources, func(ctx context.Context, r res) error {
+		err := dyn.Resource(r.gvr).DeleteCollection(ctx, delOpts, listOpts)
+		if ignorable(err) {
+			return nil
+		}
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			err = fmt.Errorf("rbac forbids DeleteCollection for %s: %w", r.gvr, err)
+		} else {
+			err = fmt.Errorf("DeleteCollection %s: %w", r.gvr, err)
+		}
 		mu.Lock()
 		errs = append(errs, err)
 		mu.Unlock()
-	}
-	_ = runParallel(ctx, parallel, resources, func(ctx context.Context, r res) error {
-		objects, err := clusterObjects(ctx, dyn, []res{r}, false)
-		if err != nil {
-			note(err)
-			return nil
-		}
-		for _, b := range objects {
-			if b.Marked {
-				continue
-			}
-			if err := dyn.Resource(r.gvr).Delete(ctx, b.Name, delOpts); !ignorable(err) {
-				if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-					note(fmt.Errorf("rbac forbids deleting %s %q: %w", r.gvr, b.Name, err))
-				} else {
-					note(fmt.Errorf("delete %s %q: %w", r.gvr, b.Name, err))
-				}
-			}
-		}
 		return nil
 	})
 	return errors.Join(errs...)

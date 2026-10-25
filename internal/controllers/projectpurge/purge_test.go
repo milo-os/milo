@@ -3,7 +3,6 @@ package projectpurge
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -281,8 +280,14 @@ func clusterDiscovery() func() ([]*metav1.APIResourceList, error) {
 		return append(lists, &metav1.APIResourceList{
 			GroupVersion: entitlementGVR.GroupVersion().String(),
 			APIResources: []metav1.APIResource{
-				{Name: "serviceentitlements", Namespaced: false, Kind: "ServiceEntitlement", Verbs: []string{"list", "delete"}},
+				{Name: "serviceentitlements", Namespaced: false, Kind: "ServiceEntitlement", Verbs: []string{"list", "delete", "deletecollection"}},
 				{Name: "serviceentitlements/status", Namespaced: false, Kind: "ServiceEntitlement", Verbs: []string{"get", "update"}},
+			},
+		}, &metav1.APIResourceList{
+			// Served from outside the project's storage: never deleted with it.
+			GroupVersion: "identity.miloapis.com/v1alpha1",
+			APIResources: []metav1.APIResource{
+				{Name: "sessions", Namespaced: false, Kind: "Session", Verbs: []string{"list", "get", "delete"}},
 			},
 		}), nil
 	}
@@ -350,7 +355,7 @@ func TestPurgeStatus_ClusterScopedObjectWithoutFinalizerDoesNotBlock(t *testing.
 	}
 }
 
-func TestDeleteClusterObjects_DeletesEveryUnmarkedObject(t *testing.T) {
+func TestDeleteClusterObjects_DeletesStoredClusterScopedKindsOnly(t *testing.T) {
 	dyn := newClusterDynamicClient(
 		entitlement("compute", "services.miloapis.com/entitlement"),
 		entitlement("plain"),
@@ -363,18 +368,17 @@ func TestDeleteClusterObjects_DeletesEveryUnmarkedObject(t *testing.T) {
 		t.Fatalf("expected only serviceentitlements, got %v", resources)
 	}
 
-	if err := deleteClusterObjects(context.Background(), dyn, resources, 2); err != nil {
+	if err := deleteClusterObjects(context.Background(), dyn, resources, 2, metav1.ListOptions{}); err != nil {
 		t.Fatalf("deleteClusterObjects: %v", err)
 	}
 
 	var deleted []string
 	for _, a := range dyn.Actions() {
-		if d, ok := a.(k8stesting.DeleteAction); ok {
-			deleted = append(deleted, d.GetName())
+		if d, ok := a.(k8stesting.DeleteCollectionAction); ok {
+			deleted = append(deleted, d.GetResource().Resource)
 		}
 	}
-	sort.Strings(deleted)
-	if len(deleted) != 2 || deleted[0] != "compute" || deleted[1] != "plain" {
-		t.Fatalf("expected both entitlements to be deleted, got %v", deleted)
+	if len(deleted) != 1 || deleted[0] != "serviceentitlements" {
+		t.Fatalf("expected one DeleteCollection of serviceentitlements, got %v", deleted)
 	}
 }
