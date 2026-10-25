@@ -21,6 +21,7 @@ type projectPlaneStub struct {
 	mu      sync.Mutex
 	deletes []string
 	docs    map[string]any
+	broken  map[string]bool
 }
 
 func newProjectPlaneStub() *projectPlaneStub {
@@ -103,6 +104,14 @@ func (s *projectPlaneStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: metav1.StatusSuccess})
 		return
 	}
+	if s.broken[r.URL.Path] {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(&metav1.Status{
+			TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
+			Status:   metav1.StatusFailure, Reason: metav1.StatusReasonInternalError, Code: http.StatusInternalServerError,
+		})
+		return
+	}
 	doc, ok := s.docs[r.URL.Path]
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
@@ -151,5 +160,35 @@ func TestStatus_IgnoresHeldObjectsOfKindsServedElsewhere(t *testing.T) {
 	}
 	if !status.Complete {
 		t.Fatalf("expected an empty project to be complete, got blockers: %s", status.Message())
+	}
+}
+
+func TestStartPurge_DeletesOnlyClusterScopedKindsTheProjectHolds(t *testing.T) {
+	stub := newProjectPlaneStub()
+	srv := httptest.NewServer(stub)
+	defer srv.Close()
+
+	if err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{}); err != nil {
+		t.Fatalf("StartPurge: %v", err)
+	}
+
+	got := stub.deleted()
+	want := "/apis/services.miloapis.com/v1alpha1/serviceentitlements"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("expected only DELETE %s, got %v", want, got)
+	}
+}
+
+func TestStartPurge_DeletesNoClusterScopedKindWhenAPIServicesCannotBeRead(t *testing.T) {
+	stub := newProjectPlaneStub()
+	stub.broken = map[string]bool{"/apis/apiregistration.k8s.io/v1/apiservices": true}
+	srv := httptest.NewServer(stub)
+	defer srv.Close()
+
+	if err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{}); err == nil {
+		t.Fatal("expected StartPurge to fail when it cannot tell which kinds are served elsewhere")
+	}
+	if got := stub.deleted(); len(got) != 0 {
+		t.Fatalf("expected no deletes, got %v", got)
 	}
 }
