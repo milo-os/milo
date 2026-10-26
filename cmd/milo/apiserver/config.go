@@ -12,7 +12,6 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/endpoints/filterlatency"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
@@ -391,22 +390,6 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	var registry *discoveryctx.Registry
 	if utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter) {
 		registry = discoveryctx.NewRegistry()
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "sessions"},
-			discoveryctx.ContextUser,
-		)
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "useridentities"},
-			discoveryctx.ContextUser,
-		)
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeys"},
-			discoveryctx.ContextUser,
-		)
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeyregistrationlinks"},
-			discoveryctx.ContextUser,
-		)
 	}
 
 	c := &Config{
