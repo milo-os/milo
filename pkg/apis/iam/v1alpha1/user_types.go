@@ -142,14 +142,14 @@ const (
 	// UserNameReviewRequiredAnnotation is set on a User when givenName and familyName are
 	// identical, which typically happens when the identity provider (e.g. GitHub) supplies
 	// only a single display name and the system splits it across both fields, or when either
-	// name contains an email address.
+	// name is not a person name, such as an email address or a username with digits.
 	//
 	// Presence of this annotation signals that the user has not yet provided a real given
 	// and family name. Front-end clients should prompt the user to review and update their
 	// profile when this annotation is present.
 	//
 	// The annotation value is always "true". The annotation is removed automatically by the
-	// user controller once givenName and familyName differ and neither contains an email.
+	// user controller once givenName and familyName differ and both are person names.
 	//
 	// Example:
 	//

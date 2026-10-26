@@ -21,11 +21,19 @@ func TestUserNameNeedsReview(t *testing.T) {
 		want       bool
 	}{
 		{"distinct real names", "Ada", "Lovelace", false},
+		{"short names", "Bo", "Li", false},
+		{"hyphen, apostrophes and periods", "Jean-Luc", "O’Neill Jr.", false},
+		{"non-Latin script", "Алексей", "Иванов", false},
+		{"surrounding whitespace", " Ada ", "Lovelace ", false},
 		{"identical names", "octocat", "octocat", true},
+		{"identical names ignoring case", "Mario", "mario", true},
 		{"both empty", "", "", false},
 		{"email as family name", "Mario", "mario@example.com", true},
 		{"email as given name", "julio@example.com", "Pena", true},
 		{"email in a multi-word name", "Julio", "Pena julio@example.com", true},
+		{"digits", "Julio", "juliopenayoo30030pppp", true},
+		{"underscore handle", "git_happens", "Doe", true},
+		{"starts with punctuation", "-Jane", "Doe", true},
 	}
 
 	for _, tt := range tests {
