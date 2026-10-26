@@ -43,6 +43,26 @@ func TestStartPurge_DeletesKindsTheProjectsDiscoveryHides(t *testing.T) {
 	}
 }
 
+// Milo serves a user's sessions itself, from an identity provider rather than
+// from a project's storage, so their kind is local and has no deletecollection.
+func TestStartPurge_NeverPurgesAVirtualKindRootDiscoveryLists(t *testing.T) {
+	identity := schema.GroupVersion{Group: "identity.miloapis.com", Version: "v1alpha1"}
+	root, project := newProjectPlaneStub(), newProjectPlaneStub()
+	root.serve(identity, metav1.APIResource{Name: "sessions", Kind: "Session", Verbs: metav1.Verbs{"get", "list", "delete"}})
+	project.storeLocally(identity)
+	rootSrv, projectSrv := httptest.NewServer(root), httptest.NewServer(project)
+	defer rootSrv.Close()
+	defer projectSrv.Close()
+
+	err := New(&rest.Config{Host: rootSrv.URL}).StartPurge(context.Background(), &rest.Config{Host: projectSrv.URL}, "doomed", Options{})
+	if err != nil {
+		t.Fatalf("StartPurge: %v", err)
+	}
+	if got := project.deleted(); slices.ContainsFunc(got, func(p string) bool { return strings.HasPrefix(p, "/apis/identity.miloapis.com/") }) {
+		t.Errorf("a virtual kind was purged: deletes %v", got)
+	}
+}
+
 func TestStatus_ReportsHeldObjectsOfKindsTheProjectsDiscoveryHides(t *testing.T) {
 	root, project := hiddenKindStubs()
 	project.docs["/apis/rbac.authorization.k8s.io/v1/clusterroles"] = map[string]any{
