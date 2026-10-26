@@ -7,6 +7,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	restclient "k8s.io/client-go/rest"
@@ -15,6 +16,7 @@ import (
 
 	gccontroller "go.miloapis.com/milo/internal/controllers/garbagecollector"
 	namespacecontroller "go.miloapis.com/milo/internal/controllers/namespace"
+	"go.miloapis.com/milo/pkg/features"
 
 	"go.miloapis.com/milo/internal/controllers/projectprovider"
 )
@@ -123,6 +125,11 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 	if err != nil {
 		return nil, true, fmt.Errorf("failed to start the generic garbage collector: %w", err)
 	}
+	served, err := startServedTypes(ctx, cfg)
+	if err != nil {
+		return nil, true, err
+	}
+	gc.SetServedTypes(served, utilfeature.DefaultFeatureGate.Enabled(features.GarbageCollectorServedTypes))
 
 	// Start GC workers
 	workers := int(controllerContext.ComponentConfig.GarbageCollectorController.ConcurrentGCSyncs)
