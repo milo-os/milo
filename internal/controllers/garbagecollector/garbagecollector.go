@@ -75,8 +75,18 @@ type GarbageCollector struct {
 	kubeClient       clientset.Interface
 	eventBroadcaster record.EventBroadcaster
 
+	// dependencyGraphBuilders holds the root's builder first, then one per project. Read it only through builders():
+	// AddProject and RemoveProject replace it under mu and never write an element of a slice already published, so a
+	// walk holds a consistent copy without holding mu (milo#834, F7).
 	dependencyGraphBuilders []*GraphBuilder
 	cancels                 map[string]context.CancelFunc
+}
+
+// builders returns the graph builders at this moment, for a walk outside mu.
+func (gc *GarbageCollector) builders() []*GraphBuilder {
+	gc.mu.RLock()
+	defer gc.mu.RUnlock()
+	return gc.dependencyGraphBuilders
 }
 
 var _ controller.Interface = (*GarbageCollector)(nil)
@@ -155,8 +165,8 @@ func (gc *GarbageCollector) RemoveProject(project string) {
 		cancel()
 		delete(gc.cancels, project)
 	}
-	// drop from slice
-	dst := gc.dependencyGraphBuilders[:0]
+	// drop from slice: a new one, because a walk may hold the old
+	dst := make([]*GraphBuilder, 0, len(gc.dependencyGraphBuilders))
 	for _, gb := range gc.dependencyGraphBuilders {
 		if gb.project != project {
 			dst = append(dst, gb)
@@ -226,10 +236,11 @@ func (gc *GarbageCollector) resyncMonitors(
 	logger klog.Logger,
 	deletableResources map[schema.GroupVersionResource]struct{},
 ) error {
-	if len(gc.dependencyGraphBuilders) == 0 {
+	builders := gc.builders()
+	if len(builders) == 0 {
 		return fmt.Errorf("no dependency graph builders configured")
 	}
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range builders {
 		if err := gb.syncMonitors(logger, deletableResources); err != nil {
 			return err
 		}
@@ -247,7 +258,7 @@ func (gc *GarbageCollector) Run(ctx context.Context, workers int, initialSyncTim
 
 	// Stop all builders' graphChanges on exit.
 	defer func() {
-		for _, gb := range gc.dependencyGraphBuilders {
+		for _, gb := range gc.builders() {
 			gb.graphChanges.ShutDown()
 		}
 	}()
@@ -261,13 +272,14 @@ func (gc *GarbageCollector) Run(ctx context.Context, workers int, initialSyncTim
 	logger.Info("Starting controller", "controller", "garbagecollector")
 	defer logger.Info("Shutting down controller", "controller", "garbagecollector")
 
-	if len(gc.dependencyGraphBuilders) == 0 {
+	builders := gc.builders()
+	if len(builders) == 0 {
 		logger.Error(nil, "no dependency graph builders configured")
 		return
 	}
 
 	// Start all graph builders.
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range builders {
 		go gb.Run(ctx)
 	}
 
@@ -275,14 +287,7 @@ func (gc *GarbageCollector) Run(ctx context.Context, workers int, initialSyncTim
 	synced := cache.WaitForNamedCacheSync(
 		"garbage collector",
 		waitForStopOrTimeout(ctx.Done(), initialSyncTimeout),
-		func() bool {
-			for _, gb := range gc.dependencyGraphBuilders {
-				if !gb.IsSynced(logger) {
-					return false
-				}
-			}
-			return true
-		},
+		func() bool { return gc.IsSynced(logger) },
 	)
 	if !synced {
 		logger.Info("Garbage collector: not all resource monitors could be synced, proceeding anyways")
@@ -302,7 +307,7 @@ func (gc *GarbageCollector) Run(ctx context.Context, workers int, initialSyncTim
 }
 
 func (gc *GarbageCollector) anyBuilderResourceSynced(res schema.GroupVersionResource) bool {
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range gc.builders() {
 		if gb.IsResourceSynced(res) {
 			return true
 		}
@@ -363,12 +368,7 @@ func (gc *GarbageCollector) Sync(ctx context.Context, discoveryClient discovery.
 
 		// 6) Periodically check that ALL builders report cache synced (for logs/metrics)
 		cacheSynced := cache.WaitForNamedCacheSync("garbage collector", waitForStopOrTimeout(ctx.Done(), period), func() bool {
-			for _, gb := range gc.dependencyGraphBuilders {
-				if !gb.IsSynced(logger) {
-					return false
-				}
-			}
-			return true
+			return gc.IsSynced(logger)
 		})
 		if cacheSynced {
 			logger.V(2).Info("synced garbage collector")
@@ -414,10 +414,11 @@ func waitForStopOrTimeout(stopCh <-chan struct{}, timeout time.Duration) <-chan 
 
 // IsSynced returns true if dependencyGraphBuilder is synced.
 func (gc *GarbageCollector) IsSynced(logger klog.Logger) bool {
-	if len(gc.dependencyGraphBuilders) == 0 {
+	builders := gc.builders()
+	if len(builders) == 0 {
 		return false
 	}
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range builders {
 		if !gb.IsSynced(logger) {
 			return false
 		}
@@ -461,7 +462,7 @@ const (
 
 // helper: find builder by project id
 func (gc *GarbageCollector) builderForProject(project string) *GraphBuilder {
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range gc.builders() {
 		if gb.project == project {
 			return gb
 		}
@@ -471,7 +472,7 @@ func (gc *GarbageCollector) builderForProject(project string) *GraphBuilder {
 
 // helper: fallback — search any builder by UID (only used if project is empty)
 func (gc *GarbageCollector) findNodeInAnyBuilder(uid types.UID) (*node, bool) {
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range gc.builders() {
 		if n, ok := gb.uidToNode.Read(uid); ok {
 			return n, true
 		}
@@ -888,7 +889,7 @@ func (gc *GarbageCollector) attemptToOrphanWorker(logger klog.Logger, item inter
 // uidToNode graph. It's useful for debugging.
 // This method is used by integration tests.
 func (gc *GarbageCollector) GraphHasUID(u types.UID) bool {
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range gc.builders() {
 		if _, ok := gb.uidToNode.Read(u); ok {
 			return true
 		}
@@ -945,8 +946,8 @@ func (gc *GarbageCollector) Name() string {
 
 // GetDependencyGraphBuilder return graph builder which is particularly helpful for testing where controllerContext is not available
 func (gc *GarbageCollector) GetDependencyGraphBuilder() *GraphBuilder {
-	if len(gc.dependencyGraphBuilders) > 0 {
-		return gc.dependencyGraphBuilders[0]
+	if builders := gc.builders(); len(builders) > 0 {
+		return builders[0]
 	}
 	return nil
 }

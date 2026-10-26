@@ -40,7 +40,7 @@ func resourceDefaultNamespace(namespaced bool, defaultNamespace string) string {
 }
 
 func (gc *GarbageCollector) chooseBuilderForUID(uid types.UID) *GraphBuilder {
-	for _, gb := range gc.dependencyGraphBuilders {
+	for _, gb := range gc.builders() {
 		if _, ok := gb.uidToNode.Read(uid); ok {
 			return gb
 		}

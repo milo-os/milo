@@ -383,14 +383,21 @@ func (gb *GraphBuilder) IsSynced(logger klog.Logger) bool {
 // closed. Any running monitors will be stopped before Run returns.
 func (gb *GraphBuilder) Run(ctx context.Context) {
 	logger := klog.FromContext(ctx)
-	logger.Info("Running", "component", "GraphBuilder")
-	defer logger.Info("Stopping", "component", "GraphBuilder")
 
-	// Set up the stop channel.
+	// Set up the stop channel. A builder runs once: the collector's Run and AddProject can both start it, and a second
+	// graph-change processor would break processGraphChanges' single writer (milo#834, F7).
 	gb.monitorLock.Lock()
+	if gb.running {
+		gb.monitorLock.Unlock()
+		logger.V(2).Info("GraphBuilder is already running", "project", gb.project)
+		return
+	}
 	gb.stopCh = ctx.Done()
 	gb.running = true
 	gb.monitorLock.Unlock()
+
+	logger.Info("Running", "component", "GraphBuilder")
+	defer logger.Info("Stopping", "component", "GraphBuilder")
 
 	// Start monitors and begin change processing until the stop channel is
 	// closed.
@@ -411,6 +418,7 @@ func (gb *GraphBuilder) Run(ctx context.Context) {
 
 	// reset monitors so that the graph builder can be safely re-run/synced.
 	gb.monitors = nil
+	gb.running = false
 	logger.Info("stopped monitors", "stopped", stopped, "total", len(monitors))
 }
 
