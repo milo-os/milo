@@ -36,7 +36,7 @@ func newDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient 
 	scheme := runtime.NewScheme()
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		scheme,
-		map[schema.GroupVersionResource]string{configMapGVR: "ConfigMapList"},
+		map[schema.GroupVersionResource]string{configMapGVR: "ConfigMapList", apiServicesGVR: "APIServiceList"},
 		objects...,
 	)
 }
@@ -299,6 +299,7 @@ func newClusterDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamic
 		map[schema.GroupVersionResource]string{
 			configMapGVR:   "ConfigMapList",
 			entitlementGVR: "ServiceEntitlementList",
+			apiServicesGVR: "APIServiceList",
 		},
 		objects...,
 	)
@@ -360,7 +361,7 @@ func TestDeleteClusterObjects_DeletesStoredClusterScopedKindsOnly(t *testing.T) 
 		entitlement("compute", "services.miloapis.com/entitlement"),
 		entitlement("plain"),
 	)
-	resources, err := clusterScopedResources(clusterDiscovery())
+	resources, err := clusterScopedResources(clusterDiscovery(), nil)
 	if err != nil {
 		t.Fatalf("clusterScopedResources: %v", err)
 	}

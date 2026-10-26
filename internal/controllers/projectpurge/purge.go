@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/discovery"
@@ -226,7 +227,11 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 	// finalizers, so their owners finish against a control plane that still
 	// answers. A refused delete here must not keep namespaces from being
 	// deleted, so its error is returned after Phase C.
-	cluster, err := clusterScopedResources(disco.ServerPreferredResources)
+	remote, err := servedElsewhere(deadline, dyn)
+	if err != nil {
+		return err
+	}
+	cluster, err := clusterScopedResources(disco.ServerPreferredResources, remote)
 	if err != nil {
 		return err
 	}
@@ -352,7 +357,11 @@ func purgeStatus(
 
 	// Cluster-scoped objects that carry finalizers hold the project too, so
 	// their owners can finish against a control plane that still answers.
-	cluster, err := clusterScopedResources(discoverResources)
+	remote, err := servedElsewhere(ctx, dyn)
+	if err != nil {
+		return Status{}, err
+	}
+	cluster, err := clusterScopedResources(discoverResources, remote)
 	if err != nil {
 		return Status{}, err
 	}
@@ -484,10 +493,9 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 // deletes. Namespaces and CRDs are handled explicitly and skipped here.
 //
 // Like namespacedResources, only resources that support deletecollection are
-// returned. Those are the ones held in the project's own storage. Resources
-// served from elsewhere, such as a user's sessions and keys, do not support it
-// and are never deleted with a project.
-func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
+// returned. Resources served from elsewhere, such as a user's sessions and
+// keys, do not support it and are never deleted with a project.
+func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error), remote sets.Set[schema.GroupVersion]) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
 		return nil, fmt.Errorf("discover: %w", err)
@@ -497,6 +505,9 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 	for _, l := range lists {
 		gv, err := schema.ParseGroupVersion(l.GroupVersion)
 		if err != nil {
+			continue
+		}
+		if gv.Group == apiServicesGVR.Group || remote.Has(gv) {
 			continue
 		}
 		for _, ar := range l.APIResources {
@@ -521,6 +532,29 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 		}
 	}
 	return cluster, nil
+}
+
+var apiServicesGVR = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
+
+func servedElsewhere(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.GroupVersion], error) {
+	remote := sets.New[schema.GroupVersion]()
+	list, err := dyn.Resource(apiServicesGVR).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return remote, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list apiservices: %w", err)
+	}
+	for i := range list.Items {
+		obj := list.Items[i].Object
+		if _, found, _ := unstructured.NestedMap(obj, "spec", "service"); !found {
+			continue
+		}
+		group, _, _ := unstructured.NestedString(obj, "spec", "group")
+		version, _, _ := unstructured.NestedString(obj, "spec", "version")
+		remote.Insert(schema.GroupVersion{Group: group, Version: version})
+	}
+	return remote, nil
 }
 
 // heldClusterObjects lists the objects of the given cluster-scoped resources
