@@ -82,6 +82,7 @@ func (nm *NamespaceController) AddProject(
 	discover func() ([]*metav1.APIResourceList, error),
 	resync time.Duration,
 	finalizer v1.FinalizerName,
+	syncTimeout time.Duration,
 ) error {
 	// klog
 
@@ -125,10 +126,13 @@ func (nm *NamespaceController) AddProject(
 	nm.mu.Unlock()
 
 	go factory.Start(ctx.Done())
-	if !cache.WaitForNamedCacheSync("namespace-"+project, ctx.Done(), nsInf.Informer().HasSynced) {
+	// The wait is bounded: a Project's engagement must not hold back the others for a cache that never syncs.
+	syncCtx, cancelSync := context.WithTimeout(ctx, syncTimeout)
+	defer cancelSync()
+	if !cache.WaitForNamedCacheSync("namespace-"+project, syncCtx.Done(), nsInf.Informer().HasSynced) {
 		// failed to sync; clean up the partial registration
 		nm.RemoveProject(project)
-		return context.Canceled
+		return fmt.Errorf("namespace cache of project %s did not sync: %w", project, syncCtx.Err())
 	}
 	return nil
 }
