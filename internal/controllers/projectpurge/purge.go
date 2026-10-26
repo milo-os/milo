@@ -23,6 +23,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"go.miloapis.com/milo/internal/projectscope"
 )
 
 type Options struct {
@@ -450,8 +452,8 @@ func remainingContent(
 }
 
 // namespacedResources returns the namespaced resources the purge deletes.
-// Namespaces and CRDs are handled explicitly, and cluster-scoped resources are
-// covered by clusterScopedResources.
+// Namespaces are deleted in Phase C, the kinds every project shares are never
+// deleted, and cluster-scoped resources are covered by clusterScopedResources.
 func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
@@ -479,7 +481,7 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 			if gvr.Group == "" && gvr.Resource == "namespaces" {
 				continue
 			}
-			if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
+			if projectscope.StaysGlobal(gvr.GroupResource()) {
 				continue
 			}
 			namespaced = append(namespaced, res{gvr: gvr})
@@ -489,7 +491,8 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 }
 
 // clusterScopedResources returns the cluster-scoped resources the purge
-// deletes. Namespaces and CRDs are handled explicitly and skipped here.
+// deletes. Namespaces are deleted in Phase C, and the kinds every project
+// shares are never deleted.
 //
 // Only group versions in local, the ones Milo stores itself, are returned, so a
 // kind served from elsewhere is never deleted with a project. Like
@@ -525,7 +528,7 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 			if gvr.Group == "" && gvr.Resource == "namespaces" {
 				continue
 			}
-			if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
+			if projectscope.StaysGlobal(gvr.GroupResource()) {
 				continue
 			}
 			cluster = append(cluster, res{gvr: gvr})
@@ -537,9 +540,8 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 var apiServicesGVR = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
 
 // servedLocally returns the group versions Milo stores itself: those an
-// APIService without spec.service names. APIServices are shared by every
-// project, so their own group is left out. A group version no APIService
-// names cannot be told apart, so it is left out too.
+// APIService without spec.service names. A group version no APIService names
+// cannot be told apart, so it is left out.
 func servedLocally(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.GroupVersion], error) {
 	list, err := dyn.Resource(apiServicesGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -553,9 +555,6 @@ func servedLocally(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.
 		}
 		group, _, _ := unstructured.NestedString(obj, "spec", "group")
 		version, _, _ := unstructured.NestedString(obj, "spec", "version")
-		if group == apiServicesGVR.Group {
-			continue
-		}
 		local.Insert(schema.GroupVersion{Group: group, Version: version})
 	}
 	return local, nil
