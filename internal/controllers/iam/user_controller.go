@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -125,18 +126,26 @@ func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
+// userNameNeedsReview reports whether a user's name is a placeholder rather than a real name:
+// givenName and familyName are identical (an identity provider such as GitHub supplied a single
+// display name that was copied into both fields), or either one contains an email address
+// (an IdP fallback put it there, or the user typed their email into a name field).
+func userNameNeedsReview(givenName, familyName string) bool {
+	namesAreEqual := givenName != "" && givenName == familyName
+	return namesAreEqual || strings.Contains(givenName, "@") || strings.Contains(familyName, "@")
+}
+
 // reconcileNameReviewAnnotation adds or removes the name-review-required annotation depending on
-// whether givenName and familyName are identical. This situation arises when an identity provider
-// (e.g. GitHub) supplies a single display name and the system copies it into both fields.
+// whether userNameNeedsReview flags the user's givenName and familyName.
 func (r *UserController) reconcileNameReviewAnnotation(ctx context.Context, user *iamv1alpha1.User) error {
 	log := log.FromContext(ctx).WithName("reconcile-name-review-annotation")
 
 	annotations := user.GetAnnotations()
 	_, annotationPresent := annotations[iamv1alpha1.UserNameReviewRequiredAnnotation]
-	namesAreEqual := user.Spec.GivenName != "" && user.Spec.GivenName == user.Spec.FamilyName
+	needsReview := userNameNeedsReview(user.Spec.GivenName, user.Spec.FamilyName)
 
 	switch {
-	case namesAreEqual && !annotationPresent:
+	case needsReview && !annotationPresent:
 		if annotations == nil {
 			annotations = map[string]string{}
 		}
@@ -147,7 +156,7 @@ func (r *UserController) reconcileNameReviewAnnotation(ctx context.Context, user
 		}
 		log.Info("Added name-review-required annotation", "user", user.Name)
 
-	case !namesAreEqual && annotationPresent:
+	case !needsReview && annotationPresent:
 		delete(annotations, iamv1alpha1.UserNameReviewRequiredAnnotation)
 		user.SetAnnotations(annotations)
 		if err := r.Client.Update(ctx, user); err != nil {
