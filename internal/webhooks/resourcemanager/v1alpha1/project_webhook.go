@@ -8,6 +8,7 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	"go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -172,15 +173,16 @@ func (v *ProjectValidator) ValidateUpdate(ctx context.Context, oldProject, newPr
 		))
 	}
 
-	// Existing projects always have the organization label, so prevent any changes to it
-	oldOrgLabel := oldProject.Labels[v1alpha1.OrganizationNameLabel]
-	newOrgLabel, newExists := newProject.Labels[v1alpha1.OrganizationNameLabel]
-	// The organization label must not be removed or changed
-	if !newExists {
-		errs = append(errs, field.Forbidden(field.NewPath("metadata.labels").Key(v1alpha1.OrganizationNameLabel), "organization label cannot be removed"))
-	} else if oldOrgLabel != newOrgLabel {
-		errs = append(errs, field.Forbidden(field.NewPath("metadata.labels").Key(v1alpha1.OrganizationNameLabel), "organization label cannot be changed"))
-	}
+	// The organization label's value is immutable: it must stay as it was, and a missing label
+	// counts as an empty value (ValidateImmutableField compares the two lookups). So changing a
+	// value, or setting one where there was none, is refused; a Project created before the label
+	// existed keeps passing while its label stays absent. New Projects get the label from the
+	// mutating webhook.
+	errs = append(errs, apivalidation.ValidateImmutableField(
+		newProject.Labels[v1alpha1.OrganizationNameLabel],
+		oldProject.Labels[v1alpha1.OrganizationNameLabel],
+		field.NewPath("metadata.labels").Key(v1alpha1.OrganizationNameLabel),
+	)...)
 
 	if len(errs) > 0 {
 		return nil, errors.NewInvalid(newProject.GroupVersionKind().GroupKind(), newProject.Name, errs)
