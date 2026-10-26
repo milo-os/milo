@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -301,8 +302,19 @@ func newClusterDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamic
 			entitlementGVR: "ServiceEntitlementList",
 			apiServicesGVR: "APIServiceList",
 		},
-		objects...,
+		append([]runtime.Object{localAPIService(entitlementGVR.GroupVersion())}, objects...)...,
 	)
+}
+
+// localAPIService is the APIService the aggregator registers for a group version Milo stores itself.
+func localAPIService(gv schema.GroupVersion) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion("apiregistration.k8s.io/v1")
+	obj.SetKind("APIService")
+	obj.SetName(gv.Version + "." + gv.Group)
+	_ = unstructured.SetNestedField(obj.Object, gv.Group, "spec", "group")
+	_ = unstructured.SetNestedField(obj.Object, gv.Version, "spec", "version")
+	return obj
 }
 
 func entitlement(name string, finalizers ...string) *unstructured.Unstructured {
@@ -361,7 +373,7 @@ func TestDeleteClusterObjects_DeletesStoredClusterScopedKindsOnly(t *testing.T) 
 		entitlement("compute", "services.miloapis.com/entitlement"),
 		entitlement("plain"),
 	)
-	resources, err := clusterScopedResources(clusterDiscovery(), nil)
+	resources, err := clusterScopedResources(clusterDiscovery(), sets.New(entitlementGVR.GroupVersion(), schema.GroupVersion{Group: "identity.miloapis.com", Version: "v1alpha1"}))
 	if err != nil {
 		t.Fatalf("clusterScopedResources: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	generic "k8s.io/apiserver/pkg/registry/generic"
 
 	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
+	"go.miloapis.com/milo/internal/projectscope"
 )
 
 // Wrap the upstream RESTOptionsGetter to install a per-project decorator that looks each request's
@@ -35,8 +36,8 @@ func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object
 	if err != nil {
 		return opts, err
 	}
-	// 🔒 Leave CRD *definitions* global so discovery is shared cluster-wide
-	if gr.Group == "apiextensions.k8s.io" && gr.Resource == "customresourcedefinitions" {
+	// 🔒 Leave the kinds every project shares, such as CRD *definitions*, global
+	if projectscope.StaysGlobal(gr) {
 		return opts, nil
 	}
 
