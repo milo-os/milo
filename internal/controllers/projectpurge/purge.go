@@ -225,17 +225,16 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 
 	// Phase B: cluster-scoped objects. Status waits for the ones that carry
 	// finalizers, so their owners finish against a control plane that still
-	// answers. A refused delete here must not keep namespaces from being
-	// deleted, so its error is returned after Phase C.
-	remote, err := servedElsewhere(deadline, dyn)
-	if err != nil {
-		return err
+	// answers. A failed read or a refused delete here must not keep
+	// namespaces from being deleted, so its error is returned after Phase C.
+	local, clusterErr := servedLocally(deadline, dyn)
+	var cluster []res
+	if clusterErr == nil {
+		cluster, clusterErr = clusterScopedResources(disco.ServerPreferredResources, local)
 	}
-	cluster, err := clusterScopedResources(disco.ServerPreferredResources, remote)
-	if err != nil {
-		return err
+	if clusterErr == nil {
+		clusterErr = deleteClusterObjects(deadline, dyn, cluster, o.Parallel, listOpts)
 	}
-	clusterErr := deleteClusterObjects(deadline, dyn, cluster, o.Parallel, listOpts)
 
 	// Phase C: delete namespaces themselves (sets DeletionTimestamp)
 	return errors.Join(clusterErr, firstRefusal(deleteNamespaces(deadline, core, namespaces, o.Parallel)))
@@ -357,11 +356,11 @@ func purgeStatus(
 
 	// Cluster-scoped objects that carry finalizers hold the project too, so
 	// their owners can finish against a control plane that still answers.
-	remote, err := servedElsewhere(ctx, dyn)
+	local, err := servedLocally(ctx, dyn)
 	if err != nil {
 		return Status{}, err
 	}
-	cluster, err := clusterScopedResources(discoverResources, remote)
+	cluster, err := clusterScopedResources(discoverResources, local)
 	if err != nil {
 		return Status{}, err
 	}
@@ -492,10 +491,11 @@ func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, er
 // clusterScopedResources returns the cluster-scoped resources the purge
 // deletes. Namespaces and CRDs are handled explicitly and skipped here.
 //
-// Like namespacedResources, only resources that support deletecollection are
-// returned. Resources served from elsewhere, such as a user's sessions and
-// keys, do not support it and are never deleted with a project.
-func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error), remote sets.Set[schema.GroupVersion]) ([]res, error) {
+// Only group versions in local, the ones Milo stores itself, are returned, so a
+// kind served from elsewhere is never deleted with a project. Like
+// namespacedResources, only resources that support deletecollection are
+// returned.
+func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error), local sets.Set[schema.GroupVersion]) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
 		return nil, fmt.Errorf("discover: %w", err)
@@ -507,7 +507,7 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 		if err != nil {
 			continue
 		}
-		if gv.Group == apiServicesGVR.Group || remote.Has(gv) {
+		if !local.Has(gv) {
 			continue
 		}
 		for _, ar := range l.APIResources {
@@ -536,25 +536,29 @@ func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList,
 
 var apiServicesGVR = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
 
-func servedElsewhere(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.GroupVersion], error) {
-	remote := sets.New[schema.GroupVersion]()
+// servedLocally returns the group versions Milo stores itself: those an
+// APIService without spec.service names. APIServices are shared by every
+// project, so their own group is left out. A group version no APIService
+// names cannot be told apart, so it is left out too.
+func servedLocally(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.GroupVersion], error) {
 	list, err := dyn.Resource(apiServicesGVR).List(ctx, metav1.ListOptions{})
-	if apierrors.IsNotFound(err) {
-		return remote, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("list apiservices: %w", err)
 	}
+	local := sets.New[schema.GroupVersion]()
 	for i := range list.Items {
 		obj := list.Items[i].Object
-		if _, found, _ := unstructured.NestedMap(obj, "spec", "service"); !found {
+		if _, found, _ := unstructured.NestedMap(obj, "spec", "service"); found {
 			continue
 		}
 		group, _, _ := unstructured.NestedString(obj, "spec", "group")
 		version, _, _ := unstructured.NestedString(obj, "spec", "version")
-		remote.Insert(schema.GroupVersion{Group: group, Version: version})
+		if group == apiServicesGVR.Group {
+			continue
+		}
+		local.Insert(schema.GroupVersion{Group: group, Version: version})
 	}
-	return remote, nil
+	return local, nil
 }
 
 // heldClusterObjects lists the objects of the given cluster-scoped resources
