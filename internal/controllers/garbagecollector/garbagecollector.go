@@ -86,6 +86,11 @@ type GarbageCollector struct {
 	served        ServedTypes
 	narrow        bool
 	rootResources map[schema.GroupVersionResource]struct{}
+
+	// loggedUnserved and reportedUnserved are the objects and the types reportUnserved (unserved.go) last counted;
+	// only Sync's goroutine touches them.
+	loggedUnserved   map[types.UID]struct{}
+	reportedUnserved map[schema.GroupResource]struct{}
 }
 
 // builders returns the graph builders at this moment, for a walk outside mu.
@@ -233,6 +238,7 @@ func NewComposedGarbageCollectorMulti(
 	}
 
 	metrics.Register()
+	registerUnservedMetrics()
 	return gc, nil
 }
 
@@ -348,7 +354,9 @@ func (gc *GarbageCollector) Sync(ctx context.Context, discoveryClient discovery.
 		}
 
 		// Projects follow the served types on every tick, after any root resync below:
-		// a declaration can change them with no change in discovery (served.go).
+		// a declaration can change them with no change in discovery (served.go). The
+		// shadow's gauges are read on every tick too (unserved.go).
+		defer gc.reportUnserved(logger, newResources)
 		defer gc.narrowProjects(logger, newResources)
 
 		// 3) Short-circuit if nothing changed

@@ -12,9 +12,11 @@ import (
 )
 
 // TestBuildersWalkedWhileProjectsChange walks the graph builders from other goroutines while projects are engaged
-// and dropped, and while Sync resyncs every builder (milo#834, F7). It proves the walks safe only under -race.
+// and dropped, and while Sync resyncs every builder and walks every project graph for the shadow's gauges (milo#834,
+// F7). It proves the walks safe only under -race.
 func TestBuildersWalkedWhileProjectsChange(t *testing.T) {
 	g := newTestGC(t, widgets)
+	g.SetServedTypes(newFakeServed(true, gizmos), false)
 	period := 50 * time.Millisecond
 	go g.Run(g.ctx, 1, period)
 	go g.Sync(g.ctx, g.discovery, period)
