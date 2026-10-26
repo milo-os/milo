@@ -40,8 +40,8 @@ type policyEntry struct {
 //     that build on Milo). Watched live via an informer.
 //
 //  3. Static registrations — for built-in/aggregated APIs (e.g. core/v1,
-//     identity.miloapis.com sessions) that aren't backed by CRDs. Registered
-//     once at apiserver startup with RegisterStatic.
+//     identity.miloapis.com sessions) that aren't backed by CRDs. Milo's own
+//     are listed in builtinContexts, and NewRegistry registers them.
 //
 // Resources with no registration in any source are treated as visible in all
 // contexts, so existing CRDs and external CRDs that haven't adopted the marker
@@ -56,9 +56,31 @@ type Registry struct {
 	hasPolicyInit   bool
 }
 
-// NewRegistry creates an empty registry. Call RegisterStatic for any built-in
-// APIs, then Run with an informer factory to populate the CRD-derived map.
+// builtinContexts are the parent contexts of the types Milo serves with no CRD
+// behind them, so no annotation can declare them: the types of its aggregated
+// identity server. They are the lowest-precedence input, so a policy or a CRD
+// annotation for the same type overrides them.
+var builtinContexts = map[schema.GroupResource][]ParentContext{
+	{Group: "identity.miloapis.com", Resource: "sessions"}:                 {ContextUser},
+	{Group: "identity.miloapis.com", Resource: "useridentities"}:           {ContextUser},
+	{Group: "identity.miloapis.com", Resource: "passkeys"}:                 {ContextUser},
+	{Group: "identity.miloapis.com", Resource: "passkeyregistrationlinks"}: {ContextUser},
+}
+
+// NewRegistry creates a registry that holds the contexts of Milo's built-in
+// types. Every process that asks which types a context serves builds its
+// registry here, so they all start from the same declarations. Run and
+// RunPolicyInformer then add the CRD annotations and the policies.
 func NewRegistry() *Registry {
+	r := newRegistry()
+	for gr, contexts := range builtinContexts {
+		r.RegisterStatic(gr, contexts...)
+	}
+	return r
+}
+
+// newRegistry creates a registry with no declarations.
+func newRegistry() *Registry {
 	return &Registry{
 		policy: map[schema.GroupResource]policyEntry{},
 		crd:    map[schema.GroupResource][]ParentContext{},

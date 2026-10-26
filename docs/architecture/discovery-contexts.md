@@ -90,17 +90,17 @@ in all contexts," which is the backwards-compatible default.
 
 Resources served by aggregated APIs (e.g. `identity.miloapis.com/sessions`,
 core/v1) aren't backed by a CRD object, so there is no annotation surface.
-For these, register the contexts programmatically at apiserver startup:
+Milo's own are listed in `builtinContexts` in `pkg/server/discovery`, and
+`discovery.NewRegistry()` registers them, so every process that builds the
+registry starts from the same declarations. A new one goes in that list:
 
 ```go
-registry.RegisterStatic(
-    schema.GroupResource{Group: "identity.miloapis.com", Resource: "sessions"},
-    discovery.ContextUser,
-)
+{Group: "identity.miloapis.com", Resource: "sessions"}: {ContextUser},
 ```
 
-Static registrations take precedence over CRD annotations for the same
-`GroupResource` — useful if you ever need to override.
+A static registration is the lowest-precedence input: a
+`DiscoveryContextPolicy` rule or a CRD annotation for the same
+`GroupResource` overrides it.
 
 ## What the client sees
 

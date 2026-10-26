@@ -7,7 +7,7 @@ import (
 )
 
 func makeRegistry() *Registry {
-	return NewRegistry()
+	return newRegistry()
 }
 
 func TestPolicyPrecedenceOverCRD(t *testing.T) {
