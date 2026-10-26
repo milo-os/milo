@@ -33,7 +33,7 @@ func inlineAPIServerRegistry() *Registry {
 // a change of precedence shows), and CRDs with and without the annotation.
 func feed(t *testing.T, r *Registry) {
 	t.Helper()
-	r.upsertPolicyFromUnstructured(corePolicy(t))
+	r.upsertPolicyFromUnstructured(shippedPolicy(t, "core"))
 	r.upsertFromPolicy("fixture", policySpec{rules: []policyRule{
 		{group: "identity.miloapis.com", resources: []string{"sessions"}, contexts: []string{"Organization"}},
 	}})
@@ -47,15 +47,16 @@ func feed(t *testing.T, r *Registry) {
 	}
 }
 
-func corePolicy(t *testing.T) *unstructured.Unstructured {
+// shippedPolicy reads one of the DiscoveryContextPolicy objects Milo ships in config/discovery/, by its directory.
+func shippedPolicy(t *testing.T, name string) *unstructured.Unstructured {
 	t.Helper()
-	raw, err := os.ReadFile("../../../config/discovery/core/discovery-context-policy.yaml")
+	raw, err := os.ReadFile("../../../config/discovery/" + name + "/discovery-context-policy.yaml")
 	if err != nil {
-		t.Fatalf("read the core policy: %v", err)
+		t.Fatalf("read the %s policy: %v", name, err)
 	}
 	u := &unstructured.Unstructured{}
 	if err := yaml.Unmarshal(raw, &u.Object); err != nil {
-		t.Fatalf("decode the core policy: %v", err)
+		t.Fatalf("decode the %s policy: %v", name, err)
 	}
 	return u
 }
