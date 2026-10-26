@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 )
 
@@ -25,7 +26,8 @@ func TestStartPurge_DeletesNoClusterScopedKindWhenAPIServicesAreNotFound(t *test
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{})
+	cfg := &rest.Config{Host: srv.URL}
+	err := New(cfg).StartPurge(context.Background(), cfg, "doomed", Options{})
 	if err == nil {
 		t.Error("expected an error when the purge cannot tell which kinds the project stores")
 	}
@@ -36,18 +38,13 @@ func TestStartPurge_DeletesNoClusterScopedKindWhenAPIServicesAreNotFound(t *test
 
 func TestStartPurge_LeavesAGroupNoAPIServiceNames(t *testing.T) {
 	stub := newProjectPlaneStub()
-	groups := stub.docs["/apis"].(*metav1.APIGroupList)
-	gv := metav1.GroupVersionForDiscovery{GroupVersion: "unregistered.example.com/v1", Version: "v1"}
-	groups.Groups = append(groups.Groups, metav1.APIGroup{Name: "unregistered.example.com", Versions: []metav1.GroupVersionForDiscovery{gv}, PreferredVersion: gv})
-	stub.docs["/apis/unregistered.example.com/v1"] = &metav1.APIResourceList{
-		TypeMeta:     metav1.TypeMeta{Kind: "APIResourceList", APIVersion: "v1"},
-		GroupVersion: "unregistered.example.com/v1",
-		APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Verbs: allVerbs}},
-	}
+	stub.serve(schema.GroupVersion{Group: "unregistered.example.com", Version: "v1"},
+		metav1.APIResource{Name: "widgets", Kind: "Widget", Verbs: allVerbs})
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	if err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{}); err != nil {
+	cfg := &rest.Config{Host: srv.URL}
+	if err := New(cfg).StartPurge(context.Background(), cfg, "doomed", Options{}); err != nil {
 		t.Fatalf("StartPurge: %v", err)
 	}
 	got := clusterDeletes(stub.deleted())
@@ -69,7 +66,8 @@ func TestStartPurge_DeletesNamespacesWhenAPIServicesCannotBeRead(t *testing.T) {
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	if err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{}); err == nil {
+	cfg := &rest.Config{Host: srv.URL}
+	if err := New(cfg).StartPurge(context.Background(), cfg, "doomed", Options{}); err == nil {
 		t.Error("expected the failed APIService read to be returned")
 	}
 	if !slices.Contains(stub.deleted(), "/api/v1/namespaces/team-a") {

@@ -34,9 +34,17 @@ type Options struct {
 	Parallel      int
 }
 
-type Purger struct{}
+// Purger deletes everything a deleted project stores in its control plane.
+type Purger struct {
+	// root reaches Milo at Platform context, whose discovery lists every kind
+	// a project can store. A project's own discovery may hide some of them.
+	root *rest.Config
+}
 
-func New() *Purger { return &Purger{} }
+// New returns a Purger that discovers kinds through root, Milo's API at
+// Platform context. Reads and deletes still go to each project's control
+// plane.
+func New(root *rest.Config) *Purger { return &Purger{root: root} }
 
 type res struct {
 	gvr schema.GroupVersionResource
@@ -175,7 +183,7 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 		o.Parallel = 8
 	}
 
-	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+	disco, err := discovery.NewDiscoveryClientForConfig(p.root)
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
@@ -308,7 +316,7 @@ func (p *Purger) Status(ctx context.Context, cfg *rest.Config, project string) (
 	if err != nil {
 		return Status{}, fmt.Errorf("building dynamic client for project %s: %w", project, err)
 	}
-	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+	disco, err := discovery.NewDiscoveryClientForConfig(p.root)
 	if err != nil {
 		return Status{}, fmt.Errorf("building discovery client for project %s: %w", project, err)
 	}
