@@ -80,6 +80,12 @@ type GarbageCollector struct {
 	// walk holds a consistent copy without holding mu (milo#834, F7).
 	dependencyGraphBuilders []*GraphBuilder
 	cancels                 map[string]context.CancelFunc
+
+	// served and narrow are set once by SetServedTypes (served.go); rootResources is the root's deletable set Sync
+	// last gave the root's builder. All three are guarded by mu.
+	served        ServedTypes
+	narrow        bool
+	rootResources map[schema.GroupVersionResource]struct{}
 }
 
 // builders returns the graph builders at this moment, for a walk outside mu.
@@ -139,7 +145,7 @@ func (gc *GarbageCollector) AddProject(
 
 	// Seed monitors for this partition immediately
 	logger := klog.FromContext(parent)
-	newResources, _ := GetDeletableResources(logger, discover)
+	newResources := gc.projectSeed(logger, discover)
 	if err := gb.syncMonitors(logger, newResources); err != nil {
 		cancel()
 		return fmt.Errorf("gc(%s): syncMonitors: %w", project, err)
@@ -231,7 +237,8 @@ func NewComposedGarbageCollectorMulti(
 }
 
 // resyncMonitors starts or stops resource monitors as needed to ensure that all
-// (and only) those resources present in the map are monitored.
+// (and only) those resources present in the map are monitored. With narrowing on,
+// only the root's builder: projects follow narrowProjects (served.go).
 func (gc *GarbageCollector) resyncMonitors(
 	logger klog.Logger,
 	deletableResources map[schema.GroupVersionResource]struct{},
@@ -240,7 +247,11 @@ func (gc *GarbageCollector) resyncMonitors(
 	if len(builders) == 0 {
 		return fmt.Errorf("no dependency graph builders configured")
 	}
+	narrow := gc.narrowing()
 	for _, gb := range builders {
+		if narrow && gb.project != "" {
+			continue
+		}
 		if err := gb.syncMonitors(logger, deletableResources); err != nil {
 			return err
 		}
@@ -328,22 +339,17 @@ func (gc *GarbageCollector) Sync(ctx context.Context, discoveryClient discovery.
 	wait.UntilWithContext(ctx, func(ctx context.Context) {
 		logger := klog.FromContext(ctx)
 
-		// 1) Discover deletable resources
-		newResources, err := GetDeletableResources(logger, discoveryClient)
+		// 1) Discover deletable resources, 2) keeping already-synced monitors for failed groups
+		newResources := gc.discoverRoot(logger, discoveryClient, oldResources)
 		if len(newResources) == 0 {
 			logger.V(2).Info("no resources reported by discovery, skipping garbage collector sync")
 			metrics.GarbageCollectorResourcesSyncError.Inc()
 			return
 		}
 
-		// 2) Handle partial discovery: keep already-synced monitors for failed groups
-		if groupLookupFailures, isLookupFailure := discovery.GroupDiscoveryFailedErrorGroups(err); isLookupFailure {
-			for k, v := range oldResources {
-				if _, failed := groupLookupFailures[k.GroupVersion()]; failed && gc.anyBuilderResourceSynced(k) {
-					newResources[k] = v
-				}
-			}
-		}
+		// Projects follow the served types on every tick, after any root resync below:
+		// a declaration can change them with no change in discovery (served.go).
+		defer gc.narrowProjects(logger, newResources)
 
 		// 3) Short-circuit if nothing changed
 		if reflect.DeepEqual(oldResources, newResources) {
@@ -365,6 +371,9 @@ func (gc *GarbageCollector) Sync(ctx context.Context, discoveryClient discovery.
 			return
 		}
 		logger.V(4).Info("resynced monitors")
+		gc.mu.Lock()
+		gc.rootResources = newResources
+		gc.mu.Unlock()
 
 		// 6) Periodically check that ALL builders report cache synced (for logs/metrics)
 		cacheSynced := cache.WaitForNamedCacheSync("garbage collector", waitForStopOrTimeout(ctx.Done(), period), func() bool {
@@ -380,6 +389,24 @@ func (gc *GarbageCollector) Sync(ctx context.Context, discoveryClient discovery.
 		// 7) Remember current resource set
 		oldResources = newResources
 	}, period)
+}
+
+// discoverRoot reads the root's deletable resources. On a partial discovery failure it keeps the resources of the
+// failed groups whose monitors have synced, so a flaking group does not drop its monitors.
+func (gc *GarbageCollector) discoverRoot(logger klog.Logger, discoveryClient discovery.ServerResourcesInterface,
+	oldResources map[schema.GroupVersionResource]struct{}) map[schema.GroupVersionResource]struct{} {
+	newResources, err := GetDeletableResources(logger, discoveryClient)
+	if len(newResources) == 0 {
+		return newResources
+	}
+	if groupLookupFailures, isLookupFailure := discovery.GroupDiscoveryFailedErrorGroups(err); isLookupFailure {
+		for k, v := range oldResources {
+			if _, failed := groupLookupFailures[k.GroupVersion()]; failed && gc.anyBuilderResourceSynced(k) {
+				newResources[k] = v
+			}
+		}
+	}
+	return newResources
 }
 
 // printDiff returns a human-readable summary of what resources were added and removed
@@ -540,12 +567,20 @@ func (gc *GarbageCollector) attemptToDeleteWorker(ctx context.Context, item inte
 		return forgetItem
 
 	default:
-		if _, mappingErr := err.(*restMappingError); mappingErr {
-			logger.V(5).Error(err, "error syncing item", "item", n.identity)
-		} else {
-			utilruntime.HandleError(fmt.Errorf("error syncing item %s: %v", n, err))
-		}
+		logItemError(logger, n, err)
 		return requeueItem
+	}
+}
+
+// logItemError logs the error that requeues an item: a mapping error and a hold quietly, anything else as an error.
+func logItemError(logger klog.Logger, n *node, err error) {
+	switch err.(type) {
+	case *restMappingError:
+		logger.V(5).Error(err, "error syncing item", "item", n.identity)
+	case *unservedOwnerError:
+		logger.V(2).Info("holding item", "item", n.identity, "reason", err.Error())
+	default:
+		utilruntime.HandleError(fmt.Errorf("error syncing item %s: %v", n, err))
 	}
 }
 
@@ -555,16 +590,14 @@ func (gc *GarbageCollector) attemptToDeleteWorker(ctx context.Context, item inte
 func (gc *GarbageCollector) isDangling(ctx context.Context, reference metav1.OwnerReference, item *node) (bool, *metav1.PartialObjectMetadata, error) {
 	logger := klog.FromContext(ctx)
 
-	absentOwnerCacheKey := objectReference{OwnerReference: ownerReferenceCoordinates(reference)}
-	if gc.absentOwnerCache.Has(absentOwnerCacheKey) {
-		logger.V(5).Info("according to the absentOwnerCache, item's owner does not exist", "item", item.identity, "owner", reference)
+	if err := gc.holdUnservedOwner(reference, item); err != nil {
+		return false, nil, err
+	}
+
+	if gc.ownerCachedAbsent(logger, reference, item) {
 		return true, nil, nil
 	}
-	absentOwnerCacheKey.Namespace = item.identity.Namespace
-	if gc.absentOwnerCache.Has(absentOwnerCacheKey) {
-		logger.V(5).Info("according to the absentOwnerCache, item's owner does not exist in namespace", "item", item.identity, "owner", reference)
-		return true, nil, nil
-	}
+	absentOwnerCacheKey := objectReference{OwnerReference: ownerReferenceCoordinates(reference), Namespace: item.identity.Namespace}
 
 	// >>> change: use RESTMapper (narrow) here
 	var mapper meta.RESTMapper = meta.RESTMapper(gc.restMapper) // cast
@@ -604,6 +637,21 @@ func (gc *GarbageCollector) isDangling(ctx context.Context, reference metav1.Own
 		return true, nil, nil
 	}
 	return false, owner, nil
+}
+
+// ownerCachedAbsent reports whether the absent-owner cache names the owner, cluster-wide or in the item's namespace.
+func (gc *GarbageCollector) ownerCachedAbsent(logger klog.Logger, reference metav1.OwnerReference, item *node) bool {
+	key := objectReference{OwnerReference: ownerReferenceCoordinates(reference)}
+	if gc.absentOwnerCache.Has(key) {
+		logger.V(5).Info("according to the absentOwnerCache, item's owner does not exist", "item", item.identity, "owner", reference)
+		return true
+	}
+	key.Namespace = item.identity.Namespace
+	if gc.absentOwnerCache.Has(key) {
+		logger.V(5).Info("according to the absentOwnerCache, item's owner does not exist in namespace", "item", item.identity, "owner", reference)
+		return true
+	}
+	return false
 }
 
 // classify the latestReferences to three categories:

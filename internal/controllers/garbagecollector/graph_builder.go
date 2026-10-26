@@ -349,6 +349,24 @@ func (gb *GraphBuilder) startMonitors(logger klog.Logger) {
 	logger.V(4).Info("started new monitors", "new", started, "current", len(monitors))
 }
 
+// watchesExactly reports whether the builder's monitors are the given resources, less the ignored ones, which
+// syncMonitors never watches.
+func (gb *GraphBuilder) watchesExactly(resources map[schema.GroupVersionResource]struct{}) bool {
+	gb.monitorLock.RLock()
+	defer gb.monitorLock.RUnlock()
+	want := 0
+	for resource := range resources {
+		if _, ignored := gb.ignoredResources[resource.GroupResource()]; ignored {
+			continue
+		}
+		if _, ok := gb.monitors[resource]; !ok {
+			return false
+		}
+		want++
+	}
+	return want == len(gb.monitors)
+}
+
 // IsResourceSynced returns true if a monitor exists for the given resource and has synced
 func (gb *GraphBuilder) IsResourceSynced(resource schema.GroupVersionResource) bool {
 	gb.monitorLock.Lock()
