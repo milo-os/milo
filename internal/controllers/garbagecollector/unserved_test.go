@@ -98,7 +98,9 @@ var testRoot = map[schema.GroupVersionResource]struct{}{widgets: {}, gizmos: {},
 
 // TestUnservedGaugesCountWhatANarrowingWouldDrop counts, per type a project does not serve, its observed objects
 // (all), those with an owner (F1) and those with a dependent (F2). A served object, a virtual node and the root's
-// own objects are never counted (S3), and a hidden type with no objects reads 0, not absent.
+// own objects are never counted (S3), also when a project plane shows one of them (Milo serves the root's CRDs and
+// APIServices in every project, and the root's graph keeps watching them), and a hidden type with no objects reads 0,
+// not absent.
 func TestUnservedGaugesCountWhatANarrowingWouldDrop(t *testing.T) {
 	gc, _ := newUnservedGC(t)
 	root, p := gc.builderForProject(""), gc.builderForProject("p")
@@ -113,8 +115,10 @@ func TestUnservedGaugesCountWhatANarrowingWouldDrop(t *testing.T) {
 		Kind: "Gizmo", Name: "gone", UID: "p/gone"}, Namespace: "ns1", Project: "p"}, virtual: true,
 		dependents: map[*node]struct{}{}}
 	p.uidToNode.Write(absent)
-	putNode(p, widgets, "orphan", absent) // its hidden owner is virtual: not an object
-	putNode(root, gizmos, "root-gizmo")   // the root serves every type
+	putNode(p, widgets, "orphan", absent)     // its hidden owner is virtual: not an object
+	putNode(root, gizmos, "root-gizmo")       // the root serves every type
+	shared := putNode(root, gizmos, "shared") // the root's own object, which the project plane also shows
+	p.uidToNode.Write(&node{identity: shared.identity, dependents: map[*node]struct{}{}})
 
 	gc.reportUnserved(klog.Background(), testRoot)
 

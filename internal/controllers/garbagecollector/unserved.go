@@ -113,20 +113,23 @@ func (gc *GarbageCollector) projectsSynced(logger klog.Logger) bool {
 
 // unservedObjects walks every project graph once. An object is counted from its own node when its kind is hidden, and
 // it is owned when it appears among another node's dependents: the dependents carry their own lock, while a node's
-// owners are written without one.
+// owners are written without one. An object the root's graph also holds is the root's own, which a project plane
+// shows (Milo serves the root's CRDs and APIServices in every project): the root keeps watching it, so narrowing
+// drops nothing of it, and it is not counted.
 func (gc *GarbageCollector) unservedObjects(hidden map[schema.GroupKind]schema.GroupResource) map[types.UID]*unservedObject {
 	objects := map[types.UID]*unservedObject{}
+	root := gc.builderForProject("")
 	for _, gb := range gc.builders() {
 		if gb.project == "" {
 			continue
 		}
 		for _, n := range gb.uidToNode.nodes() {
 			dependents := n.getDependents()
-			if o := unservedOf(objects, hidden, n); o != nil {
+			if o := unservedOf(objects, hidden, root, n); o != nil {
 				o.dependentKinds = kindsOf(dependents)
 			}
 			for _, d := range dependents {
-				if o := unservedOf(objects, hidden, d); o != nil {
+				if o := unservedOf(objects, hidden, root, d); o != nil {
 					o.ownerKinds = append(o.ownerKinds, n.identity.Kind)
 				}
 			}
@@ -135,10 +138,12 @@ func (gc *GarbageCollector) unservedObjects(hidden map[schema.GroupKind]schema.G
 	return objects
 }
 
-// unservedOf returns the entry of an observed node whose kind is hidden, creating it, or nil for any other node.
-func unservedOf(objects map[types.UID]*unservedObject, hidden map[schema.GroupKind]schema.GroupResource, n *node) *unservedObject {
+// unservedOf returns the entry of an observed node whose kind is hidden and that only its project holds, creating it,
+// or nil for any other node.
+func unservedOf(objects map[types.UID]*unservedObject, hidden map[schema.GroupKind]schema.GroupResource,
+	root *GraphBuilder, n *node) *unservedObject {
 	gr, ok := hidden[schema.FromAPIVersionAndKind(n.identity.APIVersion, n.identity.Kind).GroupKind()]
-	if !ok || !n.isObserved() {
+	if !ok || !n.isObserved() || root.holds(n.identity.UID) {
 		return nil
 	}
 	if o, seen := objects[n.identity.UID]; seen {
@@ -205,4 +210,13 @@ func (gc *GarbageCollector) logUnserved(logger klog.Logger, objects map[types.UI
 			"ownerKinds", o.ownerKinds, "dependentKinds", o.dependentKinds)
 	}
 	gc.loggedUnserved = logged
+}
+
+// holds reports whether the builder's graph has a node for the uid; a nil builder holds nothing.
+func (gb *GraphBuilder) holds(uid types.UID) bool {
+	if gb == nil {
+		return false
+	}
+	_, ok := gb.uidToNode.Read(uid)
+	return ok
 }
