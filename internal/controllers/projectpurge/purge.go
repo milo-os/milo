@@ -460,89 +460,62 @@ func remainingContent(
 }
 
 // namespacedResources returns the namespaced resources the purge deletes.
-// Namespaces are deleted in Phase C, the kinds every project shares are never
-// deleted, and cluster-scoped resources are covered by clusterScopedResources.
+// Cluster-scoped resources are covered by clusterScopedResources.
 func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
-	lists, err := discoverResources()
-	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
-		return nil, fmt.Errorf("discover: %w", err)
-	}
-
-	var namespaced []res
-	for _, l := range lists {
-		gv, err := schema.ParseGroupVersion(l.GroupVersion)
-		if err != nil {
-			continue
-		}
-		for _, ar := range l.APIResources {
-			verbs := sets.NewString(ar.Verbs...)
-			if !verbs.HasAll("list", "deletecollection") {
-				continue
-			}
-			if containsSlash(ar.Name) {
-				continue // skip subresources
-			}
-			if !ar.Namespaced {
-				continue
-			}
-			gvr := schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: ar.Name}
-			if gvr.Group == "" && gvr.Resource == "namespaces" {
-				continue
-			}
-			if projectscope.StaysGlobal(gvr.GroupResource()) {
-				continue
-			}
-			namespaced = append(namespaced, res{gvr: gvr})
-		}
-	}
-	return namespaced, nil
+	return purgeableResources(discoverResources, func(_ schema.GroupVersion, ar metav1.APIResource) bool {
+		return ar.Namespaced
+	})
 }
 
 // clusterScopedResources returns the cluster-scoped resources the purge
-// deletes. Namespaces are deleted in Phase C, and the kinds every project
-// shares are never deleted.
+// deletes: only group versions in local, the ones Milo stores itself, so a kind
+// served from elsewhere is never deleted with a project.
 //
-// Only group versions in local, the ones Milo stores itself, are returned, so a
-// kind served from elsewhere is never deleted with a project. Like
-// namespacedResources, only resources that support deletecollection are
-// returned.
+// A local kind with deletecollection is a generic registry store, and Milo
+// makes every one of those project-aware except the kinds every project
+// shares, so it is stored per project; a virtual kind such as a user's sessions
+// has no deletecollection and is never purged.
 func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error), local sets.Set[schema.GroupVersion]) ([]res, error) {
+	return purgeableResources(discoverResources, func(gv schema.GroupVersion, ar metav1.APIResource) bool {
+		return !ar.Namespaced && local.Has(gv)
+	})
+}
+
+// purgeableResources returns the discovered resources that purgeable accepts
+// and keep chooses.
+func purgeableResources(
+	discoverResources func() ([]*metav1.APIResourceList, error),
+	keep func(schema.GroupVersion, metav1.APIResource) bool,
+) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
-	var cluster []res
+	var resources []res
 	for _, l := range lists {
 		gv, err := schema.ParseGroupVersion(l.GroupVersion)
 		if err != nil {
 			continue
 		}
-		if !local.Has(gv) {
-			continue
-		}
 		for _, ar := range l.APIResources {
-			verbs := sets.NewString(ar.Verbs...)
-			if !verbs.HasAll("list", "deletecollection") {
-				continue
+			if purgeable(gv, ar) && keep(gv, ar) {
+				resources = append(resources, res{gvr: gv.WithResource(ar.Name)})
 			}
-			if containsSlash(ar.Name) {
-				continue // skip subresources
-			}
-			if ar.Namespaced {
-				continue
-			}
-			gvr := schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: ar.Name}
-			if gvr.Group == "" && gvr.Resource == "namespaces" {
-				continue
-			}
-			if projectscope.StaysGlobal(gvr.GroupResource()) {
-				continue
-			}
-			cluster = append(cluster, res{gvr: gvr})
 		}
 	}
-	return cluster, nil
+	return resources, nil
+}
+
+// purgeable reports whether the purge deletes the objects of ar: a resource it
+// can list and delete as a collection, not a subresource, not the namespaces
+// Phase C deletes, and not a kind every project shares.
+func purgeable(gv schema.GroupVersion, ar metav1.APIResource) bool {
+	gr := schema.GroupResource{Group: gv.Group, Resource: ar.Name}
+	return sets.NewString(ar.Verbs...).HasAll("list", "deletecollection") &&
+		!containsSlash(ar.Name) &&
+		gr != schema.GroupResource{Resource: "namespaces"} &&
+		!projectscope.StaysGlobal(gr)
 }
 
 var apiServicesGVR = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
