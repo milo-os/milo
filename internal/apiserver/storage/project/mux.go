@@ -340,9 +340,10 @@ func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
 // that creates (an apply patch, or a kind that allows create on update) from
 // one that changes, so an update and a patch are refused too. That strands no
 // namespaced object: the Project's finalizer holds until the purge has
-// emptied every namespace. The purge leaves cluster-scoped objects by
-// design, so an update to one of them in a gone Project is refused,
-// and counted with reason NotFound.
+// emptied every namespace and every cluster-scoped object that carries a
+// finalizer is gone. A cluster-scoped object whose delete was refused can
+// outlive its Project, so an update to one of them in a gone Project is
+// refused, and counted with reason NotFound.
 func (m *projectMux) admit(ctx context.Context, project string) error {
 	verb, writes := projectstate.WriteVerb(ctx)
 	if !writes {

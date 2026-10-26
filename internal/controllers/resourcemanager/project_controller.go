@@ -531,7 +531,7 @@ func (r *ProjectController) SetupWithManager(mgr ctrl.Manager, infraCluster clus
 	r.InfraClient = infraCluster.GetClient()
 	r.ControlPlaneClient = mgr.GetClient()
 	r.BaseConfig = mgr.GetConfig()
-	r.Purger = projectpurge.New()
+	r.Purger = projectpurge.New(r.BaseConfig)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).

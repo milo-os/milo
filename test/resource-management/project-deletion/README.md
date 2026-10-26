@@ -6,6 +6,9 @@ This test verifies:
 - A project can be deleted after reaching Ready status
 - The ResourceCleanup condition progresses through the expected states
 - The project is fully removed from both organization and main cluster contexts
+- The project's cleanup deletes no APIService: APIServices are shared by
+  every project, so each one present before the deletion is still there
+  after it
 
 
 ## Steps
@@ -14,7 +17,7 @@ This test verifies:
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
 | 1 | [setup-organization](#step-setup-organization) | 0 | 5 | 0 | 0 | 0 |
 | 2 | [create-project-and-wait-for-ready](#step-create-project-and-wait-for-ready) | 0 | 3 | 0 | 0 | 0 |
-| 3 | [delete-project](#step-delete-project) | 0 | 2 | 0 | 0 | 0 |
+| 3 | [delete-project](#step-delete-project) | 0 | 4 | 0 | 0 | 0 |
 | 4 | [verify-project-gone-from-main-cluster](#step-verify-project-gone-from-main-cluster) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organization`
@@ -51,8 +54,10 @@ Delete the project and verify cleanup completes
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
-| 1 | `delete` | 0 | 0 | *No description* |
-| 2 | `wait` | 0 | 0 | *No description* |
+| 1 | `script` | 0 | 1 | *No description* |
+| 2 | `delete` | 0 | 0 | *No description* |
+| 3 | `wait` | 0 | 0 | *No description* |
+| 4 | `script` | 0 | 0 | *No description* |
 
 ### Step: `verify-project-gone-from-main-cluster`
 
