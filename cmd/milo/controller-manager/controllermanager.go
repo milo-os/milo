@@ -592,11 +592,8 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			subjectBindingReaperCtrl := resourcemanagercontroller.SubjectBindingReaperController{
-				Client: ctrl.GetClient(),
-			}
-			if err := subjectBindingReaperCtrl.SetupWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up subject binding reaper controller")
+			if err := setupPolicyBindingLifecycle(ctrl); err != nil {
+				logger.Error(err, "Error setting up the policy binding lifecycle controllers")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
