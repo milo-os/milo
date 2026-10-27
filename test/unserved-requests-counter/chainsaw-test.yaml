@@ -9,9 +9,12 @@ spec:
     DiscoveryContextFilter feature gate is off.
 
     A project-context LIST of a CRD tagged for the Organization context moves
-    projectstorage_unserved_requests_total{verb="list"} for that type by one.
-    A project-context LIST of configmaps, which every context serves, moves
-    nothing. The counter counts before storage, so the project need not exist.
+    projectstorage_unserved_requests_total{verb="list"} for that type by one
+    for each HTTP request kubectl sends: the first request to a new project's
+    storage may answer 429 with Retry-After while its cache starts, and kubectl
+    sends it again. A project-context LIST of configmaps, which every context
+    serves, moves nothing. The counter counts before storage, so the project
+    need not exist.
 
   clusters:
     root:
@@ -59,12 +62,15 @@ spec:
               }
 
               before=$(count unserved-counter-test.example.com unservedwidgets list)
-              kubectl --kubeconfig=kubeconfig-root get --raw \
-                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" >/dev/null 2>&1 || true
+              # -v=6 logs one line per response, with its time in milliseconds; a retried request logs one per attempt.
+              attempts=$(kubectl --kubeconfig=kubeconfig-root get --raw -v=6 \
+                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" 2>&1 >/dev/null \
+                | grep -c 'unservedwidgets.*milliseconds' || true)
               after=$(count unserved-counter-test.example.com unservedwidgets list)
-              echo "unservedwidgets list: $before -> $after"
-              [ "$after" -eq $((before + 1)) ] \
-                || { echo "FAIL: a project LIST of a type it does not serve moved the counter by $((after - before)), not 1"; exit 1; }
+              echo "unservedwidgets list: $before -> $after, over $attempts HTTP request(s)"
+              [ "$attempts" -ge 1 ] || { echo "FAIL: kubectl logged no response for the LIST"; exit 1; }
+              [ "$after" -eq $((before + attempts)) ] \
+                || { echo "FAIL: $attempts project LIST request(s) of a type it does not serve moved the counter by $((after - before))"; exit 1; }
 
               before=$(count "" configmaps list)
               kubectl --kubeconfig=kubeconfig-root get --raw "$PLANE/api/v1/configmaps" >/dev/null 2>&1 || true
