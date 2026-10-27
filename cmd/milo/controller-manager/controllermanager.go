@@ -900,6 +900,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 		go leaseCandidate.Run(ctx)
 	}
 
+	// A rollout deletes the leader's pod last when the leader marks it.
+	leaderPod := startLeaderPodMarker(ctx, logger)
+
 	var elections sync.WaitGroup
 
 	// Start the main lock
@@ -910,7 +913,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			c.ComponentConfig.Generic.LeaderElection.ResourceLock,
 			c.ComponentConfig.Generic.LeaderElection.ResourceName,
 			leaderelection.LeaderCallbacks{
-				OnStartedLeading: func(ctx context.Context) {
+				OnStartedLeading: markWhileLeading(leaderPod, logger, func(ctx context.Context) {
 					controllerDescriptors := NewControllerDescriptors()
 					if leaderMigrator != nil {
 						// If leader migration is enabled, we should start only non-migrated controllers
@@ -919,7 +922,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 						logger.Info("leader migration: starting main controllers.")
 					}
 					run(ctx, controllerDescriptors)
-				},
+				}),
 				OnStoppedLeading: func() {
 					if ctx.Err() != nil {
 						logger.Info("Released leader lease on shutdown")
