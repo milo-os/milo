@@ -194,6 +194,40 @@ func TestUnservedRequestCounterLabelsTheTypeNotTheSubresource(t *testing.T) {
 	wantCounted(t, map[string]float64{"update rbac.authorization.k8s.io roles": 1})
 }
 
+// C7: a type that only a wildcard rule hides counts under the rule's patterns, so a name the request chose never
+// becomes a label (milo-os/search hides every search.miloapis.com resource outside Platform). A type an exact entry
+// declares keeps its own label, and the caller log names the type the request named.
+func TestUnservedRequestCounterLabelsAWildcardHiddenTypeByItsRule(t *testing.T) {
+	unservedRequests.Reset()
+	registry := syncedRegistry()
+	registry.upsertFromPolicy("search", policySpec{rules: []policyRule{
+		{group: "search.miloapis.com", resources: []string{"*"}, contexts: []string{"Platform"}},
+		{group: "*", resources: []string{"secrets"}, contexts: []string{"Platform"}},
+	}})
+	registry.upsertFromPolicy("search-indexes", policySpec{rules: []policyRule{
+		{group: "search.miloapis.com", resources: []string{"indexes"}, contexts: []string{"Platform"}},
+	}})
+	var got lines
+	callers := newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, unlimited(), unlimited(), got.logger())
+	filter := newUnservedRequestCounter(registry, callers)
+	named := []schema.GroupResource{
+		{Group: "search.miloapis.com", Resource: "aaa"}, {Group: "search.miloapis.com", Resource: "bbb"},
+		{Group: "made.up", Resource: "secrets"}, {Group: "other.up", Resource: "secrets"},
+		{Group: "search.miloapis.com", Resource: "indexes"},
+	}
+	var want []string
+	for _, gr := range named {
+		serve(t, filter, inProject, http.MethodGet, apiPath(gr, "/namespaces/default/"+gr.Resource+"/x"), "alice")
+		want = append(want, callerLine("alice", "get", gr))
+	}
+	wantCounted(t, map[string]float64{
+		"get search.miloapis.com *":       2,
+		"get * secrets":                   2,
+		"get search.miloapis.com indexes": 1,
+	})
+	wantLines(t, got, want...)
+}
+
 // lines collects what a caller log writes, one string a line.
 type lines []string
 

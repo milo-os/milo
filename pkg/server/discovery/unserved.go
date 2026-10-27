@@ -18,7 +18,8 @@ import (
 	"go.miloapis.com/milo/pkg/request"
 )
 
-const unservedRequestsHelp = "Resource requests in a project for a type the project does not serve, by verb, group and resource"
+const unservedRequestsHelp = "Resource requests in a project for a type the project does not serve, by verb, group and resource. " +
+	"A type that a wildcard rule hides counts under the rule's patterns"
 
 // unservedRequests counts what the garbage collector would not see once it watches only the types a project serves
 // (milo#834): a project's object of a type the project does not serve.
@@ -52,29 +53,38 @@ const (
 func newUnservedRequestCounter(registry *Registry, callers *callerLog) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if info, project, ok := unservedInProject(req.Context(), registry); ok {
-				unservedRequests.WithLabelValues(info.Verb, info.APIGroup, info.Resource).Inc()
-				callers.record(req.Context(), info, project)
+			if u, ok := unservedInProject(req.Context(), registry); ok {
+				unservedRequests.WithLabelValues(u.info.Verb, u.declared.Group, u.declared.Resource).Inc()
+				callers.record(req.Context(), u.info, u.project)
 			}
 			next.ServeHTTP(w, req)
 		})
 	}
 }
 
-// unservedInProject returns the request's info and project when it requests, in a project, a type the project does
-// not serve. A project is named, as storage routes it: an empty name is the platform's. It answers false until the
-// registry syncs: before the policies are read, a type a policy widens to Project reads as hidden.
-func unservedInProject(ctx context.Context, registry *Registry) (*genericapirequest.RequestInfo, string, bool) {
+// unservedRequest is a request the counter counts: its info and project, which the caller log names, and the
+// declaration that hides its type, which labels the count. A wildcard rule's patterns stand for every name it matches,
+// so a name the request chose never becomes a label.
+type unservedRequest struct {
+	info     *genericapirequest.RequestInfo
+	project  string
+	declared schema.GroupResource
+}
+
+// unservedInProject returns the request when it requests, in a project, a type the project does not serve. A project
+// is named, as storage routes it: an empty name is the platform's. It answers false until the registry syncs: before
+// the policies are read, a type a policy widens to Project reads as hidden.
+func unservedInProject(ctx context.Context, registry *Registry) (unservedRequest, bool) {
 	info, ok := genericapirequest.RequestInfoFrom(ctx)
 	if !ok || !info.IsResourceRequest {
-		return nil, "", false
+		return unservedRequest{}, false
 	}
 	project, ok := request.ProjectID(ctx)
 	if !ok || project == "" || !registry.HasSynced() {
-		return nil, "", false
+		return unservedRequest{}, false
 	}
-	gr := schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}
-	return info, project, !registry.IsVisible(gr, ContextProject)
+	contexts, declared := registry.declaration(schema.GroupResource{Group: info.APIGroup, Resource: info.Resource})
+	return unservedRequest{info: info, project: project, declared: declared}, !Matches(contexts, ContextProject)
 }
 
 // callerLog logs the first unserved request of each (user, verb, group, resource), so a caller can be found by name:
