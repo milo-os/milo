@@ -5,10 +5,11 @@ types the project does not serve, in the default environment, where the
 DiscoveryContextFilter feature gate is off.
 
 A project-context LIST of a CRD tagged for the Organization context moves
-projectstorage_unserved_requests_total{verb="list"} for that type by one
-for each HTTP request kubectl sends: the first request to a new project's
-storage may answer 429 with Retry-After while its cache starts, and kubectl
-sends it again. A project-context LIST of configmaps, which every context
+projectstorage_unserved_requests_total{verb="list"} for that type by the
+number of LIST requests the server received for it, which its own
+apiserver_request_total records: the first request to a new project's
+storage can answer 429 while its cache starts, and the gateway's route
+retries 429s. A project-context LIST of configmaps, which every context
 serves, moves nothing. The counter counts before storage, so the project
 need not exist.
 

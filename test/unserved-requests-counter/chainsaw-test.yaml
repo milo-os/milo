@@ -9,10 +9,11 @@ spec:
     DiscoveryContextFilter feature gate is off.
 
     A project-context LIST of a CRD tagged for the Organization context moves
-    projectstorage_unserved_requests_total{verb="list"} for that type by one
-    for each HTTP request kubectl sends: the first request to a new project's
-    storage may answer 429 with Retry-After while its cache starts, and kubectl
-    sends it again. A project-context LIST of configmaps, which every context
+    projectstorage_unserved_requests_total{verb="list"} for that type by the
+    number of LIST requests the server received for it, which its own
+    apiserver_request_total records: the first request to a new project's
+    storage can answer 429 while its cache starts, and the gateway's route
+    retries 429s. A project-context LIST of configmaps, which every context
     serves, moves nothing. The counter counts before storage, so the project
     need not exist.
 
@@ -53,26 +54,26 @@ spec:
             content: |
               set -e
               PLANE=/apis/resourcemanager.miloapis.com/v1alpha1/projects/unserved-counter-test/control-plane
-              # count GROUP RESOURCE VERB: the counter's value for one series, 0 when the series is absent.
-              count() {
-                kubectl --kubeconfig=kubeconfig-root get --raw /metrics | awk -v g="group=\"$1\"" \
-                  -v r="resource=\"$2\"" -v v="verb=\"$3\"" \
-                  'index($1, "projectstorage_unserved_requests_total{") == 1 && index($1, g) && index($1, r) && index($1, v) { s += $2 }
-                   END { print s + 0 }'
+              # series METRIC GROUP RESOURCE VERB: the sum of a metric's series for one type and verb, 0 when absent.
+              series() {
+                kubectl --kubeconfig=kubeconfig-root get --raw /metrics | awk -v m="$1{" -v g="group=\"$2\"" \
+                  -v r="resource=\"$3\"" -v v="verb=\"$4\"" \
+                  'index($1, m) == 1 && index($1, g) && index($1, r) && index($1, v) { s += $2 } END { print s + 0 }'
               }
+              count() { series projectstorage_unserved_requests_total "$1" "$2" "$3"; }
 
+              # The server's own count of LIST requests it received for the type, whatever retried them.
+              received() { series apiserver_request_total unserved-counter-test.example.com unservedwidgets LIST; }
               before=$(count unserved-counter-test.example.com unservedwidgets list)
-              # -v=6 logs one line per response, with its time in milliseconds; a retried request logs one per attempt.
-              # It goes before --raw, which takes the next argument as its value.
-              log=$(kubectl --kubeconfig=kubeconfig-root get -v=6 --raw \
-                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" 2>&1 >/dev/null || true)
-              attempts=$(printf '%s\n' "$log" | grep -c 'unservedwidgets.*milliseconds' || true)
+              first=$(received)
+              kubectl --kubeconfig=kubeconfig-root get --raw \
+                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" >/dev/null 2>&1 || true
               after=$(count unserved-counter-test.example.com unservedwidgets list)
-              echo "unservedwidgets list: $before -> $after, over $attempts HTTP request(s)"
-              [ "$attempts" -ge 1 ] \
-                || { echo "FAIL: kubectl logged no response for the LIST: $(printf '%s\n' "$log" | tail -1)"; exit 1; }
-              [ "$after" -eq $((before + attempts)) ] \
-                || { echo "FAIL: $attempts project LIST request(s) of a type it does not serve moved the counter by $((after - before))"; exit 1; }
+              requests=$(( $(received) - first ))
+              echo "unservedwidgets list: $before -> $after; the server received $requests LIST request(s)"
+              [ "$requests" -ge 1 ] || { echo "FAIL: the server recorded no LIST of unservedwidgets"; exit 1; }
+              [ "$after" -eq $((before + requests)) ] \
+                || { echo "FAIL: $requests project LIST request(s) of a type it does not serve moved the counter by $((after - before))"; exit 1; }
 
               before=$(count "" configmaps list)
               kubectl --kubeconfig=kubeconfig-root get --raw "$PLANE/api/v1/configmaps" >/dev/null 2>&1 || true
