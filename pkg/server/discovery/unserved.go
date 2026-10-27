@@ -35,8 +35,9 @@ func init() {
 	legacyregistry.MustRegister(unservedRequests)
 }
 
-// The caller log's bounds, in upstream's shapes (k8s.io/apiserver v0.37.1): an LRUExpireCache, as NamespaceLifecycle's
-// forceLiveLookupCache is, and a rate.Limiter, as storagebackend's etcd3.go limits its own log.
+// The caller log's bounds. The seen set is an LRUExpireCache, as NamespaceLifecycle's forceLiveLookupCache is
+// (k8s.io/apiserver v0.37.1); the lines pass token-bucket limiters (golang.org/x/time/rate), one for writes and one for
+// the rest, so a burst of readers never takes a writer's line.
 const (
 	callerLogSize  = 1024      // (user, verb, group, resource) keys a process remembers
 	callerLogTTL   = time.Hour // so a caller that is still active is named in every hour of the log
@@ -51,32 +52,37 @@ const (
 func newUnservedRequestCounter(registry *Registry, callers *callerLog) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if info, ok := unservedInProject(req.Context(), registry); ok {
+			if info, project, ok := unservedInProject(req.Context(), registry); ok {
 				unservedRequests.WithLabelValues(info.Verb, info.APIGroup, info.Resource).Inc()
-				callers.record(req.Context(), info)
+				callers.record(req.Context(), info, project)
 			}
 			next.ServeHTTP(w, req)
 		})
 	}
 }
 
-// unservedInProject returns the request's info when it requests, in a project, a type the project does not serve. It
-// answers false until the registry syncs: before the policies are read, a type a policy widens to Project reads as
-// hidden.
-func unservedInProject(ctx context.Context, registry *Registry) (*genericapirequest.RequestInfo, bool) {
+// unservedInProject returns the request's info and project when it requests, in a project, a type the project does
+// not serve. A project is named, as storage routes it: an empty name is the platform's. It answers false until the
+// registry syncs: before the policies are read, a type a policy widens to Project reads as hidden.
+func unservedInProject(ctx context.Context, registry *Registry) (*genericapirequest.RequestInfo, string, bool) {
 	info, ok := genericapirequest.RequestInfoFrom(ctx)
-	if !ok || !info.IsResourceRequest || FromRequest(ctx) != ContextProject || !registry.HasSynced() {
-		return nil, false
+	if !ok || !info.IsResourceRequest {
+		return nil, "", false
 	}
-	return info, !registry.IsVisible(schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, ContextProject)
+	project, ok := request.ProjectID(ctx)
+	if !ok || project == "" || !registry.HasSynced() {
+		return nil, "", false
+	}
+	gr := schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}
+	return info, project, !registry.IsVisible(gr, ContextProject)
 }
 
 // callerLog logs the first unserved request of each (user, verb, group, resource), so a caller can be found by name:
 // the counter has no user label, and the audit policy logs no watch.
 type callerLog struct {
-	seen    *utilcache.LRUExpireCache
-	limiter *rate.Limiter
-	logger  logr.Logger
+	seen          *utilcache.LRUExpireCache
+	reads, writes *rate.Limiter
+	logger        logr.Logger
 }
 
 type callerKey struct {
@@ -86,17 +92,18 @@ type callerKey struct {
 
 // newProcessCallerLog returns the caller log a process keeps, with the bounds above.
 func newProcessCallerLog() *callerLog {
-	limiter := rate.NewLimiter(rate.Every(callerLogEvery), callerLogBurst)
-	return newCallerLog(clock.RealClock{}, callerLogSize, limiter, klog.Background())
+	limiter := func() *rate.Limiter { return rate.NewLimiter(rate.Every(callerLogEvery), callerLogBurst) }
+	return newCallerLog(clock.RealClock{}, callerLogSize, limiter(), limiter(), klog.Background())
 }
 
-func newCallerLog(clock utilcache.Clock, size int, limiter *rate.Limiter, logger logr.Logger) *callerLog {
-	return &callerLog{seen: utilcache.NewLRUExpireCacheWithClock(size, clock), limiter: limiter, logger: logger}
+func newCallerLog(clock utilcache.Clock, size int, reads, writes *rate.Limiter, logger logr.Logger) *callerLog {
+	return &callerLog{seen: utilcache.NewLRUExpireCacheWithClock(size, clock), reads: reads, writes: writes,
+		logger: logger}
 }
 
 // record logs the request's caller unless the log has seen it. Two concurrent first requests of a key may both log,
 // as NamespaceLifecycle's cache may look up twice: a line more, never a line less.
-func (c *callerLog) record(ctx context.Context, info *genericapirequest.RequestInfo) {
+func (c *callerLog) record(ctx context.Context, info *genericapirequest.RequestInfo, project string) {
 	key := callerKey{verb: info.Verb, gr: schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}}
 	if u, ok := genericapirequest.UserFrom(ctx); ok {
 		key.user = u.GetName()
@@ -105,11 +112,18 @@ func (c *callerLog) record(ctx context.Context, info *genericapirequest.RequestI
 		return
 	}
 	// A key the limiter refuses stays unseen, so its next request logs it.
-	if !c.limiter.Allow() {
+	if !c.limiterFor(info.Verb).Allow() {
 		return
 	}
 	c.seen.Add(key, struct{}{}, callerLogTTL)
-	project, _ := request.ProjectID(ctx)
 	c.logger.Info(callerLogMessage, "user", key.user, "verb", key.verb, "group", key.gr.Group,
 		"resource", key.gr.Resource, "project", project)
+}
+
+// limiterFor returns the limiter a verb's lines pass: writes have their own.
+func (c *callerLog) limiterFor(verb string) *rate.Limiter {
+	if request.IsWrite(verb) {
+		return c.writes
+	}
+	return c.reads
 }

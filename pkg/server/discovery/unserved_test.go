@@ -118,7 +118,14 @@ func wantCounted(t *testing.T, want map[string]float64) {
 
 // quietCallers is a caller log that never logs, for the counter's own tests.
 func quietCallers() *callerLog {
-	return newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, rate.NewLimiter(rate.Inf, 1), logr.Discard())
+	return newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, unlimited(), unlimited(), logr.Discard())
+}
+
+func unlimited() *rate.Limiter { return rate.NewLimiter(rate.Inf, 1) }
+
+// inUnnamedProject is a project path with no name, /projects//control-plane/, which storage serves as the platform.
+func inUnnamedProject(ctx context.Context) context.Context {
+	return request.WithProject(ctx, "")
 }
 
 // C1, C2, C6: every verb of a hidden type in a project counts once and is served; a served type never counts.
@@ -142,7 +149,7 @@ func TestUnservedRequestCounterCountsOnlyInAProject(t *testing.T) {
 	unservedRequests.Reset()
 	filter := newUnservedRequestCounter(syncedRegistry(), quietCallers())
 	for name, inContext := range map[string]func(context.Context) context.Context{
-		"platform": atPlatform, "organization": inOrganization, "user": inUser,
+		"platform": atPlatform, "organization": inOrganization, "user": inUser, "unnamed project": inUnnamedProject,
 	} {
 		if !serve(t, filter, inContext, http.MethodPost, apiPath(rolesGR, "/namespaces/default/roles"), "alice") {
 			t.Errorf("a create of roles in %s context was not served", name)
@@ -209,7 +216,7 @@ func wantLines(t *testing.T, got lines, want ...string) {
 // L1, L2: one line the first time a (user, verb, group, resource) is seen; a new user or a new verb logs again.
 func TestCallerLogLogsEachCallerOnce(t *testing.T) {
 	var got lines
-	callers := newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, rate.NewLimiter(rate.Inf, 1), got.logger())
+	callers := newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, unlimited(), unlimited(), got.logger())
 	filter := newUnservedRequestCounter(syncedRegistry(), callers)
 	create := apiPath(rolesGR, "/namespaces/default/roles")
 
@@ -229,7 +236,7 @@ func TestCallerLogLogsEachCallerOnce(t *testing.T) {
 func TestCallerLogForgetsTheOldestAndTheExpired(t *testing.T) {
 	var got lines
 	clock := clocktesting.NewFakeClock(time.Now())
-	callers := newCallerLog(clock, 2, rate.NewLimiter(rate.Inf, 1), got.logger())
+	callers := newCallerLog(clock, 2, unlimited(), unlimited(), got.logger())
 	filter := newUnservedRequestCounter(syncedRegistry(), callers)
 	create := apiPath(rolesGR, "/namespaces/default/roles")
 
@@ -250,7 +257,7 @@ func TestCallerLogForgetsTheOldestAndTheExpired(t *testing.T) {
 func TestCallerLogLogsALimitedKeyLater(t *testing.T) {
 	var got lines
 	limiter := rate.NewLimiter(rate.Limit(0), 1)
-	callers := newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, limiter, got.logger())
+	callers := newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, unlimited(), limiter, got.logger())
 	filter := newUnservedRequestCounter(syncedRegistry(), callers)
 	create := apiPath(rolesGR, "/namespaces/default/roles")
 
@@ -263,15 +270,70 @@ func TestCallerLogLogsALimitedKeyLater(t *testing.T) {
 	wantLines(t, got, callerLine("alice", "create", rolesGR), callerLine("bob", "create", rolesGR))
 }
 
-// The counter's cost on the request path: a served type in a project, and a request at the platform.
+// L4: writes have a limiter of their own, so a write's caller is named while reads use up theirs: at a pod's start
+// and each hour, the controller manager's watch keys alone fill the readers' burst.
+func TestCallerLogLogsAWriteWhileReadsUseUpTheirLimiter(t *testing.T) {
+	var got lines
+	reads := rate.NewLimiter(rate.Limit(0), 1)
+	callers := newCallerLog(clocktesting.NewFakeClock(time.Now()), 16, reads, rate.NewLimiter(rate.Limit(0), 1), got.logger())
+	filter := newUnservedRequestCounter(syncedRegistry(), callers)
+	list := apiPath(rolesGR, "/namespaces/default/roles")
+
+	serve(t, filter, inProject, http.MethodGet, list, "controller-manager")
+	serve(t, filter, inProject, http.MethodGet, list+"?watch=true", "controller-manager")
+	serve(t, filter, inProject, http.MethodPost, list, "tenant")
+	wantLines(t, got, callerLine("controller-manager", "list", rolesGR), callerLine("tenant", "create", rolesGR))
+}
+
+// C3, C5 behind the real project router: the path a client sends, not a context set by hand.
+func TestUnservedRequestCounterBehindTheProjectRouter(t *testing.T) {
+	unservedRequests.Reset()
+	resolver := &genericapirequest.RequestInfoFactory{
+		APIPrefixes:          sets.NewString("api", "apis"),
+		GrouplessAPIPrefixes: sets.NewString("api"),
+	}
+	chain := filters.ProjectRouterWithRequestInfo(
+		NewFilters(syncedRegistry(), false)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), resolver)
+	plane := "/apis/resourcemanager.miloapis.com/v1alpha1/projects/%s/control-plane"
+	for _, path := range []string{
+		fmt.Sprintf(plane, "p1") + apiPath(rolesGR, "/namespaces/default/roles/r1/status"),
+		fmt.Sprintf(plane, "p1") + apiPath(leasesGR, "/namespaces/default/leases"),
+		fmt.Sprintf(plane, "") + apiPath(rolesGR, "/namespaces/default/roles"),
+		apiPath(rolesGR, "/namespaces/default/roles"),
+	} {
+		chain.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, path, nil))
+	}
+	wantCounted(t, map[string]float64{"update rbac.authorization.k8s.io roles": 1})
+}
+
+// deepContext stands for a production request's context: the filters before this one each add a value.
+func deepContext(ctx context.Context) context.Context {
+	type key int
+	for i := range 30 {
+		ctx = context.WithValue(ctx, key(i), i)
+	}
+	return ctx
+}
+
+// The counter's cost on the request path: a served type in a project, a request at the platform, and a hidden type in
+// a project once its caller is logged.
 func BenchmarkUnservedRequestCounter(b *testing.B) {
 	filter := newUnservedRequestCounter(syncedRegistry(), quietCallers())(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	for name, inContext := range map[string]func(context.Context) context.Context{"project": inProject, "platform": atPlatform} {
-		b.Run(name, func(b *testing.B) {
-			req := httptest.NewRequest(http.MethodGet, "/apis/coordination.k8s.io/v1/namespaces/default/leases", nil)
+	for _, c := range []struct {
+		name      string
+		inContext func(context.Context) context.Context
+		gr        schema.GroupResource
+	}{
+		{"served type in a project", inProject, leasesGR},
+		{"platform", atPlatform, leasesGR},
+		{"hidden type in a project", inProject, rolesGR},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			req := httptest.NewRequest(http.MethodGet, apiPath(c.gr, "/namespaces/default/"+c.gr.Resource), nil)
 			info := &genericapirequest.RequestInfo{IsResourceRequest: true, Verb: "list",
-				APIGroup: leasesGR.Group, APIVersion: "v1", Resource: leasesGR.Resource}
-			req = req.WithContext(genericapirequest.WithRequestInfo(inContext(req.Context()), info))
+				APIGroup: c.gr.Group, APIVersion: "v1", Resource: c.gr.Resource}
+			ctx := genericapirequest.WithRequestInfo(c.inContext(req.Context()), info)
+			req = req.WithContext(deepContext(genericapirequest.WithUser(ctx, &user.DefaultInfo{Name: "alice"})))
 			w := httptest.NewRecorder()
 			b.ReportAllocs()
 			b.ResetTimer()

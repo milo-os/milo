@@ -1,0 +1,76 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: unserved-requests-counter
+spec:
+  description: |
+    End-to-end test for the API server's counter of requests in a project for
+    types the project does not serve, in the default environment, where the
+    DiscoveryContextFilter feature gate is off.
+
+    A project-context LIST of a CRD tagged for the Organization context moves
+    projectstorage_unserved_requests_total{verb="list"} for that type by one.
+    A project-context LIST of configmaps, which every context serves, moves
+    nothing. The counter counts before storage, so the project need not exist.
+
+  clusters:
+    root:
+      kubeconfig: kubeconfig-root
+
+  concurrent: false
+  namespace: default
+  skipDelete: false
+
+  steps:
+    - name: install-unserved-crd
+      description: Install a CRD tagged for the Organization context, so a project does not serve it.
+      cluster: root
+      try:
+        - apply:
+            file: 01-crd.yaml
+        - wait:
+            apiVersion: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: unservedwidgets.unserved-counter-test.example.com
+            timeout: 30s
+            for:
+              condition:
+                name: Established
+                value: "True"
+        # The registry's CRD informer reads the annotation shortly after the CRD exists.
+        - sleep:
+            duration: 3s
+
+    - name: verify-counter
+      description: A project LIST of the unserved type counts once; a project LIST of configmaps does not count.
+      cluster: root
+      try:
+        - script:
+            timeout: 60s
+            content: |
+              set -e
+              PLANE=/apis/resourcemanager.miloapis.com/v1alpha1/projects/unserved-counter-test/control-plane
+              # count GROUP RESOURCE VERB: the counter's value for one series, 0 when the series is absent.
+              count() {
+                kubectl --kubeconfig=kubeconfig-root get --raw /metrics | awk -v g="group=\"$1\"" \
+                  -v r="resource=\"$2\"" -v v="verb=\"$3\"" \
+                  'index($1, "projectstorage_unserved_requests_total{") == 1 && index($1, g) && index($1, r) && index($1, v) { s += $2 }
+                   END { print s + 0 }'
+              }
+
+              before=$(count unserved-counter-test.example.com unservedwidgets list)
+              kubectl --kubeconfig=kubeconfig-root get --raw \
+                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" >/dev/null 2>&1 || true
+              after=$(count unserved-counter-test.example.com unservedwidgets list)
+              echo "unservedwidgets list: $before -> $after"
+              [ "$after" -eq $((before + 1)) ] \
+                || { echo "FAIL: a project LIST of a type it does not serve moved the counter by $((after - before)), not 1"; exit 1; }
+
+              before=$(count "" configmaps list)
+              kubectl --kubeconfig=kubeconfig-root get --raw "$PLANE/api/v1/configmaps" >/dev/null 2>&1 || true
+              after=$(count "" configmaps list)
+              echo "configmaps list: $before -> $after"
+              [ "$after" -eq "$before" ] \
+                || { echo "FAIL: a project LIST of configmaps, which a project serves, moved the counter"; exit 1; }
+
+              echo "PASS: the counter counts the unserved type and not the served one"
