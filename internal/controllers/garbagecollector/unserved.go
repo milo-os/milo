@@ -76,7 +76,8 @@ func (gc *GarbageCollector) reportUnserved(logger klog.Logger, root map[schema.G
 
 // unservedKinds maps each kind the root's builder watches and a project does not serve to its resource. It reports
 // false while the collector cannot see what a narrowing would drop: narrowing already on, the registry unsynced, or a
-// project graph unsynced, which would read too low.
+// project graph unsynced, which would read too low. It leaves out a type some project graph does not watch, so that
+// type's series is absent, not 0.
 func (gc *GarbageCollector) unservedKinds(logger klog.Logger, root map[schema.GroupVersionResource]struct{}) (
 	map[schema.GroupKind]schema.GroupResource, bool) {
 	gc.mu.RLock()
@@ -89,7 +90,7 @@ func (gc *GarbageCollector) unservedKinds(logger klog.Logger, root map[schema.Gr
 	hidden := map[schema.GroupKind]schema.GroupResource{}
 	for r := range root {
 		gr := r.GroupResource()
-		if _, skip := ignored[gr]; skip || served.IsVisible(gr, discoveryctx.ContextProject) {
+		if _, skip := ignored[gr]; skip || served.IsVisible(gr, discoveryctx.ContextProject) || !gc.projectsWatch(r) {
 			continue
 		}
 		kind, err := gc.restMapper.KindFor(r)
@@ -100,6 +101,18 @@ func (gc *GarbageCollector) unservedKinds(logger klog.Logger, root map[schema.Gr
 		hidden[kind.GroupKind()] = gr
 	}
 	return hidden, true
+}
+
+// projectsWatch reports whether every project graph has a synced monitor for the resource. A project engaged after
+// Sync's first pass keeps its own discovery's set (S1), so where the discovery filter hides a type, no such project
+// graph holds that type's objects.
+func (gc *GarbageCollector) projectsWatch(r schema.GroupVersionResource) bool {
+	for _, gb := range gc.builders() {
+		if gb.project != "" && !gb.IsResourceSynced(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func (gc *GarbageCollector) projectsSynced(logger klog.Logger) bool {

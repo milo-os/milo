@@ -190,3 +190,27 @@ func TestUnservedObjectsLoggedOnce(t *testing.T) {
 		t.Fatalf("logged %d times, want twice: once, and once after it came back", got)
 	}
 }
+
+// TestUnservedGaugesNeverReadZeroForATypeAProjectDoesNotWatch engages one project before Sync's first pass, which
+// widens it to the root's set, and one after, whose graph keeps its own discovery's set (S1), as a project does on an
+// estate whose discovery filter hides the type. The late project's objects of that type are never in its graph, so a
+// gauge for the type would read 0 while blind to them: a series may exist only for a type every project graph watches.
+func TestUnservedGaugesNeverReadZeroForATypeAProjectDoesNotWatch(t *testing.T) {
+	registerUnservedMetrics()
+	resetUnserved()
+	g := newTestGC(t, widgets, gizmos)
+	g.SetServedTypes(newFakeServed(true, gizmos), false)
+	g.addProject(t, "early", widgets)
+	g.runSync(testPeriod)
+	eventuallyMonitors(t, g.builderForProject("early"), "widgets", "gizmos")
+
+	g.addProject(t, "late", widgets)
+	g.waitTicks(t, 3)
+	eventuallyMonitors(t, g.builderForProject("late"), "widgets")
+	for _, name := range []string{"garbagecollector_unserved_objects", "garbagecollector_unserved_owned_objects",
+		"garbagecollector_unserved_owners_with_dependents"} {
+		if value, ok := unservedSeries(t, name)["example.com/gizmos"]; ok {
+			t.Errorf("%s reads %v for gizmos, which project late does not watch", name, value)
+		}
+	}
+}

@@ -150,7 +150,12 @@ with it:
   drop from the project graphs: `garbagecollector_unserved_objects`,
   `garbagecollector_unserved_owned_objects` and
   `garbagecollector_unserved_owners_with_dependents`. It logs each counted
-  object once. A series is absent, not 0, while the collector cannot see.
+  object once. A series is absent, not 0, while the collector cannot see:
+  until the registry and every graph have synced, and for a type some
+  project graph does not watch. A project engaged after the collector's
+  first discovery pass keeps the set its own discovery shows, so where the
+  discovery filter is on, its graph does not watch the types the filter
+  hides.
 - **On:** each project watches only the root's deletable types it serves, and
   a dependent whose owner's kind its project does not serve is held, never
   collected as orphaned. Turn it on only when all three gauges read 0.
