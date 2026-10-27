@@ -17,6 +17,20 @@ import (
 // /apis/{group}/{version} — legacy per-group-version APIResourceList
 var apisGroupVersionRE = regexp.MustCompile(`^/apis/([^/]+)/([^/]+)/?$`)
 
+// NewFilters returns the filters that read the registry, for the innermost place in the API server's chain: the
+// unserved-request counter whatever the gates say (milo#834), and the discovery context filter when filterDiscovery
+// is set. Build them once a process, so the servers of the chain share the counter's caller log.
+func NewFilters(registry *Registry, filterDiscovery bool) func(http.Handler) http.Handler {
+	countUnserved := newUnservedRequestCounter(registry, newProcessCallerLog())
+	return func(h http.Handler) http.Handler {
+		h = countUnserved(h)
+		if filterDiscovery {
+			h = DiscoveryContextFilter(h, registry)
+		}
+		return h
+	}
+}
+
 // DiscoveryContextFilter wraps the apiserver handler chain and filters
 // discovery responses (/apis, /apis/{group}/{version}) so that only resources
 // tagged for the caller's parent context are visible. Resources with no

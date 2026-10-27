@@ -104,32 +104,37 @@ func (r *Registry) RegisterStatic(gr schema.GroupResource, contexts ...ParentCon
 // in, or nil if it should be visible everywhere. Precedence: policy exact
 // match → policy wildcard match → crd → static.
 func (r *Registry) AllowedContexts(gr schema.GroupResource) []ParentContext {
+	contexts, _ := r.declaration(gr)
+	return contexts
+}
+
+// declaration returns AllowedContexts' answer and the group and resource of
+// the declaration that gives it: gr itself, or the patterns of the wildcard
+// rule that matched gr. A metric label taken from it is bounded by the
+// declarations, never by the names requests carry.
+func (r *Registry) declaration(gr schema.GroupResource) ([]ParentContext, schema.GroupResource) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	if entry, ok := r.policy[gr]; ok {
-		return entry.contexts
+		return entry.contexts, gr
 	}
 
-	if match := r.matchWildcard(gr); match != nil {
-		return match
+	if rule := r.matchWildcard(gr); rule != nil {
+		return rule.contexts, schema.GroupResource{Group: rule.groupPattern, Resource: rule.resourcePattern}
 	}
 
 	if v, ok := r.crd[gr]; ok {
-		return v
+		return v, gr
 	}
 
-	if v, ok := r.static[gr]; ok {
-		return v
-	}
-
-	return nil
+	return r.static[gr], gr
 }
 
 // matchWildcard scans policyWildcards for a rule that covers gr. When multiple
 // rules match, the one from the alphabetically first policy name wins.
 // Must be called with r.mu held (at least RLock).
-func (r *Registry) matchWildcard(gr schema.GroupResource) []ParentContext {
+func (r *Registry) matchWildcard(gr schema.GroupResource) *wildcardRule {
 	var best *wildcardRule
 	for i := range r.policyWildcards {
 		rule := &r.policyWildcards[i]
@@ -143,10 +148,7 @@ func (r *Registry) matchWildcard(gr schema.GroupResource) []ParentContext {
 			best = rule
 		}
 	}
-	if best == nil {
-		return nil
-	}
-	return best.contexts
+	return best
 }
 
 // IsVisible is a convenience wrapper combining AllowedContexts + Matches.

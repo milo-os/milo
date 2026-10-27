@@ -129,6 +129,17 @@ the filter with a validating admission plugin that rejects writes to a
 resource whose annotation excludes the current parent context. The two share
 the same `Registry` so the rules can never drift.
 
+**Until then, a request for a hidden type is counted.** The API server counts
+each resource request in Project context for a type the registry does not
+serve in Project, in `projectstorage_unserved_requests_total{verb,group,resource}`,
+and serves it as before. A type that only a wildcard rule hides counts under
+the rule's patterns, such as `search.miloapis.com` and `*`, so a name a
+request chose never becomes a label. It logs each new (user, verb, group,
+resource) with the project, at most once an hour, so a caller can be found by
+name. The counter runs whatever the `DiscoveryContextFilter` gate says: the API
+server builds the registry with the gate off too. It counts nothing until the
+registry has synced.
+
 **Backwards compatibility.** Resources without the annotation are visible
 everywhere. Existing CRDs (Milo's and third-parties') keep working unchanged
 until they opt in.
@@ -168,6 +179,7 @@ synced, a project keeps the set it has.
 - `pkg/server/discovery/contexts.go` — annotation contract, ParentContext type, request-context detection
 - `pkg/server/discovery/registry.go` — CRD-watching registry + static registration
 - `pkg/server/discovery/filter.go` — HTTP middleware that captures and filters discovery responses
+- `pkg/server/discovery/unserved.go` — the counter of requests for hidden types, and its caller log
 - `cmd/milo/apiserver/config.go` — wires the filter into the three handler chains (kube-API, apiextensions, aggregator)
 - `cmd/milo/apiserver/server.go` — starts the registry's CRD informer in a post-start hook
 - `cmd/milo/controller-manager/servedtypes.go` — builds the garbage collector's registry

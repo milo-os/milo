@@ -7,6 +7,8 @@ import (
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	k8smetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
+
+	"go.miloapis.com/milo/pkg/request"
 )
 
 // liveLookups counts each Project read from storage, by why the view did not
@@ -34,14 +36,10 @@ func init() {
 // own verb decides.
 func WriteVerb(ctx context.Context) (string, bool) {
 	info, ok := genericapirequest.RequestInfoFrom(ctx)
-	if !ok {
+	if !ok || !request.IsWrite(info.Verb) {
 		return "", false
 	}
-	switch info.Verb {
-	case "create", "update", "patch":
-		return info.Verb, true
-	}
-	return "", false
+	return info.Verb, true
 }
 
 // countLiveLookup counts one storage read of a Project. seen means the
