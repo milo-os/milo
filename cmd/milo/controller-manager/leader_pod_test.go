@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -48,8 +49,9 @@ func TestLeaderPodMarkSetsTheCostOnItsOwnPodOnly(t *testing.T) {
 		t.Fatalf("mark: %v", err)
 	}
 
-	if cost, _ := deletionCost(t, client, "leader"); cost != leaderPodDeletionCost {
-		t.Errorf("the leader's pod has cost %q, want %q", cost, leaderPodDeletionCost)
+	cost, _ := deletionCost(t, client, "leader")
+	if n, err := strconv.Atoi(cost); err != nil || n <= 0 {
+		t.Errorf("the leader's pod has cost %q, want a number above a standby's default of 0", cost)
 	}
 	if cost, ok := deletionCost(t, client, "standby"); ok {
 		t.Errorf("the standby's pod was marked with %q", cost)
@@ -139,5 +141,42 @@ func TestLeaderPodMarkingLeadershipPatchesOncePerStart(t *testing.T) {
 	}
 	if n := patches(client); n != 1 {
 		t.Errorf("%d patches for one leadership start, want 1", n)
+	}
+}
+
+func TestLeaderPodMarkingLeadershipDoesNotWaitForAPatchThatHangs(t *testing.T) {
+	client := fake.NewSimpleClientset(podNamed("leader", nil))
+	release := make(chan struct{})
+	defer close(release)
+	client.PrependReactor("patch", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return true, nil, errors.New("released")
+	})
+	marker := newLeaderPodMarker(client.CoreV1().Pods("milo-system"), "leader")
+	started := make(chan struct{})
+
+	go markWhileLeading(marker, klog.Background(), func(context.Context) { close(started) })(context.Background())
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the controllers waited for a patch that hangs")
+	}
+}
+
+func TestLeaderPodStartClearsAMarkAPreviousProcessLeft(t *testing.T) {
+	stale := map[string]string{corev1.PodDeletionCost: leaderPodDeletionCost}
+	client := fake.NewSimpleClientset(podNamed("restarted", stale))
+	marker := newLeaderPodMarker(client.CoreV1().Pods("milo-system"), "restarted")
+
+	if got := clearOnStart(context.Background(), klog.Background(), marker); got != marker {
+		t.Fatalf("clearOnStart returned %v, want the marker it was given", got)
+	}
+
+	if cost, ok := deletionCost(t, client, "restarted"); ok {
+		t.Errorf("a restarted standby's pod still carries the leader's cost %q", cost)
+	}
+	if got := clearOnStart(context.Background(), klog.Background(), nil); got != nil {
+		t.Errorf("clearOnStart turned an off marker into %v", got)
 	}
 }

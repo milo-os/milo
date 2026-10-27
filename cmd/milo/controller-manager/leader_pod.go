@@ -64,6 +64,12 @@ func startLeaderPodMarker(ctx context.Context, logger klog.Logger) *leaderPodMar
 		logger.Error(err, "The leader's pod will not be marked")
 		return nil
 	}
+	return clearOnStart(ctx, logger, marker)
+}
+
+// clearOnStart clears the mark a previous process in this pod may have left,
+// so a restarted standby does not keep the leader's cost, and returns marker.
+func clearOnStart(ctx context.Context, logger klog.Logger, marker *leaderPodMarker) *leaderPodMarker {
 	if err := marker.clear(ctx); err != nil {
 		logger.Error(err, "Could not clear this pod's leader mark")
 	}
