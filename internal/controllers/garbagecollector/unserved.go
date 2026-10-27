@@ -34,13 +34,23 @@ var (
 		Help:           "Objects in project graphs whose type the project does not serve and that have a dependent. Absent while the collector cannot see them.",
 		StabilityLevel: metrics.ALPHA,
 	}, []string{"group", "resource"})
+	// heldDependents is the narrowing's own reading (milo#834): F2, unservedOwnersWithDependents, reads 0 at turn-on,
+	// so this starts at 0, and a rise is a new dependent of an owner whose type its project does not serve.
+	heldDependents = metrics.NewGaugeVec(&metrics.GaugeOpts{
+		Subsystem: "garbagecollector",
+		Name:      "held_dependents",
+		Help: "Objects in project graphs that the collector would hold if it processed them, by their owner's type, " +
+			"which their project does not serve; not the holds it has met. Absent while narrowing is off or the " +
+			"collector cannot see them.",
+		StabilityLevel: metrics.ALPHA,
+	}, []string{"group", "resource"})
 
 	registerUnservedOnce sync.Once
 )
 
 func registerUnservedMetrics() {
 	registerUnservedOnce.Do(func() {
-		legacyregistry.MustRegister(unservedObjects, unservedOwnedObjects, unservedOwnersWithDependents)
+		legacyregistry.MustRegister(unservedObjects, unservedOwnedObjects, unservedOwnersWithDependents, heldDependents)
 	})
 }
 
@@ -60,13 +70,24 @@ type unservedObject struct {
 	dependentKinds []string
 }
 
-// reportUnserved sets the three gauges from the project graphs and logs each counted object once. It reports no
-// series while it cannot see (S2). Sync calls it on every tick, from its own goroutine only.
+// reportUnserved sets, from the project graphs, the three shadow gauges while narrowing is off and the held gauge
+// while it is on, and logs each object the shadow counts once. It reports no series while it cannot see (S2). Sync
+// calls it on every tick, from its own goroutine only.
 func (gc *GarbageCollector) reportUnserved(logger klog.Logger, root map[schema.GroupVersionResource]struct{}) {
-	hidden, ok := gc.unservedKinds(logger, root)
-	if !ok {
+	hidden, narrow, ok := gc.unservedKinds(logger, root)
+	if !ok || narrow {
 		resetUnserved()
 		gc.reportedUnserved = nil
+	}
+	if !ok || !narrow {
+		heldDependents.Reset()
+		gc.reportedHeld = nil
+	}
+	if !ok {
+		return
+	}
+	if narrow {
+		gc.reportedHeld = writeSeries(heldDependents, gc.reportedHeld, gc.countHeld(hidden))
 		return
 	}
 	objects := gc.unservedObjects(hidden)
@@ -74,23 +95,25 @@ func (gc *GarbageCollector) reportUnserved(logger klog.Logger, root map[schema.G
 	gc.logUnserved(logger, objects)
 }
 
-// unservedKinds maps each kind the root's builder watches and a project does not serve to its resource. It reports
-// false while the collector cannot see what a narrowing would drop: narrowing already on, the registry unsynced, or a
-// project graph unsynced, which would read too low. It leaves out a type some project graph does not watch, so that
-// type's series is absent, not 0.
+// unservedKinds maps each kind the root's builder watches and a project does not serve to its resource, and says
+// whether narrowing is on. It reports false while the collector cannot see: the registry unsynced, or a project graph
+// unsynced, which would read too low. With narrowing off it leaves out a type some project graph does not watch, so
+// that type's shadow series is absent, not 0; with it on no project graph watches these types, and the held gauge
+// counts their served dependents.
 func (gc *GarbageCollector) unservedKinds(logger klog.Logger, root map[schema.GroupVersionResource]struct{}) (
-	map[schema.GroupKind]schema.GroupResource, bool) {
+	map[schema.GroupKind]schema.GroupResource, bool, bool) {
 	gc.mu.RLock()
 	served, narrow := gc.served, gc.narrow
 	gc.mu.RUnlock()
-	if served == nil || narrow || !served.HasSynced() || !gc.projectsSynced(logger) {
-		return nil, false
+	if served == nil || !served.HasSynced() || !gc.projectsSynced(logger) {
+		return nil, narrow, false
 	}
 	ignored := gc.builders()[0].ignoredResources
 	hidden := map[schema.GroupKind]schema.GroupResource{}
 	for r := range root {
 		gr := r.GroupResource()
-		if _, skip := ignored[gr]; skip || served.IsVisible(gr, discoveryctx.ContextProject) || !gc.projectsWatch(r) {
+		if _, skip := ignored[gr]; skip || served.IsVisible(gr, discoveryctx.ContextProject) ||
+			(!narrow && !gc.projectsWatch(r)) {
 			continue
 		}
 		kind, err := gc.restMapper.KindFor(r)
@@ -100,7 +123,7 @@ func (gc *GarbageCollector) unservedKinds(logger klog.Logger, root map[schema.Gr
 		}
 		hidden[kind.GroupKind()] = gr
 	}
-	return hidden, true
+	return hidden, narrow, true
 }
 
 // projectsWatch reports whether every project graph has a synced monitor for the resource. A project engaged after
@@ -175,38 +198,84 @@ func kindsOf(nodes []*node) []string {
 	return kinds
 }
 
-// setUnserved writes one series per hidden type, 0 included, so a type with nothing to drop reads 0 and not absent. It
-// deletes only the series of types no longer hidden, so a scrape never sees a hidden type absent between two writes.
+// setUnserved writes the three shadow gauges, one series per hidden type, 0 included.
 func (gc *GarbageCollector) setUnserved(hidden map[schema.GroupKind]schema.GroupResource, objects map[types.UID]*unservedObject) {
-	type count struct{ objects, owned, ownersWithDependents float64 }
-	counts := map[schema.GroupResource]*count{}
-	for _, gr := range hidden {
-		counts[gr] = &count{}
-	}
+	all, owned, withDependents := zeroCounts(hidden), zeroCounts(hidden), zeroCounts(hidden)
 	for _, o := range objects {
-		c := counts[o.resource]
-		c.objects++
+		all[o.resource]++
 		if len(o.ownerKinds) > 0 {
-			c.owned++
+			owned[o.resource]++
 		}
 		if len(o.dependentKinds) > 0 {
-			c.ownersWithDependents++
+			withDependents[o.resource]++
 		}
 	}
-	for gr := range gc.reportedUnserved {
-		if _, still := counts[gr]; !still {
-			for _, gauge := range []*metrics.GaugeVec{unservedObjects, unservedOwnedObjects, unservedOwnersWithDependents} {
-				gauge.DeleteLabelValues(gr.Group, gr.Resource)
+	previous := gc.reportedUnserved
+	writeSeries(unservedObjects, previous, all)
+	writeSeries(unservedOwnedObjects, previous, owned)
+	gc.reportedUnserved = writeSeries(unservedOwnersWithDependents, previous, withDependents)
+}
+
+// countHeld counts, per owner type a project does not serve, the observed project-graph objects with an owner of that
+// type: with narrowing on, the objects the collector would hold if it processed them (holdUnservedOwner), not the
+// holds it has met. Such an owner is mostly a virtual node, since its project's graph no longer watches its type. A
+// dependent counts once per owner type.
+func (gc *GarbageCollector) countHeld(hidden map[schema.GroupKind]schema.GroupResource) map[schema.GroupResource]float64 {
+	held := map[schema.GroupResource]map[types.UID]struct{}{}
+	for _, gb := range gc.builders() {
+		if gb.project == "" {
+			continue
+		}
+		for _, n := range gb.uidToNode.nodes() {
+			if gr, ok := hidden[schema.FromAPIVersionAndKind(n.identity.APIVersion, n.identity.Kind).GroupKind()]; ok {
+				addObserved(held, gr, n.getDependents())
 			}
 		}
 	}
-	gc.reportedUnserved = map[schema.GroupResource]struct{}{}
-	for gr, c := range counts {
-		unservedObjects.WithLabelValues(gr.Group, gr.Resource).Set(c.objects)
-		unservedOwnedObjects.WithLabelValues(gr.Group, gr.Resource).Set(c.owned)
-		unservedOwnersWithDependents.WithLabelValues(gr.Group, gr.Resource).Set(c.ownersWithDependents)
-		gc.reportedUnserved[gr] = struct{}{}
+	counts := zeroCounts(hidden)
+	for gr, uids := range held {
+		counts[gr] = float64(len(uids))
 	}
+	return counts
+}
+
+// addObserved adds to held[gr] the UIDs of the observed nodes among dependents.
+func addObserved(held map[schema.GroupResource]map[types.UID]struct{}, gr schema.GroupResource, dependents []*node) {
+	for _, d := range dependents {
+		if !d.isObserved() {
+			continue
+		}
+		if held[gr] == nil {
+			held[gr] = map[types.UID]struct{}{}
+		}
+		held[gr][d.identity.UID] = struct{}{}
+	}
+}
+
+// zeroCounts returns a count of 0 for each hidden type, so a type with nothing to count reads 0, not absent.
+func zeroCounts(hidden map[schema.GroupKind]schema.GroupResource) map[schema.GroupResource]float64 {
+	counts := make(map[schema.GroupResource]float64, len(hidden))
+	for _, gr := range hidden {
+		counts[gr] = 0
+	}
+	return counts
+}
+
+// writeSeries sets one series per type in counts and deletes the series of a type it wrote before and not now, so a
+// scrape never sees a hidden type absent between two writes. It returns the types it wrote.
+func writeSeries(gauge *metrics.GaugeVec, previous map[schema.GroupResource]struct{},
+	counts map[schema.GroupResource]float64) map[schema.GroupResource]struct{} {
+	for gr := range previous {
+		if _, still := counts[gr]; !still {
+			gauge.DeleteLabelValues(gr.Group, gr.Resource)
+		}
+	}
+	written := make(map[schema.GroupResource]struct{}, len(counts))
+	for gr, n := range counts {
+		gauge.WithLabelValues(gr.Group, gr.Resource).Set(n)
+		written[gr] = struct{}{}
+	}
+	return written
 }
 
 // logUnserved logs each counted object the first time it is counted. An object that leaves the graph is forgotten, so

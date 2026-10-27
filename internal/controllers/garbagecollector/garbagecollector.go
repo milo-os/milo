@@ -87,10 +87,11 @@ type GarbageCollector struct {
 	narrow        bool
 	rootResources map[schema.GroupVersionResource]struct{}
 
-	// loggedUnserved and reportedUnserved are the objects and the types reportUnserved (unserved.go) last counted;
-	// only Sync's goroutine touches them.
+	// loggedUnserved, reportedUnserved and reportedHeld are the objects and the types reportUnserved (unserved.go)
+	// last counted; only Sync's goroutine touches them.
 	loggedUnserved   map[types.UID]struct{}
 	reportedUnserved map[schema.GroupResource]struct{}
+	reportedHeld     map[schema.GroupResource]struct{}
 }
 
 // builders returns the graph builders at this moment, for a walk outside mu.

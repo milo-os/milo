@@ -159,6 +159,11 @@ with it:
 - **On:** each project watches only the root's deletable types it serves, and
   a dependent whose owner's kind its project does not serve is held, never
   collected as orphaned. Turn it on only when all three gauges read 0.
+  `garbagecollector_held_dependents` then counts, by the owner's type, the
+  objects the collector would hold if it processed them, not the holds it
+  has met. It starts at 0, since the owners-with-dependents gauge read 0 at
+  turn-on, and a rise is a new dependent of an owner whose type its project
+  does not serve.
 
 Unlike the filter, the collector does not fall open: until its registry has
 synced, a project keeps the set it has.
