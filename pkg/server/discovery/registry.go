@@ -169,7 +169,7 @@ func (r *Registry) HasSynced() bool {
 func (r *Registry) Run(ctx context.Context, factory apiextensionsinformers.SharedInformerFactory) error {
 	informer := factory.Apiextensions().V1().CustomResourceDefinitions().Informer()
 
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	handler, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { r.upsertFromObj(obj) },
 		UpdateFunc: func(_, obj any) { r.upsertFromObj(obj) },
 		DeleteFunc: func(obj any) { r.deleteFromObj(obj) },
@@ -178,7 +178,9 @@ func (r *Registry) Run(ctx context.Context, factory apiextensionsinformers.Share
 		return fmt.Errorf("registering CRD event handler: %w", err)
 	}
 
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+	// The handler's sync, not the informer's: the API server's informer has synced before this runs, and the handler
+	// applies the CRDs it listed after that.
+	if !cache.WaitForCacheSync(ctx.Done(), handler.HasSynced) {
 		return fmt.Errorf("CRD informer cache failed to sync")
 	}
 

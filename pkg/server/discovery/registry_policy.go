@@ -53,7 +53,7 @@ func (r *Registry) RunPolicyInformer(ctx context.Context, loopbackConfig *rest.C
 
 	informer := factory.ForResource(discoveryContextPolicyGVR).Informer()
 
-	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	handler, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { r.upsertPolicyFromUnstructured(obj) },
 		UpdateFunc: func(_, obj any) { r.upsertPolicyFromUnstructured(obj) },
 		DeleteFunc: func(obj any) { r.deletePolicyFromUnstructured(obj) },
@@ -64,7 +64,8 @@ func (r *Registry) RunPolicyInformer(ctx context.Context, loopbackConfig *rest.C
 
 	factory.Start(ctx.Done())
 
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+	// The handler's sync, not the informer's: the handler applies the listed policies after the informer has them.
+	if !cache.WaitForCacheSync(ctx.Done(), handler.HasSynced) {
 		return fmt.Errorf("DiscoveryContextPolicy informer cache failed to sync")
 	}
 
