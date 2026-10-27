@@ -50,8 +50,11 @@ spec:
             value: "batch"
           - name: AUDIT_WEBHOOK_INITIAL_BACKOFF
             value: "10s"
+          # DiscoveryContextFilter is off here. The
+          # test-infra-discovery-context-filter overlay is this environment
+          # with it on.
           - name: FEATURE_GATES
-            value: "DiscoveryContextFilter=true,ProjectSuspension=true"
+            value: "ProjectSuspension=true"
         # Add volume mount for token auth
         volumeMounts:
           - name: auth-tokens

@@ -20,8 +20,23 @@ env:
 
 jobs:
   test-environment-validation:
+    # The default environment keeps the check's existing name.
+    name: ${{ matrix.environment == 'test-infra' && 'test-environment-validation' || format('test-environment-validation ({0})', matrix.environment) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Milo runs with the DiscoveryContextFilter feature gate off and on, and the
+    # gate decides what a project's discovery lists, so the suites run in both
+    # configurations. The discovery-context-filter suite needs the gate on.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: test-infra
+            overlay: config/overlays/test-infra/
+            selector: requires notin (authorization-provider,discovery-context-filter)
+          - environment: discovery-context-filter
+            overlay: config/overlays/test-infra-discovery-context-filter/
+            selector: requires!=authorization-provider
 
     steps:
       - name: Checkout code
@@ -96,7 +111,7 @@ jobs:
           task dev:load
 
           # Deploy Milo control plane (dependencies already satisfied)
-          task dev:deploy
+          task dev:deploy TEST_INFRA_OVERLAY="${{ matrix.overlay }}"
 
       - name: Wait for networking path to be ready
         run: |
@@ -167,10 +182,10 @@ jobs:
           # Determine which tests to run based on input
           if [ -n "${{ github.event.inputs.test_suite }}" ]; then
             echo "Running specified test suite: ${{ github.event.inputs.test_suite }}"
-            task test:end-to-end -- ${{ github.event.inputs.test_suite }}
+            task test:end-to-end E2E_SELECTOR="${{ matrix.selector }}" -- ${{ github.event.inputs.test_suite }}
           else
             echo "Running all end-to-end tests..."
-            task test:end-to-end
+            task test:end-to-end E2E_SELECTOR="${{ matrix.selector }}"
           fi
 
       - name: Collect debug information on failure

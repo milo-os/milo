@@ -12,7 +12,6 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/endpoints/filterlatency"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
@@ -75,9 +74,10 @@ type Config struct {
 	ControlPlane  *controlplaneapiserver.Config
 	APIExtensions *apiextensionsapiserver.Config
 
-	// DiscoveryRegistry is the shared parent-context registry used by the
-	// discovery filter. Created in NewConfig, populated from CRDs by a
-	// post-start hook in CreateServerChain.
+	// DiscoveryRegistry is the shared parent-context registry read by the
+	// unserved-request counter and the discovery filter. Created in NewConfig
+	// whatever the gates say, populated from CRDs and policies by post-start
+	// hooks in CreateServerChain.
 	DiscoveryRegistry *discoveryctx.Registry
 
 	// ProjectStates is the server's one view of Projects. Created in
@@ -388,26 +388,7 @@ func (c *Config) Complete() (CompletedConfig, error) {
 }
 
 func NewConfig(opts options.CompletedOptions) (*Config, error) {
-	var registry *discoveryctx.Registry
-	if utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter) {
-		registry = discoveryctx.NewRegistry()
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "sessions"},
-			discoveryctx.ContextUser,
-		)
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "useridentities"},
-			discoveryctx.ContextUser,
-		)
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeys"},
-			discoveryctx.ContextUser,
-		)
-		registry.RegisterStatic(
-			schema.GroupResource{Group: "identity.miloapis.com", Resource: "passkeyregistrationlinks"},
-			discoveryctx.ContextUser,
-		)
-	}
+	registry := discoveryctx.NewRegistry()
 
 	c := &Config{
 		Options:           opts,
@@ -447,7 +428,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 	loopbackClientConfig := genericConfig.LoopbackClientConfig
 
-	genericConfig.BuildHandlerChainFunc = projectRouterChain(registry, loopbackClientConfig)
+	buildHandlerChain := projectRouterChain(registry, loopbackClientConfig)
+	genericConfig.BuildHandlerChainFunc = buildHandlerChain
 
 	serviceResolver := webhook.NewDefaultServiceResolver()
 
@@ -489,7 +471,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	apiExtensions.GenericConfig.BuildHandlerChainFunc = projectRouterChain(registry, loopbackClientConfig)
+	apiExtensions.GenericConfig.BuildHandlerChainFunc = buildHandlerChain
 	c.APIExtensions = apiExtensions
 
 	// Add readiness check for quota validator to ensure cache is synced before serving traffic
@@ -511,7 +493,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	aggregator.GenericConfig.BuildHandlerChainFunc = projectRouterChain(registry, loopbackClientConfig)
+	aggregator.GenericConfig.BuildHandlerChainFunc = buildHandlerChain
 	c.Aggregator = aggregator
 	c.Aggregator.ExtraConfig.DisableRemoteAvailableConditionController = true
 	c.Aggregator.GenericConfig.EffectiveVersion = apiservercompat.DefaultBuildEffectiveVersion()
@@ -520,15 +502,13 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 }
 
 // projectRouterChain builds the handler chain each server in the chain uses: the stock chain with Milo's filters,
-// wrapped by the project router, with the discovery context filter innermost when the registry is enabled.
+// wrapped by the project router, with the registry's filters innermost. Build it once: the servers share its filters.
 func projectRouterChain(registry *discoveryctx.Registry, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
+	registryFilters := discoveryctx.NewFilters(registry, utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter))
 	return func(h http.Handler, c *server.Config) http.Handler {
-		if registry != nil {
-			h = discoveryctx.DiscoveryContextFilter(h, registry)
-		}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(h, c, loopbackClientConfig), // build stock chain first
-			c.RequestInfoResolver,                                // then wrap with router
+			DefaultBuildHandlerChain(registryFilters(h), c, loopbackClientConfig), // build stock chain first
+			c.RequestInfoResolver, // then wrap with router
 		)
 	}
 }

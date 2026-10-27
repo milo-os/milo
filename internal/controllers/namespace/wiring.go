@@ -16,6 +16,8 @@ type NMSink struct {
 	NM        *NamespaceController
 	Resync    time.Duration
 	Finalizer v1.FinalizerName
+	// InitialSyncPeriod bounds the wait for a project's namespace cache, as GCSink's bounds its monitors' sync.
+	InitialSyncPeriod time.Duration
 }
 
 func (s *NMSink) AddProject(ctx context.Context, id string, cfg *rest.Config) error {
@@ -23,7 +25,8 @@ func (s *NMSink) AddProject(ctx context.Context, id string, cfg *rest.Config) er
 	md := metadata.NewForConfigOrDie(cfg)
 	// log
 	klog.Infof("[namespace] Adding project %q with config: %v", id, cfg)
-	return s.NM.AddProject(ctx, id, cs, md, cs.Discovery().ServerPreferredNamespacedResources, s.Resync, s.Finalizer)
+	return s.NM.AddProject(ctx, id, cs, md, cs.Discovery().ServerPreferredNamespacedResources, s.Resync, s.Finalizer,
+		s.InitialSyncPeriod)
 }
 
 func (s *NMSink) RemoveProject(id string) {

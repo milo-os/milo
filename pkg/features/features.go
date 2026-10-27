@@ -89,6 +89,24 @@ const (
 	// alpha: v0.1.0
 	ProjectSuspension featuregate.Feature = "ProjectSuspension"
 
+	// GarbageCollectorServedTypes makes the garbage collector watch in each
+	// project only the types that project serves, as Milo's discovery-context
+	// registry declares them (milo#834).
+	//
+	// Like EmailVerifiedGate, it selects between two behaviours. Disabled, every
+	// project watches the root's types, and the collector counts what narrowing
+	// would drop: garbagecollector_unserved_objects,
+	// garbagecollector_unserved_owned_objects and
+	// garbagecollector_unserved_owners_with_dependents. Enabled, it narrows, and
+	// holds a dependent whose owner's kind the project does not serve.
+	//
+	// Enable it in an estate only when all three gauges read 0 for every type:
+	// an object they count would lose its collection.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.36.14
+	GarbageCollectorServedTypes featuregate.Feature = "GarbageCollectorServedTypes"
+
 	// EmailVerifiedGate makes EmailVerificationEnforcement deny, rather than
 	// only observe.
 	//
@@ -124,6 +142,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		PreRelease: featuregate.Alpha,
 	},
 	EventsProxy: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	GarbageCollectorServedTypes: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},

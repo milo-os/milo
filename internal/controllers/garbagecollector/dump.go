@@ -315,15 +315,16 @@ func marshalDOT(w io.Writer, nodes []*dotVertex, edges []dotEdge) error {
 }
 
 func (h *debugHTTPHandler) pickBuilders(project string) []*GraphBuilder {
-	if len(h.controller.dependencyGraphBuilders) == 0 {
+	builders := h.controller.builders()
+	if len(builders) == 0 {
 		return nil
 	}
 	if project == "" {
 		// all partitions
-		return h.controller.dependencyGraphBuilders
+		return builders
 	}
 	// specific partition id
-	for _, gb := range h.controller.dependencyGraphBuilders {
+	for _, gb := range builders {
 		if gb.project == project {
 			return []*GraphBuilder{gb}
 		}

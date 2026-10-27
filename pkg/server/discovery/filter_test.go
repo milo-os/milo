@@ -38,7 +38,7 @@ func TestParseContexts(t *testing.T) {
 }
 
 func TestRegistryStaticAndCRD(t *testing.T) {
-	r := NewRegistry()
+	r := newRegistry()
 	r.RegisterStatic(schema.GroupResource{Group: "core", Resource: "configmaps"}, ContextPlatform)
 	// Simulate a CRD entry by writing directly (informer path is exercised
 	// implicitly elsewhere; this keeps the test hermetic).
@@ -63,7 +63,7 @@ func TestRegistryStaticAndCRD(t *testing.T) {
 }
 
 func TestFilterAPIResourceListByContext(t *testing.T) {
-	registry := NewRegistry()
+	registry := newRegistry()
 	// Mark "projects" as Organization-only.
 	registry.crd[schema.GroupResource{Group: "resourcemanager.miloapis.com", Resource: "projects"}] = []ParentContext{ContextOrganization}
 	// Mark "organizations" as Platform-only.
@@ -209,7 +209,7 @@ func TestFilterAPIIndex_FormatDetection(t *testing.T) {
 		},
 	}
 
-	registry := NewRegistry()
+	registry := newRegistry()
 	// "projects" is Organization-tagged; in Project context it must be hidden.
 	registry.crd[schema.GroupResource{Group: "resourcemanager.miloapis.com", Resource: "projects"}] = []ParentContext{ContextOrganization}
 	registry.hasInit = true

@@ -23,6 +23,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"go.miloapis.com/milo/internal/projectscope"
 )
 
 type Options struct {
@@ -32,9 +34,17 @@ type Options struct {
 	Parallel      int
 }
 
-type Purger struct{}
+// Purger deletes everything a deleted project stores in its control plane.
+type Purger struct {
+	// root reaches Milo at Platform context, whose discovery lists every kind
+	// a project can store. A project's own discovery may hide some of them.
+	root *rest.Config
+}
 
-func New() *Purger { return &Purger{} }
+// New returns a Purger that discovers kinds through root, Milo's API at
+// Platform context. Reads and deletes still go to each project's control
+// plane.
+func New(root *rest.Config) *Purger { return &Purger{root: root} }
 
 type res struct {
 	gvr schema.GroupVersionResource
@@ -173,7 +183,7 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 		o.Parallel = 8
 	}
 
-	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+	disco, err := discovery.NewDiscoveryClientForConfig(p.root)
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
@@ -225,17 +235,16 @@ func (p *Purger) StartPurge(ctx context.Context, cfg *rest.Config, project strin
 
 	// Phase B: cluster-scoped objects. Status waits for the ones that carry
 	// finalizers, so their owners finish against a control plane that still
-	// answers. A refused delete here must not keep namespaces from being
-	// deleted, so its error is returned after Phase C.
-	remote, err := servedElsewhere(deadline, dyn)
-	if err != nil {
-		return err
+	// answers. A failed read or a refused delete here must not keep
+	// namespaces from being deleted, so its error is returned after Phase C.
+	local, clusterErr := servedLocally(deadline, dyn)
+	var cluster []res
+	if clusterErr == nil {
+		cluster, clusterErr = clusterScopedResources(disco.ServerPreferredResources, local)
 	}
-	cluster, err := clusterScopedResources(disco.ServerPreferredResources, remote)
-	if err != nil {
-		return err
+	if clusterErr == nil {
+		clusterErr = deleteClusterObjects(deadline, dyn, cluster, o.Parallel, listOpts)
 	}
-	clusterErr := deleteClusterObjects(deadline, dyn, cluster, o.Parallel, listOpts)
 
 	// Phase C: delete namespaces themselves (sets DeletionTimestamp)
 	return errors.Join(clusterErr, firstRefusal(deleteNamespaces(deadline, core, namespaces, o.Parallel)))
@@ -307,7 +316,7 @@ func (p *Purger) Status(ctx context.Context, cfg *rest.Config, project string) (
 	if err != nil {
 		return Status{}, fmt.Errorf("building dynamic client for project %s: %w", project, err)
 	}
-	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+	disco, err := discovery.NewDiscoveryClientForConfig(p.root)
 	if err != nil {
 		return Status{}, fmt.Errorf("building discovery client for project %s: %w", project, err)
 	}
@@ -357,11 +366,11 @@ func purgeStatus(
 
 	// Cluster-scoped objects that carry finalizers hold the project too, so
 	// their owners can finish against a control plane that still answers.
-	remote, err := servedElsewhere(ctx, dyn)
+	local, err := servedLocally(ctx, dyn)
 	if err != nil {
 		return Status{}, err
 	}
-	cluster, err := clusterScopedResources(discoverResources, remote)
+	cluster, err := clusterScopedResources(discoverResources, local)
 	if err != nil {
 		return Status{}, err
 	}
@@ -451,110 +460,85 @@ func remainingContent(
 }
 
 // namespacedResources returns the namespaced resources the purge deletes.
-// Namespaces and CRDs are handled explicitly, and cluster-scoped resources are
-// covered by clusterScopedResources.
+// Cluster-scoped resources are covered by clusterScopedResources.
 func namespacedResources(discoverResources func() ([]*metav1.APIResourceList, error)) ([]res, error) {
-	lists, err := discoverResources()
-	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
-		return nil, fmt.Errorf("discover: %w", err)
-	}
-
-	var namespaced []res
-	for _, l := range lists {
-		gv, err := schema.ParseGroupVersion(l.GroupVersion)
-		if err != nil {
-			continue
-		}
-		for _, ar := range l.APIResources {
-			verbs := sets.NewString(ar.Verbs...)
-			if !verbs.HasAll("list", "deletecollection") {
-				continue
-			}
-			if containsSlash(ar.Name) {
-				continue // skip subresources
-			}
-			if !ar.Namespaced {
-				continue
-			}
-			gvr := schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: ar.Name}
-			if gvr.Group == "" && gvr.Resource == "namespaces" {
-				continue
-			}
-			if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
-				continue
-			}
-			namespaced = append(namespaced, res{gvr: gvr})
-		}
-	}
-	return namespaced, nil
+	return purgeableResources(discoverResources, func(_ schema.GroupVersion, ar metav1.APIResource) bool {
+		return ar.Namespaced
+	})
 }
 
 // clusterScopedResources returns the cluster-scoped resources the purge
-// deletes. Namespaces and CRDs are handled explicitly and skipped here.
+// deletes: only group versions in local, the ones Milo stores itself, so a kind
+// served from elsewhere is never deleted with a project.
 //
-// Like namespacedResources, only resources that support deletecollection are
-// returned. Resources served from elsewhere, such as a user's sessions and
-// keys, do not support it and are never deleted with a project.
-func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error), remote sets.Set[schema.GroupVersion]) ([]res, error) {
+// A local kind with deletecollection is a generic registry store, and Milo
+// makes every one of those project-aware except the kinds every project
+// shares, so it is stored per project; a virtual kind such as a user's sessions
+// has no deletecollection and is never purged.
+func clusterScopedResources(discoverResources func() ([]*metav1.APIResourceList, error), local sets.Set[schema.GroupVersion]) ([]res, error) {
+	return purgeableResources(discoverResources, func(gv schema.GroupVersion, ar metav1.APIResource) bool {
+		return !ar.Namespaced && local.Has(gv)
+	})
+}
+
+// purgeableResources returns the discovered resources that purgeable accepts
+// and keep chooses.
+func purgeableResources(
+	discoverResources func() ([]*metav1.APIResourceList, error),
+	keep func(schema.GroupVersion, metav1.APIResource) bool,
+) ([]res, error) {
 	lists, err := discoverResources()
 	if err != nil && !discovery.IsGroupDiscoveryFailedError(err) {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 
-	var cluster []res
+	var resources []res
 	for _, l := range lists {
 		gv, err := schema.ParseGroupVersion(l.GroupVersion)
 		if err != nil {
 			continue
 		}
-		if gv.Group == apiServicesGVR.Group || remote.Has(gv) {
-			continue
-		}
 		for _, ar := range l.APIResources {
-			verbs := sets.NewString(ar.Verbs...)
-			if !verbs.HasAll("list", "deletecollection") {
-				continue
+			if purgeable(gv, ar) && keep(gv, ar) {
+				resources = append(resources, res{gvr: gv.WithResource(ar.Name)})
 			}
-			if containsSlash(ar.Name) {
-				continue // skip subresources
-			}
-			if ar.Namespaced {
-				continue
-			}
-			gvr := schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: ar.Name}
-			if gvr.Group == "" && gvr.Resource == "namespaces" {
-				continue
-			}
-			if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
-				continue
-			}
-			cluster = append(cluster, res{gvr: gvr})
 		}
 	}
-	return cluster, nil
+	return resources, nil
+}
+
+// purgeable reports whether the purge deletes the objects of ar: a resource it
+// can list and delete as a collection, not a subresource, not the namespaces
+// Phase C deletes, and not a kind every project shares.
+func purgeable(gv schema.GroupVersion, ar metav1.APIResource) bool {
+	gr := schema.GroupResource{Group: gv.Group, Resource: ar.Name}
+	return sets.NewString(ar.Verbs...).HasAll("list", "deletecollection") &&
+		!containsSlash(ar.Name) &&
+		gr != schema.GroupResource{Resource: "namespaces"} &&
+		!projectscope.StaysGlobal(gr)
 }
 
 var apiServicesGVR = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
 
-func servedElsewhere(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.GroupVersion], error) {
-	remote := sets.New[schema.GroupVersion]()
+// servedLocally returns the group versions Milo stores itself: those an
+// APIService without spec.service names. A group version no APIService names
+// cannot be told apart, so it is left out.
+func servedLocally(ctx context.Context, dyn dynamic.Interface) (sets.Set[schema.GroupVersion], error) {
 	list, err := dyn.Resource(apiServicesGVR).List(ctx, metav1.ListOptions{})
-	if apierrors.IsNotFound(err) {
-		return remote, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("list apiservices: %w", err)
 	}
+	local := sets.New[schema.GroupVersion]()
 	for i := range list.Items {
 		obj := list.Items[i].Object
-		if _, found, _ := unstructured.NestedMap(obj, "spec", "service"); !found {
+		if _, found, _ := unstructured.NestedMap(obj, "spec", "service"); found {
 			continue
 		}
 		group, _, _ := unstructured.NestedString(obj, "spec", "group")
 		version, _, _ := unstructured.NestedString(obj, "spec", "version")
-		remote.Insert(schema.GroupVersion{Group: group, Version: version})
+		local.Insert(schema.GroupVersion{Group: group, Version: version})
 	}
-	return remote, nil
+	return local, nil
 }
 
 // heldClusterObjects lists the objects of the given cluster-scoped resources

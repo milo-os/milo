@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 )
@@ -95,6 +96,29 @@ func newProjectPlaneStub() *projectPlaneStub {
 	}}
 }
 
+// serve adds gv to the stub's discovery with the given resources.
+func (s *projectPlaneStub) serve(gv schema.GroupVersion, rs ...metav1.APIResource) {
+	groups := s.docs["/apis"].(*metav1.APIGroupList)
+	version := metav1.GroupVersionForDiscovery{GroupVersion: gv.String(), Version: gv.Version}
+	groups.Groups = append(groups.Groups, metav1.APIGroup{Name: gv.Group, Versions: []metav1.GroupVersionForDiscovery{version}, PreferredVersion: version})
+	s.docs["/apis/"+gv.String()] = &metav1.APIResourceList{
+		TypeMeta:     metav1.TypeMeta{Kind: "APIResourceList", APIVersion: "v1"},
+		GroupVersion: gv.String(),
+		APIResources: rs,
+	}
+}
+
+// storeLocally adds the APIService the aggregator registers for a group
+// version Milo stores itself.
+func (s *projectPlaneStub) storeLocally(gv schema.GroupVersion) {
+	list := s.docs["/apis/apiregistration.k8s.io/v1/apiservices"].(*apiregistrationv1.APIServiceList)
+	list.Items = append(list.Items, apiregistrationv1.APIService{
+		TypeMeta:   metav1.TypeMeta{Kind: "APIService", APIVersion: "apiregistration.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: gv.Version + "." + gv.Group},
+		Spec:       apiregistrationv1.APIServiceSpec{Group: gv.Group, Version: gv.Version},
+	})
+}
+
 func (s *projectPlaneStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == http.MethodDelete {
@@ -135,7 +159,8 @@ func TestStartPurge_LeavesKindsSharedWithOtherProjectsAlone(t *testing.T) {
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{})
+	cfg := &rest.Config{Host: srv.URL}
+	err := New(cfg).StartPurge(context.Background(), cfg, "doomed", Options{})
 	if err != nil {
 		t.Fatalf("StartPurge: %v", err)
 	}
@@ -154,7 +179,8 @@ func TestStatus_IgnoresHeldObjectsOfKindsServedElsewhere(t *testing.T) {
 	srv := httptest.NewServer(newProjectPlaneStub())
 	defer srv.Close()
 
-	status, err := New().Status(context.Background(), &rest.Config{Host: srv.URL}, "doomed")
+	cfg := &rest.Config{Host: srv.URL}
+	status, err := New(cfg).Status(context.Background(), cfg, "doomed")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -168,7 +194,8 @@ func TestStartPurge_DeletesOnlyClusterScopedKindsTheProjectHolds(t *testing.T) {
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	if err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{}); err != nil {
+	cfg := &rest.Config{Host: srv.URL}
+	if err := New(cfg).StartPurge(context.Background(), cfg, "doomed", Options{}); err != nil {
 		t.Fatalf("StartPurge: %v", err)
 	}
 
@@ -185,7 +212,8 @@ func TestStartPurge_DeletesNoClusterScopedKindWhenAPIServicesCannotBeRead(t *tes
 	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	if err := New().StartPurge(context.Background(), &rest.Config{Host: srv.URL}, "doomed", Options{}); err == nil {
+	cfg := &rest.Config{Host: srv.URL}
+	if err := New(cfg).StartPurge(context.Background(), cfg, "doomed", Options{}); err == nil {
 		t.Fatal("expected StartPurge to fail when it cannot tell which kinds are served elsewhere")
 	}
 	if got := stub.deleted(); len(got) != 0 {

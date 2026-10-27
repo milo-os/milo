@@ -10,6 +10,9 @@ spec:
     - A project can be deleted after reaching Ready status
     - The ResourceCleanup condition progresses through the expected states
     - The project is fully removed from both organization and main cluster contexts
+    - The project's cleanup deletes no APIService: APIServices are shared by
+      every project, so each one present before the deletion is still there
+      after it
 
   clusters:
     main:
@@ -68,6 +71,13 @@ spec:
       description: Delete the project and verify cleanup completes
       cluster: org
       try:
+        - script:
+            timeout: 30s
+            content: |
+              kubectl --kubeconfig kubeconfig-main get apiservices -o jsonpath='{.items[*].metadata.name}'
+            outputs:
+              - name: apiservices_before
+                value: ($stdout)
         - delete:
             ref:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
@@ -80,6 +90,24 @@ spec:
             timeout: 120s
             for:
               deletion: {}
+        - script:
+            timeout: 30s
+            env:
+              - name: BEFORE
+                value: ($apiservices_before)
+            content: |
+              after=$(kubectl --kubeconfig kubeconfig-main get apiservices -o jsonpath='{.items[*].metadata.name}')
+              missing=""
+              for name in $BEFORE; do
+                case " $after " in
+                  *" $name "*) ;;
+                  *) missing="$missing $name" ;;
+                esac
+              done
+              if [ -n "$missing" ]; then
+                echo "APIServices deleted with the project:$missing"
+                exit 1
+              fi
 
     - name: verify-project-gone-from-main-cluster
       description: Verify the project no longer exists in the main cluster

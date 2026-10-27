@@ -7,6 +7,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	restclient "k8s.io/client-go/rest"
@@ -15,6 +16,7 @@ import (
 
 	gccontroller "go.miloapis.com/milo/internal/controllers/garbagecollector"
 	namespacecontroller "go.miloapis.com/milo/internal/controllers/namespace"
+	"go.miloapis.com/milo/pkg/features"
 
 	"go.miloapis.com/milo/internal/controllers/projectprovider"
 )
@@ -59,9 +61,10 @@ func startModifiedNamespaceController(ctx context.Context, controllerContext Con
 	go namespaceController.Run(ctx, int(controllerContext.ComponentConfig.NamespaceController.ConcurrentNamespaceSyncs))
 
 	sink := &namespacecontroller.NMSink{
-		NM:        namespaceController,
-		Resync:    controllerContext.ComponentConfig.NamespaceController.NamespaceSyncPeriod.Duration,
-		Finalizer: v1.FinalizerKubernetes,
+		NM:                namespaceController,
+		Resync:            controllerContext.ComponentConfig.NamespaceController.NamespaceSyncPeriod.Duration,
+		Finalizer:         v1.FinalizerKubernetes,
+		InitialSyncPeriod: projectCacheSyncTimeout,
 	}
 
 	prov, err := projectprovider.New(nsKubeconfig, sink)
@@ -73,6 +76,11 @@ func startModifiedNamespaceController(ctx context.Context, controllerContext Con
 	// nothing to return to kube-controller-manager; controller runs in goroutines
 	return nil, true, nil
 }
+
+// projectCacheSyncTimeout bounds how long a project's engagement waits for its caches to sync: upstream
+// kube-controller-manager's initial sync timeout for its garbage collector (k8s.io/kubernetes v1.37.1,
+// cmd/kube-controller-manager/app/core.go line 696, syncPeriod).
+const projectCacheSyncTimeout = 30 * time.Second
 
 func newGarbageCollectorControllerDescriptor() *ControllerDescriptor {
 	return &ControllerDescriptor{
@@ -117,6 +125,11 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 	if err != nil {
 		return nil, true, fmt.Errorf("failed to start the generic garbage collector: %w", err)
 	}
+	served, err := startServedTypes(ctx, cfg)
+	if err != nil {
+		return nil, true, err
+	}
+	gc.SetServedTypes(served, utilfeature.DefaultFeatureGate.Enabled(features.GarbageCollectorServedTypes))
 
 	// Start GC workers
 	workers := int(controllerContext.ComponentConfig.GarbageCollectorController.ConcurrentGCSyncs)
@@ -132,7 +145,7 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 		RootRESTMapper:    controllerContext.RESTMapper, // same API surface across projects
 		Ignored:           ignored,
 		InformersStarted:  controllerContext.InformersStarted,
-		InitialSyncPeriod: 30 * time.Second,
+		InitialSyncPeriod: projectCacheSyncTimeout,
 	}
 	prov, err := projectprovider.New(cfg, gcSink)
 	if err != nil {

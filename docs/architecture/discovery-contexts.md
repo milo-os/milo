@@ -90,17 +90,17 @@ in all contexts," which is the backwards-compatible default.
 
 Resources served by aggregated APIs (e.g. `identity.miloapis.com/sessions`,
 core/v1) aren't backed by a CRD object, so there is no annotation surface.
-For these, register the contexts programmatically at apiserver startup:
+Milo's own are listed in `builtinContexts` in `pkg/server/discovery`, and
+`discovery.NewRegistry()` registers them, so every process that builds the
+registry starts from the same declarations. A new one goes in that list:
 
 ```go
-registry.RegisterStatic(
-    schema.GroupResource{Group: "identity.miloapis.com", Resource: "sessions"},
-    discovery.ContextUser,
-)
+{Group: "identity.miloapis.com", Resource: "sessions"}: {ContextUser},
 ```
 
-Static registrations take precedence over CRD annotations for the same
-`GroupResource` — useful if you ever need to override.
+A static registration is the lowest-precedence input: a
+`DiscoveryContextPolicy` rule or a CRD annotation for the same
+`GroupResource` overrides it.
 
 ## What the client sees
 
@@ -129,6 +129,17 @@ the filter with a validating admission plugin that rejects writes to a
 resource whose annotation excludes the current parent context. The two share
 the same `Registry` so the rules can never drift.
 
+**Until then, a request for a hidden type is counted.** The API server counts
+each resource request in Project context for a type the registry does not
+serve in Project, in `projectstorage_unserved_requests_total{verb,group,resource}`,
+and serves it as before. A type that only a wildcard rule hides counts under
+the rule's patterns, such as `search.miloapis.com` and `*`, so a name a
+request chose never becomes a label. It logs each new (user, verb, group,
+resource) with the project, at most once an hour, so a caller can be found by
+name. The counter runs whatever the `DiscoveryContextFilter` gate says: the API
+server builds the registry with the gate off too. It counts nothing until the
+registry has synced.
+
 **Backwards compatibility.** Resources without the annotation are visible
 everywhere. Existing CRDs (Milo's and third-parties') keep working unchanged
 until they opt in.
@@ -137,10 +148,45 @@ until they opt in.
 synced, the filter falls open (everything visible). This avoids hiding
 resources during the brief window where the registry is empty.
 
+## The garbage collector reads the same registry
+
+The controller manager builds its own `Registry` from the same CRDs and
+`DiscoveryContextPolicy` objects, whatever the `DiscoveryContextFilter` gate
+says, and gives it to the garbage collector as the types each project serves.
+The feature gate `GarbageCollectorServedTypes` selects what the collector does
+with it:
+
+- **Off (the default):** every project watches the root's deletable types, as
+  before, and the collector counts, by group and resource, what narrowing would
+  drop from the project graphs: `garbagecollector_unserved_objects`,
+  `garbagecollector_unserved_owned_objects` and
+  `garbagecollector_unserved_owners_with_dependents`. It logs each counted
+  object once. A series is absent, not 0, while the collector cannot see:
+  until the registry and every graph have synced, and for a type some
+  project graph does not watch. A project engaged after the collector's
+  first discovery pass keeps the set its own discovery shows, so where the
+  discovery filter is on, its graph does not watch the types the filter
+  hides.
+- **On:** each project watches only the root's deletable types it serves, and
+  a dependent whose owner's kind its project does not serve is held, never
+  collected as orphaned. Turn it on only when all three gauges read 0.
+  `garbagecollector_held_dependents` then counts, by the owner's type, the
+  objects the collector would hold if it processed them, not the holds it
+  has met. It starts at 0, since the owners-with-dependents gauge read 0 at
+  turn-on, and a rise is a new dependent of an owner whose type its project
+  does not serve.
+
+Unlike the filter, the collector does not fall open: until its registry has
+synced, a project keeps the set it has.
+
 ## File map
 
 - `pkg/server/discovery/contexts.go` — annotation contract, ParentContext type, request-context detection
 - `pkg/server/discovery/registry.go` — CRD-watching registry + static registration
 - `pkg/server/discovery/filter.go` — HTTP middleware that captures and filters discovery responses
+- `pkg/server/discovery/unserved.go` — the counter of requests for hidden types, and its caller log
 - `cmd/milo/apiserver/config.go` — wires the filter into the three handler chains (kube-API, apiextensions, aggregator)
 - `cmd/milo/apiserver/server.go` — starts the registry's CRD informer in a post-start hook
+- `cmd/milo/controller-manager/servedtypes.go` — builds the garbage collector's registry
+- `internal/controllers/garbagecollector/served.go` — each project's monitor set and the owner hold
+- `internal/controllers/garbagecollector/unserved.go` — the three gauges and the log line

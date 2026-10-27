@@ -35,7 +35,6 @@ type UserController struct {
 
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users/status,verbs=update
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=policybindings,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=userpreferences,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=platformaccesses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=list;delete
@@ -79,7 +78,7 @@ func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// Ensure owner references are set on PolicyBinding and UserPreference resources
+	// Make the User the owner of its UserPreference
 	if err := r.ensureOwnerReferences(ctx, user); err != nil {
 		log.Error(err, "Failed to ensure owner references")
 		return ctrl.Result{}, err
@@ -195,11 +194,12 @@ func (r *UserController) reconcileNameReviewAnnotation(ctx context.Context, user
 	return nil
 }
 
-// ensureOwnerReferences ensures that PolicyBinding and UserPreference resources have proper owner references
+// ensureOwnerReferences makes the User the owner of its UserPreference, so the garbage collector deletes the
+// preference with the User. The User's self-manage PolicyBindings get their owner from the PolicyBinding adopter, which
+// makes each binding a dependent of the object it targets.
 func (r *UserController) ensureOwnerReferences(ctx context.Context, user *iamv1alpha1.User) error {
 	log := log.FromContext(ctx).WithName("ensure-owner-references")
 
-	// Create owner reference for the user
 	ownerRef := metav1.OwnerReference{
 		APIVersion: iamv1alpha1.SchemeGroupVersion.String(),
 		Kind:       "User",
@@ -207,27 +207,9 @@ func (r *UserController) ensureOwnerReferences(ctx context.Context, user *iamv1a
 		UID:        user.UID,
 	}
 
-	// Update PolicyBinding for user self-management
-	policyBindingName := fmt.Sprintf("user-self-manage-%s", user.Name)
-	policyBinding := &iamv1alpha1.PolicyBinding{}
-	err := r.Client.Get(ctx, types.NamespacedName{Name: policyBindingName, Namespace: "milo-system"}, policyBinding)
-	if apierrors.IsNotFound(err) {
-		// PolicyBinding doesn't exist, webhook should have created it
-		log.Info("PolicyBinding not found, skipping (webhook should create it)", "user", user.Name, "policyBinding", policyBindingName)
-	} else if err != nil {
-		return fmt.Errorf("failed to get policy binding: %w", err)
-	} else if !hasOwnerReference(policyBinding.OwnerReferences, ownerRef) {
-		policyBinding.OwnerReferences = append(policyBinding.OwnerReferences, ownerRef)
-		if err := r.Client.Update(ctx, policyBinding); err != nil {
-			return fmt.Errorf("failed to update policy binding with owner reference: %w", err)
-		}
-		log.Info("Updated PolicyBinding with owner reference", "user", user.Name)
-	}
-
-	// Update UserPreference
 	userPreferenceName := fmt.Sprintf("userpreference-%s", user.Name)
 	userPreference := &iamv1alpha1.UserPreference{}
-	err = r.Client.Get(ctx, types.NamespacedName{Name: userPreferenceName}, userPreference)
+	err := r.Client.Get(ctx, types.NamespacedName{Name: userPreferenceName}, userPreference)
 	if apierrors.IsNotFound(err) {
 		// UserPreference doesn't exist, webhook should have created it
 		log.Info("UserPreference not found, skipping (webhook should create it)", "user", user.Name, "userPreference", userPreferenceName)
@@ -239,23 +221,6 @@ func (r *UserController) ensureOwnerReferences(ctx context.Context, user *iamv1a
 			return fmt.Errorf("failed to update user preference with owner reference: %w", err)
 		}
 		log.Info("Updated UserPreference with owner reference", "user", user.Name)
-	}
-
-	// Update UserPreference PolicyBinding for user preference management
-	userPreferencePolicyBindingName := fmt.Sprintf("userpreference-self-manage-%s", user.Name)
-	userPreferencePolicyBinding := &iamv1alpha1.PolicyBinding{}
-	err = r.Client.Get(ctx, types.NamespacedName{Name: userPreferencePolicyBindingName, Namespace: "milo-system"}, userPreferencePolicyBinding)
-	if apierrors.IsNotFound(err) {
-		// UserPreference PolicyBinding doesn't exist, webhook should have created it
-		log.Info("UserPreference PolicyBinding not found, skipping (webhook should create it)", "user", user.Name, "policyBinding", userPreferencePolicyBindingName)
-	} else if err != nil {
-		return fmt.Errorf("failed to get user preference policy binding: %w", err)
-	} else if !hasOwnerReference(userPreferencePolicyBinding.OwnerReferences, ownerRef) {
-		userPreferencePolicyBinding.OwnerReferences = append(userPreferencePolicyBinding.OwnerReferences, ownerRef)
-		if err := r.Client.Update(ctx, userPreferencePolicyBinding); err != nil {
-			return fmt.Errorf("failed to update user preference policy binding with owner reference: %w", err)
-		}
-		log.Info("Updated UserPreference PolicyBinding with owner reference", "user", user.Name)
 	}
 
 	return nil
