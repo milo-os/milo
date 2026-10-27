@@ -18,6 +18,8 @@ package garbagecollector
 
 import (
 	"fmt"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type restMappingError struct {
@@ -40,4 +42,14 @@ func (r *restMappingError) Message() string {
 
 func newRESTMappingError(kind, version string) *restMappingError {
 	return &restMappingError{kind: kind, version: version}
+}
+
+// unservedOwnerError holds a dependent whose owner's kind its project does not serve, or cannot yet be told to serve:
+// the collector does not watch that owner, and a lookup of it may answer NotFound although it exists (milo#834, F4).
+type unservedOwnerError struct {
+	owner schema.GroupResource
+}
+
+func (e *unservedOwnerError) Error() string {
+	return fmt.Sprintf("holding the dependent: its project does not serve the owner's kind %s", e.owner)
 }

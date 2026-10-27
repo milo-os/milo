@@ -137,6 +137,27 @@ until they opt in.
 synced, the filter falls open (everything visible). This avoids hiding
 resources during the brief window where the registry is empty.
 
+## The garbage collector reads the same registry
+
+The controller manager builds its own `Registry` from the same CRDs and
+`DiscoveryContextPolicy` objects, whatever the `DiscoveryContextFilter` gate
+says, and gives it to the garbage collector as the types each project serves.
+The feature gate `GarbageCollectorServedTypes` selects what the collector does
+with it:
+
+- **Off (the default):** every project watches the root's deletable types, as
+  before, and the collector counts, by group and resource, what narrowing would
+  drop from the project graphs: `garbagecollector_unserved_objects`,
+  `garbagecollector_unserved_owned_objects` and
+  `garbagecollector_unserved_owners_with_dependents`. It logs each counted
+  object once. A series is absent, not 0, while the collector cannot see.
+- **On:** each project watches only the root's deletable types it serves, and
+  a dependent whose owner's kind its project does not serve is held, never
+  collected as orphaned. Turn it on only when all three gauges read 0.
+
+Unlike the filter, the collector does not fall open: until its registry has
+synced, a project keeps the set it has.
+
 ## File map
 
 - `pkg/server/discovery/contexts.go` — annotation contract, ParentContext type, request-context detection
@@ -144,3 +165,6 @@ resources during the brief window where the registry is empty.
 - `pkg/server/discovery/filter.go` — HTTP middleware that captures and filters discovery responses
 - `cmd/milo/apiserver/config.go` — wires the filter into the three handler chains (kube-API, apiextensions, aggregator)
 - `cmd/milo/apiserver/server.go` — starts the registry's CRD informer in a post-start hook
+- `cmd/milo/controller-manager/servedtypes.go` — builds the garbage collector's registry
+- `internal/controllers/garbagecollector/served.go` — each project's monitor set and the owner hold
+- `internal/controllers/garbagecollector/unserved.go` — the three gauges and the log line
