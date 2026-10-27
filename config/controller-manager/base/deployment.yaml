@@ -155,6 +155,8 @@ spec:
         - containerPort: 9443
           name: ctrl-mgr
           protocol: TCP
+        # kube-controller-manager's liveness values from kubeadm: a busy manager
+        # answers slowly, and a kill costs the lease and its handover.
         livenessProbe:
           httpGet:
             path: /healthz
@@ -162,6 +164,8 @@ spec:
             scheme: HTTPS
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 15
+          failureThreshold: 8
         readinessProbe:
           httpGet:
             path: /healthz
@@ -177,3 +181,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
       restartPolicy: Always
+      # Shutdown waits up to LEADER_ELECT_RENEW_DEADLINE to release the lease,
+      # so the standby takes over at once. Keep this above the longest renew
+      # deadline an overlay sets, or the kubelet kills the release.
+      terminationGracePeriodSeconds: 60
