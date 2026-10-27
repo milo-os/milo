@@ -15,14 +15,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
-	"sigs.k8s.io/yaml"
 
 	discoveryctx "go.miloapis.com/milo/pkg/server/discovery"
 )
 
 // TestStartServedTypes starts the controller manager's registry against a test API server holding Milo's
-// DiscoveryContextPolicy CRD and its notes policy (milo#834): it syncs, reads a policy, a CRD annotation and a
-// built-in type as the API server's registry does, and follows a CRD created after it synced.
+// DiscoveryContextPolicy CRD and a policy the test declares (milo#834): it syncs, reads a policy, a CRD annotation and
+// a built-in type as the API server's registry does, and follows a CRD created after it synced. The policy is the
+// test's own, so a change to a shipped declaration cannot change what the test expects.
 func TestStartServedTypes(t *testing.T) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS is not set; run setup-envtest to provide an envtest API server")
@@ -38,7 +38,7 @@ func TestStartServedTypes(t *testing.T) {
 	t.Cleanup(func() { _ = env.Stop() })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	applyPolicy(t, ctx, dynamic.NewForConfigOrDie(cfg), filepath.Join(root, "discovery", "notes", "discovery-context-policy.yaml"))
+	applyPolicy(t, ctx, dynamic.NewForConfigOrDie(cfg), platformPolicy("example.com", "widgets"))
 	crds := apiextensionsclient.NewForConfigOrDie(cfg).ApiextensionsV1().CustomResourceDefinitions()
 	createCRD(t, ctx, crds, "gadgets", "Platform")
 	createCRD(t, ctx, crds, "doohickeys", "")
@@ -56,7 +56,7 @@ func TestStartServedTypes(t *testing.T) {
 		group, resource string
 		want            bool
 	}{
-		{"notes.miloapis.com", "notes", false},       // a policy rule
+		{"example.com", "widgets", false},            // a policy rule
 		{"example.com", "gadgets", false},            // a CRD annotation
 		{"example.com", "doohickeys", true},          // an untagged CRD
 		{"identity.miloapis.com", "sessions", false}, // a built-in type
@@ -70,16 +70,20 @@ func TestStartServedTypes(t *testing.T) {
 	eventually(t, "a CRD created after the sync is read", func() bool { return !served("example.com", "thingamajigs") })
 }
 
-func applyPolicy(t *testing.T, ctx context.Context, client dynamic.Interface, path string) {
+// platformPolicy returns a DiscoveryContextPolicy that keeps one resource at the platform.
+func platformPolicy(group, resource string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "discovery.miloapis.com/v1alpha1",
+		"kind":       "DiscoveryContextPolicy",
+		"metadata":   map[string]any{"name": "served-types-test"},
+		"spec": map[string]any{"rules": []any{map[string]any{
+			"group": group, "resources": []any{resource}, "contexts": []any{"Platform"},
+		}}},
+	}}
+}
+
+func applyPolicy(t *testing.T, ctx context.Context, client dynamic.Interface, policy *unstructured.Unstructured) {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := &unstructured.Unstructured{}
-	if err := yaml.Unmarshal(data, &policy.Object); err != nil {
-		t.Fatal(err)
-	}
 	gvr := schema.GroupVersionResource{Group: "discovery.miloapis.com", Version: "v1alpha1", Resource: "discoverycontextpolicies"}
 	if _, err := client.Resource(gvr).Create(ctx, policy, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
