@@ -63,12 +63,14 @@ spec:
 
               before=$(count unserved-counter-test.example.com unservedwidgets list)
               # -v=6 logs one line per response, with its time in milliseconds; a retried request logs one per attempt.
-              attempts=$(kubectl --kubeconfig=kubeconfig-root get --raw -v=6 \
-                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" 2>&1 >/dev/null \
-                | grep -c 'unservedwidgets.*milliseconds' || true)
+              # It goes before --raw, which takes the next argument as its value.
+              log=$(kubectl --kubeconfig=kubeconfig-root get -v=6 --raw \
+                "$PLANE/apis/unserved-counter-test.example.com/v1alpha1/unservedwidgets" 2>&1 >/dev/null || true)
+              attempts=$(printf '%s\n' "$log" | grep -c 'unservedwidgets.*milliseconds' || true)
               after=$(count unserved-counter-test.example.com unservedwidgets list)
               echo "unservedwidgets list: $before -> $after, over $attempts HTTP request(s)"
-              [ "$attempts" -ge 1 ] || { echo "FAIL: kubectl logged no response for the LIST"; exit 1; }
+              [ "$attempts" -ge 1 ] \
+                || { echo "FAIL: kubectl logged no response for the LIST: $(printf '%s\n' "$log" | tail -1)"; exit 1; }
               [ "$after" -eq $((before + attempts)) ] \
                 || { echo "FAIL: $attempts project LIST request(s) of a type it does not serve moved the counter by $((after - before))"; exit 1; }
 
