@@ -3,6 +3,8 @@ package iam
 import (
 	"context"
 	"fmt"
+	"strings"
+	"unicode"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -124,18 +126,52 @@ func (r *UserController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
+// personNameExtraRunes are the non-letter characters a name may contain after its first letter.
+const personNameExtraRunes = " .'’-"
+
+// isPersonName reports whether name starts with a letter and contains only letters, combining
+// marks, spaces, hyphens, apostrophes and periods. This matches cloud-portal's profile form,
+// which must accept only names this controller does not flag, or the user loops back to it.
+func isPersonName(name string) bool {
+	for i, r := range name {
+		if i == 0 {
+			if !unicode.IsLetter(r) {
+				return false
+			}
+			continue
+		}
+		if !unicode.IsLetter(r) && !unicode.IsMark(r) && !strings.ContainsRune(personNameExtraRunes, r) {
+			return false
+		}
+	}
+	return true
+}
+
+// userNameNeedsReview reports whether a user's name is a placeholder rather than a real name:
+// givenName and familyName are identical ignoring case (an identity provider such as GitHub
+// supplied a single display name that was copied into both fields), or either one is not a
+// person name, such as an email address or a username with digits or underscores.
+func userNameNeedsReview(givenName, familyName string) bool {
+	givenName = strings.TrimSpace(givenName)
+	familyName = strings.TrimSpace(familyName)
+
+	namesAreEqual := givenName != "" && strings.EqualFold(givenName, familyName)
+	givenIsInvalid := givenName != "" && !isPersonName(givenName)
+	familyIsInvalid := familyName != "" && !isPersonName(familyName)
+	return namesAreEqual || givenIsInvalid || familyIsInvalid
+}
+
 // reconcileNameReviewAnnotation adds or removes the name-review-required annotation depending on
-// whether givenName and familyName are identical. This situation arises when an identity provider
-// (e.g. GitHub) supplies a single display name and the system copies it into both fields.
+// whether userNameNeedsReview flags the user's givenName and familyName.
 func (r *UserController) reconcileNameReviewAnnotation(ctx context.Context, user *iamv1alpha1.User) error {
 	log := log.FromContext(ctx).WithName("reconcile-name-review-annotation")
 
 	annotations := user.GetAnnotations()
 	_, annotationPresent := annotations[iamv1alpha1.UserNameReviewRequiredAnnotation]
-	namesAreEqual := user.Spec.GivenName != "" && user.Spec.GivenName == user.Spec.FamilyName
+	needsReview := userNameNeedsReview(user.Spec.GivenName, user.Spec.FamilyName)
 
 	switch {
-	case namesAreEqual && !annotationPresent:
+	case needsReview && !annotationPresent:
 		if annotations == nil {
 			annotations = map[string]string{}
 		}
@@ -146,7 +182,7 @@ func (r *UserController) reconcileNameReviewAnnotation(ctx context.Context, user
 		}
 		log.Info("Added name-review-required annotation", "user", user.Name)
 
-	case !namesAreEqual && annotationPresent:
+	case !needsReview && annotationPresent:
 		delete(annotations, iamv1alpha1.UserNameReviewRequiredAnnotation)
 		user.SetAnnotations(annotations)
 		if err := r.Client.Update(ctx, user); err != nil {
