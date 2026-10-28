@@ -31,7 +31,9 @@ type NoteResource interface {
 }
 
 // creatorResourceRef names the note a creator's PolicyBinding grants: a Note with its namespace, without which the
-// binding cannot be resolved, and a ClusterNote with none.
+// binding cannot be resolved, and a ClusterNote with none. checkExistingPolicyBinding replaces a binding whose
+// selector differs from it, so a change here deletes and recreates every Note creator binding at the next rollout.
+// Each creator loses editor rights for the seconds of the swap, so such a change is a migration.
 func creatorResourceRef(note NoteResource) *iamv1alpha1.ResourceReference {
 	return &iamv1alpha1.ResourceReference{
 		APIGroup:  "notes.miloapis.com",
