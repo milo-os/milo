@@ -582,11 +582,13 @@ func (gc *GarbageCollector) attemptToDeleteWorker(ctx context.Context, item inte
 }
 
 // logItemError logs the error that requeues an item: a mapping error and a hold quietly, anything else as an error.
+// A hold is also counted, by its owner's type.
 func logItemError(logger klog.Logger, n *node, err error) {
-	switch err.(type) {
+	switch e := err.(type) {
 	case *restMappingError:
 		logger.V(5).Error(err, "error syncing item", "item", n.identity)
 	case *unservedOwnerError:
+		dependentHolds.WithLabelValues(e.owner.Group, e.owner.Resource).Inc()
 		logger.V(2).Info("holding item", "item", n.identity, "reason", err.Error())
 	default:
 		utilruntime.HandleError(fmt.Errorf("error syncing item %s: %v", n, err))

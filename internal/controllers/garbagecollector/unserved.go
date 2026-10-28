@@ -44,13 +44,23 @@ var (
 			"collector cannot see them.",
 		StabilityLevel: metrics.ALPHA,
 	}, []string{"group", "resource"})
+	// dependentHolds counts the holds the collector met, beside heldDependents' level of the holds it would meet. A held
+	// item comes back with the queue's backoff, so it counts attempts, not objects: read it as a rate.
+	dependentHolds = metrics.NewCounterVec(&metrics.CounterOpts{
+		Subsystem: "garbagecollector",
+		Name:      "dependent_holds_total",
+		Help: "Times the collector held a dependent instead of processing it, by its owner's type, which the " +
+			"dependent's project does not serve. A held dependent is retried with backoff, so this counts attempts.",
+		StabilityLevel: metrics.ALPHA,
+	}, []string{"group", "resource"})
 
 	registerUnservedOnce sync.Once
 )
 
 func registerUnservedMetrics() {
 	registerUnservedOnce.Do(func() {
-		legacyregistry.MustRegister(unservedObjects, unservedOwnedObjects, unservedOwnersWithDependents, heldDependents)
+		legacyregistry.MustRegister(unservedObjects, unservedOwnedObjects, unservedOwnersWithDependents, heldDependents,
+			dependentHolds)
 	})
 }
 

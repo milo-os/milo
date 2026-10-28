@@ -98,8 +98,10 @@ func TestOwnerOfUnservedKindIsHeld(t *testing.T) {
 		{name: "narrowing on: an absent owner of a served kind is gone",
 			served: newFakeServed(true, gizmos), narrow: true, owner: sprites},
 	}
+	registerUnservedMetrics()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			dependentHolds.Reset()
 			_, ctx := ktesting.NewTestContext(t)
 			gc, md := newHoldGC(tc.served, tc.narrow)
 			owner := ownerRef(tc.owner, "owner")
@@ -113,9 +115,32 @@ func TestOwnerOfUnservedKindIsHeld(t *testing.T) {
 				if action := gc.attemptToDeleteWorker(ctx, dep); action != requeueItem {
 					t.Fatalf("a held dependent must be requeued, got %v", action)
 				}
+				assertSeries(t, "garbagecollector_dependent_holds_total",
+					map[string]float64{tc.owner.Group + "/" + tc.owner.Resource: 1})
 			}
 		})
 	}
+}
+
+// TestLogItemErrorCountsHoldsByOwnerType proves the counter of the holds met: each hold counts once by its owner's type,
+// so a dependent retried with backoff counts each attempt, and an error that is not a hold counts nothing.
+func TestLogItemErrorCountsHoldsByOwnerType(t *testing.T) {
+	registerUnservedMetrics()
+	dependentHolds.Reset()
+	logger, _ := ktesting.NewTestContext(t)
+	dep := &node{identity: objectReference{OwnerReference: metav1.OwnerReference{Name: "dep", UID: "dep-uid"}}}
+
+	for _, err := range []error{
+		&unservedOwnerError{owner: gizmos.GroupResource()},
+		&unservedOwnerError{owner: gizmos.GroupResource()},
+		&unservedOwnerError{owner: sprites.GroupResource()},
+		newRESTMappingError("Gizmo", "example.com/v1"),
+		errors.New("not a hold"),
+	} {
+		logItemError(logger, dep, err)
+	}
+	assertSeries(t, "garbagecollector_dependent_holds_total", map[string]float64{
+		gizmos.Group + "/" + gizmos.Resource: 2, sprites.Group + "/" + sprites.Resource: 1})
 }
 
 // assertHeld checks attemptToDeleteItem's outcome: a hold returns unservedOwnerError and deletes nothing; otherwise the

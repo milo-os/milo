@@ -174,7 +174,12 @@ with it:
   objects the collector would hold if it processed them, not the holds it
   has met. It starts at 0, since the owners-with-dependents gauge read 0 at
   turn-on, and a rise is a new dependent of an owner whose type its project
-  does not serve.
+  does not serve. `garbagecollector_dependent_holds_total` counts the holds
+  it has met, by the owner's type. A held dependent is retried with backoff,
+  so it counts attempts, not objects: read it as a rate beside the gauge. The
+  collector meets a hold only when it processes the dependent because its
+  owner may be gone, so while every owner lives the gauge can read above 0
+  with no hold counted.
 
 Unlike the filter, the collector does not fall open: until its registry has
 synced, a project keeps the set it has.

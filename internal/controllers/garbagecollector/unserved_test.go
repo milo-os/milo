@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	dto "github.com/prometheus/client_model/go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,7 +51,7 @@ func putNode(gb *GraphBuilder, r schema.GroupVersionResource, name string, owner
 	return n
 }
 
-// unservedSeries returns every series of an unserved gauge, keyed "group/resource".
+// unservedSeries returns every series of an unserved gauge or counter, keyed "group/resource".
 func unservedSeries(t *testing.T, name string) map[string]float64 {
 	t.Helper()
 	families, err := legacyregistry.DefaultGatherer.Gather()
@@ -67,7 +68,11 @@ func unservedSeries(t *testing.T, name string) map[string]float64 {
 			for _, l := range m.GetLabel() {
 				labels[l.GetName()] = l.GetValue()
 			}
-			out[labels["group"]+"/"+labels["resource"]] = m.GetGauge().GetValue()
+			value := m.GetGauge().GetValue()
+			if f.GetType() == dto.MetricType_COUNTER {
+				value = m.GetCounter().GetValue()
+			}
+			out[labels["group"]+"/"+labels["resource"]] = value
 		}
 	}
 	return out
