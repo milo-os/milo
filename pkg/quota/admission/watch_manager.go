@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,8 +22,18 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 )
 
-// claimWaiter represents a waiter for a specific ResourceClaim
+// maxHeldOutcomes bounds the outcomes an unbound waiter holds. A waiter is
+// unbound only while its request reads, deletes and creates one claim, so it
+// meets few claims of its name; the bound keeps a name that churns from
+// growing a request's memory. The oldest goes first, because the request's own
+// claim is the latest of its name. Were it dropped anyway, the request would
+// time out, and a client retries a timeout.
+const maxHeldOutcomes = 4
+
+// claimWaiter represents a waiter for a specific ResourceClaim. It implements
+// ClaimWaiter for the request that registered it.
 type claimWaiter struct {
+	manager    *watchManager
 	claimName  string
 	namespace  string
 	resultChan chan ClaimResult
@@ -30,6 +41,47 @@ type claimWaiter struct {
 	cancelFunc context.CancelFunc
 	timer      *time.Timer
 	startTime  time.Time
+
+	// uid is the claim the waiter judges by, set by Bind once the request has
+	// created it. held keeps, oldest first, the final outcomes seen while uid
+	// is empty. The manager's waitersLock guards both.
+	uid  types.UID
+	held []heldOutcome
+}
+
+// heldOutcome is a claim's final outcome, kept until its waiter is bound.
+type heldOutcome struct {
+	uid     types.UID
+	result  ClaimResult
+	outcome string // the waiter duration's result label
+}
+
+// Result implements ClaimWaiter.
+func (c *claimWaiter) Result() <-chan ClaimResult { return c.resultChan }
+
+// Bind implements ClaimWaiter.
+func (c *claimWaiter) Bind(uid types.UID) { c.manager.bind(c.key(), c, uid) }
+
+// Cancel implements ClaimWaiter.
+func (c *claimWaiter) Cancel() {
+	c.cancelFunc()
+	c.manager.waitersLock.Lock()
+	defer c.manager.waitersLock.Unlock()
+	c.manager.unregisterLocked(c.key(), c)
+}
+
+func (c *claimWaiter) key() types.NamespacedName {
+	return types.NamespacedName{Namespace: c.namespace, Name: c.claimName}
+}
+
+// hold keeps uid's latest final outcome until Bind, dropping the oldest held
+// outcome beyond maxHeldOutcomes. The caller holds waitersLock.
+func (c *claimWaiter) hold(uid types.UID, result ClaimResult, outcome string) {
+	c.held = slices.DeleteFunc(c.held, func(h heldOutcome) bool { return h.uid == uid })
+	c.held = append(c.held, heldOutcome{uid: uid, result: result, outcome: outcome})
+	if len(c.held) > maxHeldOutcomes {
+		c.held = slices.Delete(c.held, 0, 1)
+	}
 }
 
 // watchManager implements ClaimWatchManager using direct watch streams with efficient,
@@ -190,6 +242,7 @@ func (w *watchManager) Stop() {
 			}
 			waiter.cancelFunc()
 			close(waiter.resultChan)
+			waiter.held = nil
 			delete(w.waiters, key)
 		}
 		w.waitersLock.Unlock()
@@ -205,9 +258,9 @@ func (w *watchManager) Stop() {
 
 // RegisterClaimWaiter registers a waiter for a specific ResourceClaim.
 // Can be called before the claim exists.
-func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (<-chan ClaimResult, context.CancelFunc, error) {
+func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (ClaimWaiter, error) {
 	if !w.started.Load() {
-		return nil, nil, fmt.Errorf("watch manager not started")
+		return nil, fmt.Errorf("watch manager not started")
 	}
 
 	key := types.NamespacedName{Namespace: namespace, Name: claimName}
@@ -222,7 +275,7 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 	w.waitersLock.RLock()
 	if w.config.MaxWaiters > 0 && len(w.waiters) >= w.config.MaxWaiters {
 		w.waitersLock.RUnlock()
-		return nil, nil, fmt.Errorf("maximum number of waiters (%d) reached", w.config.MaxWaiters)
+		return nil, fmt.Errorf("maximum number of waiters (%d) reached", w.config.MaxWaiters)
 	}
 	w.waitersLock.RUnlock()
 
@@ -233,6 +286,7 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 
 	// Create the waiter struct (without timer initially)
 	waiter := &claimWaiter{
+		manager:    w,
 		claimName:  claimName,
 		namespace:  namespace,
 		resultChan: resultChan,
@@ -254,14 +308,6 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 	// Metrics: track registrations and current waiter count
 	waiterRegistrations.Inc()
 	waitersCurrent.Set(float64(activeCount))
-
-	// Return a cancel function that cleans up the waiter
-	cancelWithCleanup := func() {
-		cancelFunc()
-		w.waitersLock.Lock()
-		defer w.waitersLock.Unlock()
-		w.unregisterLocked(key, waiter)
-	}
 
 	// Start the timeout timer
 	timer := time.AfterFunc(timeout, func() {
@@ -290,7 +336,7 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 		"namespace", namespace,
 		"project", w.projectID)
 
-	return resultChan, cancelWithCleanup, nil
+	return waiter, nil
 }
 
 // UnregisterClaimWaiter unregisters a waiter for a specific ResourceClaim
@@ -314,12 +360,55 @@ func (w *watchManager) UnregisterClaimWaiter(claimName, namespace string) {
 func (w *watchManager) deliver(key types.NamespacedName, waiter *claimWaiter, result ClaimResult) {
 	w.waitersLock.Lock()
 	defer w.waitersLock.Unlock()
+	w.deliverLocked(key, waiter, result)
+}
 
+// deliverLocked is deliver for a caller that holds waitersLock.
+func (w *watchManager) deliverLocked(key types.NamespacedName, waiter *claimWaiter, result ClaimResult) {
 	if w.waiters[key] != waiter {
 		return
 	}
 	waiter.resultChan <- result
 	w.unregisterLocked(key, waiter)
+}
+
+// offer gives a claim's final outcome to waiter, if waiter is still the one
+// registered for key. A bound waiter takes only its own claim's outcome; an
+// unbound one holds the outcome for Bind.
+func (w *watchManager) offer(key types.NamespacedName, waiter *claimWaiter, uid types.UID, result ClaimResult, outcome string) {
+	w.waitersLock.Lock()
+	defer w.waitersLock.Unlock()
+
+	if w.waiters[key] != waiter {
+		return
+	}
+	switch waiter.uid {
+	case "":
+		waiter.hold(uid, result, outcome)
+	case uid:
+		waiterDuration.WithLabelValues(outcome).Observe(time.Since(waiter.startTime).Seconds())
+		w.deliverLocked(key, waiter, result)
+	}
+}
+
+// bind binds waiter to the claim uid and delivers the outcome held for that
+// claim, if any; the other held outcomes are dropped.
+func (w *watchManager) bind(key types.NamespacedName, waiter *claimWaiter, uid types.UID) {
+	w.waitersLock.Lock()
+	defer w.waitersLock.Unlock()
+
+	if w.waiters[key] != waiter {
+		return
+	}
+	held := waiter.held
+	waiter.uid, waiter.held = uid, nil
+	for _, h := range held {
+		if h.uid == uid {
+			waiterDuration.WithLabelValues(h.outcome).Observe(time.Since(waiter.startTime).Seconds())
+			w.deliverLocked(key, waiter, h.result)
+			return
+		}
+	}
 }
 
 // unregisterLocked removes waiter, if it is still the one registered for key,
@@ -339,6 +428,7 @@ func (w *watchManager) unregisterLocked(key types.NamespacedName, waiter *claimW
 	}
 	waiter.cancelFunc()
 	close(waiter.resultChan)
+	waiter.held = nil
 	delete(w.waiters, key)
 
 	// Decrement active waiter count and update TTL
@@ -718,14 +808,14 @@ func (w *watchManager) handleClaimEvent(obj interface{}) {
 			outcome = "denied"
 		}
 
-		waiterDuration.WithLabelValues(outcome).Observe(time.Since(waiter.startTime).Seconds())
 		watchEventsProcessed.WithLabelValues(outcome).Inc()
 
-		w.deliver(key, waiter, *result)
+		w.offer(key, waiter, unstructuredObj.GetUID(), *result, outcome)
 
-		w.logger.V(3).Info("Claim result sent to waiter",
+		w.logger.V(3).Info("Claim result offered to waiter",
 			"claimName", key.Name,
 			"namespace", key.Namespace,
+			"uid", unstructuredObj.GetUID(),
 			"granted", result.Granted,
 			"reason", result.Reason,
 			"project", w.projectID)
@@ -757,14 +847,12 @@ func (w *watchManager) handleClaimDeletion(obj interface{}) {
 		return
 	}
 
-	// Claim was deleted - notify waiter
-	waiterDuration.WithLabelValues("deleted").Observe(time.Since(waiter.startTime).Seconds())
-
-	w.deliver(key, waiter, ClaimResult{
+	// Claim was deleted - notify waiter, if it is the waiter's own claim
+	w.offer(key, waiter, unstructuredObj.GetUID(), ClaimResult{
 		Granted: false,
 		Reason:  "deleted",
 		Error:   fmt.Errorf("ResourceClaim %s/%s was deleted", key.Namespace, key.Name),
-	})
+	}, "deleted")
 }
 
 // evaluateClaimStatus evaluates a ResourceClaim's status and returns a result if final
