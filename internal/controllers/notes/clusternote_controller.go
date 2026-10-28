@@ -27,7 +27,7 @@ type ClusterNoteController struct {
 // +kubebuilder:rbac:groups=notes.miloapis.com,resources=clusternotes,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=notes.miloapis.com,resources=clusternotes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
-// +kubebuilder:rbac:groups=iam.miloapis.com,resources=policybindings,verbs=get;create
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=policybindings,verbs=get;create;delete
 
 func (r *ClusterNoteController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx).WithName("clusternote-controller").WithValues("clusternote", req.Name)

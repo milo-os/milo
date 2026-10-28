@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,7 +31,9 @@ type NoteResource interface {
 }
 
 // creatorResourceRef names the note a creator's PolicyBinding grants: a Note with its namespace, without which the
-// binding cannot be resolved, and a ClusterNote with none.
+// binding cannot be resolved, and a ClusterNote with none. checkExistingPolicyBinding replaces a binding whose
+// selector differs from it, so a change here deletes and recreates every Note creator binding at the next rollout.
+// Each creator loses editor rights for the seconds of the swap, so such a change is a migration.
 func creatorResourceRef(note NoteResource) *iamv1alpha1.ResourceReference {
 	return &iamv1alpha1.ResourceReference{
 		APIGroup:  "notes.miloapis.com",
@@ -68,7 +71,7 @@ func ensureCreatorEditorPolicyBinding(
 
 	var existing iamv1alpha1.PolicyBinding
 	if err := c.Get(ctx, types.NamespacedName{Name: bindingName, Namespace: policyBindingNamespace}, &existing); err == nil {
-		return isPolicyBindingReady(&existing)
+		return checkExistingPolicyBinding(ctx, c, scheme, noteResource, &existing)
 	} else if !apierrors.IsNotFound(err) {
 		return false, "", fmt.Errorf("failed to get existing creator PolicyBinding: %w", err)
 	}
@@ -113,6 +116,37 @@ func ensureCreatorEditorPolicyBinding(
 	}
 
 	return false, "Waiting for PolicyBinding to become ready", nil
+}
+
+// checkExistingPolicyBinding reports whether the note's existing creator PolicyBinding is ready. The resource selector
+// is immutable, so a binding the note owns whose selector does not name the note as creatorResourceRef does is
+// deleted, and a later reconcile creates it again once it is gone.
+func checkExistingPolicyBinding(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	noteResource NoteResource,
+	existing *iamv1alpha1.PolicyBinding,
+) (bool, string, error) {
+	owned, err := controllerutil.HasOwnerReference(existing.OwnerReferences, noteResource, scheme)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to check the owner of the creator PolicyBinding: %w", err)
+	}
+	wanted := iamv1alpha1.ResourceSelector{ResourceRef: creatorResourceRef(noteResource)}
+	if !owned || equality.Semantic.DeepEqual(existing.Spec.ResourceSelector, wanted) {
+		return isPolicyBindingReady(existing)
+	}
+	if !existing.DeletionTimestamp.IsZero() {
+		return false, "Waiting for the out-of-date PolicyBinding to be deleted", nil
+	}
+
+	log.FromContext(ctx).Info("Deleting creator PolicyBinding with an out-of-date resource selector",
+		"policyBinding", existing.Name, "namespace", existing.Namespace)
+	// The UID precondition keeps a stale read from deleting a binding created since.
+	if err := c.Delete(ctx, existing, client.Preconditions{UID: &existing.UID}); client.IgnoreNotFound(err) != nil {
+		return false, "", fmt.Errorf("failed to delete out-of-date creator PolicyBinding: %w", err)
+	}
+	return false, "Replacing PolicyBinding with an out-of-date resource selector", nil
 }
 
 // isPolicyBindingReady checks if a PolicyBinding is ready
