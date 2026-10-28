@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,20 +52,7 @@ const deadlockTestProject = "test-project"
 // project cache sync until the handler is running, and the handler does not
 // look the project up until the provider has reached that point.
 func TestEngageDoesNotDeadlockControllerStartup(t *testing.T) {
-	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("KUBEBUILDER_ASSETS must be set in CI; this test needs an envtest API server")
-		}
-		t.Skip("KUBEBUILDER_ASSETS is not set; run setup-envtest to provide an envtest API server")
-	}
-
-	env := &envtest.Environment{
-		CRDs: []*apiextensionsv1.CustomResourceDefinition{projectCRD()},
-	}
-	cfg, err := env.Start()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.Stop() })
-
+	cfg := startEnvtest(t)
 	scheme := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
@@ -73,7 +61,7 @@ func TestEngageDoesNotDeadlockControllerStartup(t *testing.T) {
 
 	setup, err := client.New(cfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
-	require.NoError(t, setup.Create(ctx, readyProject()))
+	require.NoError(t, setup.Create(ctx, readyProject(deadlockTestProject)))
 	require.NoError(t, setup.Create(ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "probe", Namespace: "default"},
 	}))
@@ -95,7 +83,7 @@ func TestEngageDoesNotDeadlockControllerStartup(t *testing.T) {
 	provider, err := milo.New(localMgr, milo.Options{
 		ControllerName: "engage-deadlock-test",
 		ClusterOptions: []cluster.Option{
-			projectClusterAt(cfg, &gate{wait: handlerRunning, release: projectCacheSynced}),
+			projectClusterAt(cfg, gated(&gate{wait: handlerRunning, release: projectCacheSynced})),
 		},
 	})
 	require.NoError(t, err)
@@ -140,6 +128,25 @@ func TestEngageDoesNotDeadlockControllerStartup(t *testing.T) {
 	}
 }
 
+// startEnvtest starts an envtest API server that serves Project, stopped when
+// the test ends. It skips where KUBEBUILDER_ASSETS is unset, except in CI.
+func startEnvtest(t *testing.T) *rest.Config {
+	t.Helper()
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("KUBEBUILDER_ASSETS must be set in CI; this test needs an envtest API server")
+		}
+		t.Skip("KUBEBUILDER_ASSETS is not set; run setup-envtest to provide an envtest API server")
+	}
+	env := &envtest.Environment{
+		CRDs: []*apiextensionsv1.CustomResourceDefinition{projectCRD()},
+	}
+	cfg, err := env.Start()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.Stop() })
+	return cfg
+}
+
 // gate holds the first project cache sync until wait is closed, then closes
 // release so the waiting handler can proceed.
 type gate struct {
@@ -165,10 +172,16 @@ func (c *gatedCache) WaitForCacheSync(ctx context.Context) bool {
 	return synced
 }
 
+// gated wraps every project's cache in g.
+func gated(g *gate) func(string, cache.Cache) cache.Cache {
+	return func(_ string, c cache.Cache) cache.Cache { return &gatedCache{Cache: c, gate: g} }
+}
+
 // projectClusterAt points every project cluster at cfg. The provider builds a
 // per-project control plane URL that envtest does not serve, so the client,
-// cache and REST mapper are built against the envtest API server instead.
-func projectClusterAt(cfg *rest.Config, g *gate) cluster.Option {
+// cache and REST mapper are built against the envtest API server instead, and
+// wrap gets each cache with the project it was built for.
+func projectClusterAt(cfg *rest.Config, wrap func(project string, c cache.Cache) cache.Cache) cluster.Option {
 	return func(o *cluster.Options) {
 		o.MapperProvider = func(_ *rest.Config, _ *http.Client) (meta.RESTMapper, error) {
 			httpClient, err := rest.HTTPClientFor(cfg)
@@ -177,12 +190,12 @@ func projectClusterAt(cfg *rest.Config, g *gate) cluster.Option {
 			}
 			return apiutil.NewDynamicRESTMapper(cfg, httpClient)
 		}
-		o.NewCache = func(_ *rest.Config, opts cache.Options) (cache.Cache, error) {
+		o.NewCache = func(projectCfg *rest.Config, opts cache.Options) (cache.Cache, error) {
 			c, err := cache.New(cfg, cache.Options{Scheme: opts.Scheme})
 			if err != nil {
 				return nil, err
 			}
-			return &gatedCache{Cache: c, gate: g}, nil
+			return wrap(projectOf(projectCfg), c), nil
 		}
 		o.NewClient = func(_ *rest.Config, opts client.Options) (client.Client, error) {
 			return client.New(cfg, client.Options{Scheme: opts.Scheme, Cache: opts.Cache})
@@ -190,11 +203,23 @@ func projectClusterAt(cfg *rest.Config, g *gate) cluster.Option {
 	}
 }
 
-func readyProject() *unstructured.Unstructured {
+// projectOf names the project a project cluster's config points at, from its
+// control plane path (/apis/resourcemanager.miloapis.com/v1alpha1/projects/<name>/control-plane).
+func projectOf(cfg *rest.Config) string {
+	parts := strings.Split(cfg.Host, "/")
+	for i, part := range parts {
+		if part == "projects" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+func readyProject(name string) *unstructured.Unstructured {
 	project := &unstructured.Unstructured{}
 	project.SetAPIVersion("resourcemanager.miloapis.com/v1alpha1")
 	project.SetKind("Project")
-	project.SetName(deadlockTestProject)
+	project.SetName(name)
 	_ = unstructured.SetNestedSlice(project.Object, []interface{}{
 		map[string]interface{}{
 			"type":               "Ready",
