@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/initializer"
 	"k8s.io/apiserver/pkg/audit"
@@ -706,13 +707,13 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 
 	// Register waiter before claim exists to ensure watch stream catches the ADDED event.
 	timeout := p.config.WatchManager.DefaultTimeout
-	resultChan, cancelFunc, err := watchManager.RegisterClaimWaiter(ctx, claimName, namespace, timeout)
+	waiter, err := watchManager.RegisterClaimWaiter(ctx, claimName, namespace, timeout)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to register waiter")
 		return newInternalFailure(fmt.Errorf("failed to register waiter: %w", err))
 	}
-	defer cancelFunc()
+	defer waiter.Cancel()
 
 	p.logger.V(2).Info("Waiter registered before claim creation",
 		"claimName", claimName,
@@ -723,7 +724,7 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	// typed *claimFailure for a real failure, or returns an errAlreadyGranted
 	// sentinel when an existing Granted claim with the same name already
 	// reserves capacity for this resource.
-	createErr := p.createResourceClaim(ctx, attrs, policy, evalContext, claimName, namespace)
+	claimUID, createErr := p.createResourceClaim(ctx, attrs, policy, evalContext, claimName, namespace)
 	switch {
 	case createErr == nil:
 		// Claim was created fresh; fall through to wait for the controller.
@@ -744,11 +745,21 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 
 	p.logger.V(2).Info("ResourceClaim created with predetermined name",
 		"claimName", claimName,
-		"namespace", namespace)
+		"namespace", namespace,
+		"uid", claimUID)
 
+	// The name may have held an earlier claim, such as a stale one deleted
+	// above, whose events are still arriving: wait on this claim only.
+	waiter.Bind(claimUID)
+	return p.awaitClaimResult(ctx, span, waiter, claimName, namespace)
+}
+
+// awaitClaimResult waits for the outcome of the claim that waiter is bound to.
+// It returns nil for a grant, and a *claimFailure otherwise.
+func (p *ResourceQuotaEnforcementPlugin) awaitClaimResult(ctx context.Context, span trace.Span, waiter ClaimWaiter, claimName, namespace string) error {
 	// Wait for result from watch stream.
 	select {
-	case result, ok := <-resultChan:
+	case result, ok := <-waiter.Result():
 		if !ok {
 			span.SetStatus(codes.Error, "Result channel closed")
 			return newInternalFailure(fmt.Errorf("result channel closed unexpectedly"))
@@ -786,7 +797,7 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		return newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, result.Reason)
 
 	case <-ctx.Done():
-		// The deferred cancelFunc removes this request's waiter, and only it.
+		// The caller's deferred Cancel removes this request's waiter, and only it.
 		span.SetStatus(codes.Error, "Context cancelled")
 		return newInternalFailure(ctx.Err())
 	}
@@ -812,8 +823,9 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 	return evalContext.Object.GetNamespace()
 }
 
-// createResourceClaim creates a ResourceClaim with the specified name and namespace.
-// The claim name must be predetermined to allow waiter registration before creation.
+// createResourceClaim creates a ResourceClaim with the specified name and namespace,
+// and returns the created claim's UID. The claim name must be predetermined to
+// allow waiter registration before creation.
 //
 // Because claim names are deterministic, repeated admission attempts for the
 // same resource (for example when a client controller retries) can collide
@@ -832,7 +844,7 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 //
 // Any non-NotFound Get error falls through to Create so that transient API
 // read failures do not permanently block admission.
-func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context, attrs admission.Attributes, policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext, claimName, namespace string) error {
+func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context, attrs admission.Attributes, policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext, claimName, namespace string) (types.UID, error) {
 	ctx, span := p.startSpan(ctx, "quota.admission.ResourceQuotaEnforcement.createResourceClaim",
 		trace.WithAttributes(
 			attribute.String("policy.name", policy.Name),
@@ -844,7 +856,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	engineContext := p.convertToEngineContext(evalContext)
 	claim, err := p.templateEngine.RenderClaim(policy, engineContext)
 	if err != nil {
-		return fmt.Errorf("failed to render ResourceClaim: %w", err)
+		return "", fmt.Errorf("failed to render ResourceClaim: %w", err)
 	}
 
 	// Use predetermined name/namespace to ensure waiter receives events
@@ -909,13 +921,13 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 
 	unstructuredMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(claim)
 	if err != nil {
-		return fmt.Errorf("failed to convert ResourceClaim to unstructured: %w", err)
+		return "", fmt.Errorf("failed to convert ResourceClaim to unstructured: %w", err)
 	}
 	unstructuredObj := &unstructured.Unstructured{Object: unstructuredMap}
 
 	client, err := p.getClient(ctx)
 	if err != nil {
-		return newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
+		return "", newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
 	}
 
 	// Resolve any existing claim at the same deterministic name before
@@ -924,11 +936,11 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 		switch action {
 		case existingClaimGranted:
 			claimResolutionTotal.WithLabelValues("granted").Inc()
-			return errAlreadyGranted
+			return "", errAlreadyGranted
 		case existingClaimDenied:
 			claimResolutionTotal.WithLabelValues("denied").Inc()
 			denialMsg := extractGrantedConditionMessage(existing)
-			return newConflictFailure(denialMsg, nil)
+			return "", newConflictFailure(denialMsg, nil)
 		case existingClaimPending:
 			// Stale pending claim - delete so we can create a fresh one. This
 			// mirrors what the stale-claim GC controller would eventually do,
@@ -941,7 +953,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 					"namespace", namespace,
 					"error", delErr)
 				// Treat as conflict so the user retries once GC catches up.
-				return newConflictFailure("unable to clean up stale pending claim", delErr)
+				return "", newConflictFailure("unable to clean up stale pending claim", delErr)
 			}
 			p.logger.V(2).Info("Deleted stale pending ResourceClaim before retry",
 				"claimName", claimName,
@@ -949,25 +961,26 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 		}
 	}
 
-	_, err = client.Resource(gvr).Namespace(namespace).Create(ctx, unstructuredObj, metav1.CreateOptions{})
+	created, err := client.Resource(gvr).Namespace(namespace).Create(ctx, unstructuredObj, metav1.CreateOptions{})
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
 			// A concurrent admission pass (or our own Delete above racing
 			// with a replace) recreated the claim. Surface as conflict so
 			// the user retries.
 			claimResolutionTotal.WithLabelValues("create_conflict").Inc()
-			return newConflictFailure("concurrent quota evaluation in progress", err)
+			return "", newConflictFailure("concurrent quota evaluation in progress", err)
 		}
-		return newInternalFailure(fmt.Errorf("failed to create ResourceClaim: %w", err))
+		return "", newInternalFailure(fmt.Errorf("failed to create ResourceClaim: %w", err))
 	}
 
 	p.logger.V(2).Info("ResourceClaim created successfully",
 		"claimName", claimName,
 		"namespace", namespace,
 		"policy", policy.Name,
+		"uid", created.GetUID(),
 	)
 
-	return nil
+	return created.GetUID(), nil
 }
 
 // existingClaimAction classifies how createResourceClaim should handle a
