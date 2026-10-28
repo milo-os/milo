@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-workload-identity-issuers-admin
+  annotations:
+    kubernetes.io/display-name: IAM Workload Identity Issuers Admin
+    kubernetes.io/description: "Full access to workload identity issuers."
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: iam-workload-identity-issuers-editor
