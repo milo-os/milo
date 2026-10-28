@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/apis/audit"
@@ -1279,9 +1280,15 @@ type testWatchManager struct {
 	behavior string
 }
 
-func (m *testWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (<-chan ClaimResult, context.CancelFunc, error) {
+// chanWaiter is a ClaimWaiter whose result a test double sends.
+type chanWaiter chan ClaimResult
+
+func (c chanWaiter) Result() <-chan ClaimResult { return c }
+func (chanWaiter) Bind(types.UID)               {}
+func (chanWaiter) Cancel()                      {}
+
+func (m *testWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (ClaimWaiter, error) {
 	resultChan := make(chan ClaimResult, 1)
-	cancel := func() {}
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
@@ -1303,7 +1310,7 @@ func (m *testWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, n
 		close(resultChan)
 	}()
 
-	return resultChan, cancel, nil
+	return chanWaiter(resultChan), nil
 }
 
 func (m *testWatchManager) UnregisterClaimWaiter(claimName, namespace string) {}

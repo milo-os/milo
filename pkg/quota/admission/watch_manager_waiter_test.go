@@ -9,6 +9,9 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+
+	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 )
 
 // startedWatchManager returns a watch manager that accepts waiters without a
@@ -29,11 +32,11 @@ func TestClaimWaiterTimeoutWhileCancelled(t *testing.T) {
 	defer w.Stop()
 
 	for i := range 5000 {
-		_, cancel, err := w.RegisterClaimWaiter(context.Background(), fmt.Sprintf("claim-%d", i), "default", time.Nanosecond)
+		waiter, err := w.RegisterClaimWaiter(context.Background(), fmt.Sprintf("claim-%d", i), "default", time.Nanosecond)
 		if err != nil {
 			t.Fatalf("register waiter %d: %v", i, err)
 		}
-		cancel()
+		waiter.Cancel()
 	}
 	time.Sleep(50 * time.Millisecond) // let the last callbacks run
 }
@@ -44,7 +47,7 @@ func TestClaimWaiterTimeoutWhileStopping(t *testing.T) {
 	for range 200 {
 		w := startedWatchManager(t)
 		for i := range 50 {
-			if _, _, err := w.RegisterClaimWaiter(context.Background(), fmt.Sprintf("claim-%d", i), "default", time.Nanosecond); err != nil {
+			if _, err := w.RegisterClaimWaiter(context.Background(), fmt.Sprintf("claim-%d", i), "default", time.Nanosecond); err != nil {
 				t.Fatalf("register waiter %d: %v", i, err)
 			}
 		}
@@ -59,19 +62,20 @@ func TestClaimWaiterCancelKeepsANewerWaiter(t *testing.T) {
 	w := startedWatchManager(t)
 	defer w.Stop()
 
-	_, cancelOlder, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
+	older, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, _, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
+	newer, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cancelOlder()
+	newer.Bind("newer")
+	older.Cancel()
 
-	w.handleClaimDeletion(claimObject("claim", "default"))
+	w.handleClaimDeletion(claimObject("claim", "default", "newer"))
 	select {
-	case result := <-newer:
+	case result := <-newer.Result():
 		if result.Reason != "deleted" {
 			t.Fatalf("the newer waiter received %q, want deleted", result.Reason)
 		}
@@ -88,21 +92,141 @@ func TestClaimWaiterEventWhileCancelled(t *testing.T) {
 
 	for i := range 2000 {
 		name := fmt.Sprintf("claim-%d", i)
-		_, cancel, err := w.RegisterClaimWaiter(context.Background(), name, "default", time.Hour)
+		waiter, err := w.RegisterClaimWaiter(context.Background(), name, "default", time.Hour)
 		if err != nil {
 			t.Fatalf("register waiter %d: %v", i, err)
 		}
+		waiter.Bind("own")
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go func() { defer wg.Done(); w.handleClaimDeletion(claimObject(name, "default")) }()
-		go func() { defer wg.Done(); cancel() }()
+		go func() { defer wg.Done(); w.handleClaimDeletion(claimObject(name, "default", "own")) }()
+		go func() { defer wg.Done(); waiter.Cancel() }()
 		wg.Wait()
 	}
 }
 
-func claimObject(name, namespace string) *unstructured.Unstructured {
+// TestUnboundWaiterGetsItsOwnClaimsOutcomeAtBind checks that an outcome that
+// arrives before Create returns is not lost: the waiter holds it, and Bind
+// delivers it.
+func TestUnboundWaiterGetsItsOwnClaimsOutcomeAtBind(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter := registerWaiter(t, w)
+
+	w.handleClaimEvent(judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	if result, ok := pendingResult(waiter); ok {
+		t.Fatalf("an unbound waiter received %+v; it cannot know the claim is its own", result)
+	}
+	waiter.Bind("own")
+	if result, ok := pendingResult(waiter); !ok || !result.Granted {
+		t.Fatalf("Bind delivered %+v (received: %v), want the held grant", result, ok)
+	}
+}
+
+// TestBindDropsAnotherClaimsHeldOutcome checks that Bind delivers only the
+// outcome held for the waiter's own claim. The stale claim's deletion stays
+// held and goes; the waiter then takes its own claim's grant.
+func TestBindDropsAnotherClaimsHeldOutcome(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter := registerWaiter(t, w)
+
+	w.handleClaimDeletion(claimObject("claim", "default", "stale"))
+	waiter.Bind("own")
+	if result, ok := pendingResult(waiter); ok {
+		t.Fatalf("Bind delivered %+v, which is the stale claim's", result)
+	}
+	w.handleClaimEvent(judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	if result, ok := pendingResult(waiter); !ok || !result.Granted {
+		t.Fatalf("the waiter received %+v (received: %v), want its own claim's grant", result, ok)
+	}
+}
+
+// TestUnboundWaiterTakesItsOwnClaimsDeletion checks that the request's own
+// claim, deleted before Create returned, still ends the waiter as deleted.
+func TestUnboundWaiterTakesItsOwnClaimsDeletion(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter := registerWaiter(t, w)
+
+	w.handleClaimDeletion(claimObject("claim", "default", "own"))
+	waiter.Bind("own")
+	if result, ok := pendingResult(waiter); !ok || result.Reason != "deleted" {
+		t.Fatalf("Bind delivered %+v (received: %v), want deleted", result, ok)
+	}
+}
+
+// TestUnboundWaiterHoldsABoundedSet checks that a name whose claims churn
+// cannot grow an unbound waiter without limit, and that the bound drops the
+// oldest outcome: the request's own claim is the latest of its name.
+func TestUnboundWaiterHoldsABoundedSet(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter := registerWaiter(t, w)
+
+	const claims = 1000
+	for i := range claims {
+		uid := types.UID(fmt.Sprintf("claim-%d", i))
+		w.handleClaimEvent(judgedClaim("claim", "default", uid, true, quotav1alpha1.ResourceClaimGrantedReason))
+	}
+	if held := heldCount(w, waiter); held > maxHeldOutcomes {
+		t.Fatalf("an unbound waiter holds %d outcomes after %d claims; the bound is %d", held, claims, maxHeldOutcomes)
+	}
+	waiter.Bind(types.UID(fmt.Sprintf("claim-%d", claims-1)))
+	if result, ok := pendingResult(waiter); !ok || !result.Granted {
+		t.Fatalf("Bind delivered %+v (received: %v), want the latest claim's grant", result, ok)
+	}
+}
+
+// TestHeldOutcomesGoWithTheWaiter checks that a waiter that times out unbound
+// drops what it holds.
+func TestHeldOutcomesGoWithTheWaiter(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.handleClaimDeletion(claimObject("claim", "default", "stale"))
+
+	if result := <-waiter.Result(); result.Reason != "timeout" {
+		t.Fatalf("the waiter received %+v, want its timeout", result)
+	}
+	if held := heldCount(w, waiter); held != 0 {
+		t.Fatalf("a waiter that timed out still holds %d outcomes", held)
+	}
+}
+
+func registerWaiter(t *testing.T, w *watchManager) ClaimWaiter {
+	t.Helper()
+	waiter, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return waiter
+}
+
+// pendingResult returns the result the waiter has received, if any. The
+// handlers and Bind deliver before they return, so no wait is needed.
+func pendingResult(waiter ClaimWaiter) (ClaimResult, bool) {
+	select {
+	case result, ok := <-waiter.Result():
+		return result, ok
+	default:
+		return ClaimResult{}, false
+	}
+}
+
+func heldCount(w *watchManager, waiter ClaimWaiter) int {
+	w.waitersLock.RLock()
+	defer w.waitersLock.RUnlock()
+	return len(waiter.(*claimWaiter).held)
+}
+
+func claimObject(name, namespace string, uid types.UID) *unstructured.Unstructured {
 	claim := &unstructured.Unstructured{}
 	claim.SetName(name)
 	claim.SetNamespace(namespace)
+	claim.SetUID(uid)
 	return claim
 }
