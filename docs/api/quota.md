@@ -641,6 +641,7 @@ Claims created by ClaimCreationPolicy include:
 ### Field Constraints and Limits
 - Maximum 10 constraints per trigger (spec.trigger.constraints)
 - Static amounts only in v1alpha1 (no expression-based quota amounts)
+- Each template request may set a boolean CEL condition; when none apply, no claim is created
 - Template metadata labels are literal strings (no expression processing)
 - Template annotation values support CEL expressions
 
@@ -962,51 +963,28 @@ String fields support CEL expressions.
         <td><b><a href="#claimcreationpolicyspectargetresourceclaimtemplatespecrequestsindex">requests</a></b></td>
         <td>[]object</td>
         <td>
-          Requests specifies the resource types and amounts being claimed from quota.
-Each resource type can appear only once in the requests array. Minimum 1
-request, maximum 20 requests per claim.
-
-The system processes all requests as a single atomic operation: either all
-requests are granted or all are denied.<br/>
+          Requests specifies the resource types and amounts to claim. Each resource
+type can appear only once. Requests whose condition evaluates to false
+are left out of the rendered claim.
+When every request is left out, no claim is created and the triggering
+resource is admitted.<br/>
         </td>
         <td>true</td>
       </tr><tr>
         <td><b><a href="#claimcreationpolicyspectargetresourceclaimtemplatespecconsumerref">consumerRef</a></b></td>
         <td>object</td>
         <td>
-          ConsumerRef identifies the quota consumer making this claim. The consumer
-must match the ConsumerType defined in the ResourceRegistration for each
-requested resource type. The system validates this relationship during
-claim processing.
-
-When creating ResourceClaims via ClaimCreationPolicy, this field can be
-omitted and the admission plugin will automatically fill it based on the
-authenticated user's context (organization or project).
-
-Examples:
-
-  - Organization consuming Project quota
-  - Project consuming User quota
-  - Organization consuming storage quota<br/>
+          ConsumerRef identifies the quota consumer making this claim. When
+omitted, the admission plugin fills it from the authenticated user's
+context (organization or project). The name supports CEL expressions.<br/>
         </td>
         <td>false</td>
       </tr><tr>
         <td><b><a href="#claimcreationpolicyspectargetresourceclaimtemplatespecresourceref">resourceRef</a></b></td>
         <td>object</td>
         <td>
-          ResourceRef identifies the actual Kubernetes resource that triggered this
-claim. ClaimCreationPolicy automatically populates this field during
-admission. Uses unversioned reference (apiGroup + kind + name + namespace)
-to remain valid across API version changes.
-
-The referenced resource's kind must be listed in the ResourceRegistration's
-spec.claimingResources for the claim to be valid.
-
-Examples:
-
-  - Project resource triggering Project quota claim
-  - User resource triggering User quota claim
-  - Organization resource triggering storage quota claim<br/>
+          ResourceRef is populated automatically during admission and cannot be
+set in a template.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1018,8 +996,9 @@ Examples:
 
 
 
-ResourceRequest defines a single resource request within a ResourceClaim.
-Each request specifies a resource type and the amount of quota being claimed.
+ResourceRequestTemplate defines a single resource request rendered into a
+**ResourceClaim**, with an optional condition controlling whether the
+request is included.
 
 <table>
     <thead>
@@ -1036,18 +1015,10 @@ Each request specifies a resource type and the amount of quota being claimed.
         <td>
           Amount specifies how much quota to claim for this resource type. Must be
 measured in the BaseUnit defined by the corresponding ResourceRegistration.
-Must be a positive integer (minimum value is 0, but 0 means no quota
-requested).
 
 For Entity registrations: Use 1 for single resource instances (1 Project, 1
 User) For Allocation registrations: Use actual capacity amounts (2048 for
-2048 MB, 1000 for 1000 millicores)
-
-Examples:
-
-  - 1 (claiming 1 Project)
-  - 2048 (claiming 2048 bytes of storage)
-  - 1000 (claiming 1000 CPU millicores)<br/>
+2048 MB, 1000 for 1000 millicores)<br/>
           <br/>
             <i>Format</i>: int64<br/>
             <i>Minimum</i>: 0<br/>
@@ -1061,17 +1032,28 @@ Examples:
 exactly match a ResourceRegistration.spec.resourceType that is currently
 active. The quota system validates this reference during claim processing.
 
-The format is defined by platform administrators when creating ResourceRegistrations.
-Service providers can use any identifier that makes sense for their quota system usage.
-
 Examples:
 
   - "resourcemanager.miloapis.com/projects"
   - "compute_cpu"
-  - "storage.volumes"
-  - "custom-service-quota"<br/>
+  - "storage.volumes"<br/>
         </td>
         <td>true</td>
+      </tr><tr>
+        <td><b>condition</b></td>
+        <td>string</td>
+        <td>
+          Condition is a CEL expression that must evaluate to true for this
+request to be included in the rendered claim. Like trigger constraints,
+it is a pure CEL expression WITHOUT {{ }} delimiters and has access to
+the trigger, user, and requestInfo variables. An empty condition always
+includes the request.
+
+Example:
+
+  - "trigger.spec.ipFamily == 'IPv4' && trigger.spec.addressScope == 'Public'"<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -1081,20 +1063,9 @@ Examples:
 
 
 
-ConsumerRef identifies the quota consumer making this claim. The consumer
-must match the ConsumerType defined in the ResourceRegistration for each
-requested resource type. The system validates this relationship during
-claim processing.
-
-When creating ResourceClaims via ClaimCreationPolicy, this field can be
-omitted and the admission plugin will automatically fill it based on the
-authenticated user's context (organization or project).
-
-Examples:
-
-  - Organization consuming Project quota
-  - Project consuming User quota
-  - Organization consuming storage quota
+ConsumerRef identifies the quota consumer making this claim. When
+omitted, the admission plugin fills it from the authenticated user's
+context (organization or project). The name supports CEL expressions.
 
 <table>
     <thead>
@@ -1167,19 +1138,8 @@ Examples:
 
 
 
-ResourceRef identifies the actual Kubernetes resource that triggered this
-claim. ClaimCreationPolicy automatically populates this field during
-admission. Uses unversioned reference (apiGroup + kind + name + namespace)
-to remain valid across API version changes.
-
-The referenced resource's kind must be listed in the ResourceRegistration's
-spec.claimingResources for the claim to be valid.
-
-Examples:
-
-  - Project resource triggering Project quota claim
-  - User resource triggering User quota claim
-  - Organization resource triggering storage quota claim
+ResourceRef is populated automatically during admission and cannot be
+set in a template.
 
 <table>
     <thead>

@@ -220,7 +220,7 @@ func (p *ResourceQuotaEnforcementPlugin) initializeEngines() {
 		return
 	}
 
-	p.claimCreationPolicyValidator = validation.NewClaimCreationPolicyValidator(p.resourceTypeValidator)
+	p.claimCreationPolicyValidator = validation.NewClaimCreationPolicyValidator(celValidator, p.resourceTypeValidator)
 	p.grantCreationPolicyValidator = validation.NewGrantCreationPolicyValidator(celValidator, grantTemplateValidator)
 	p.resourceGrantValidator = validation.NewResourceGrantValidator(p.resourceTypeValidator)
 
@@ -547,8 +547,20 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 		"policy", policy.Name,
 		"resourceName", attrs.GetName())
 
+	hasRequests, err := p.claimHasRequests(policy, evalContext)
+	if err == nil && !hasRequests {
+		p.logger.V(3).Info("No claim template request applies to the resource, skipping ResourceClaim creation",
+			"policy", policy.Name,
+			"resourceName", attrs.GetName(),
+			"gvk", gvk)
+		return nil
+	}
+
 	// Create the ResourceClaim and wait for it to be granted
-	if err := p.createAndWaitForResourceClaim(ctx, attrs, policy, evalContext); err != nil {
+	if err == nil {
+		err = p.createAndWaitForResourceClaim(ctx, attrs, policy, evalContext)
+	}
+	if err != nil {
 		// ResourceClaim creation or granting failed - block the resource creation
 
 		failure, ok := asClaimFailure(err)
@@ -586,6 +598,17 @@ func (p *ResourceQuotaEnforcementPlugin) processResourceWithPolicy(ctx context.C
 		"resourceName", attrs.GetName())
 
 	return nil // Allow original resource creation only if claim is granted
+}
+
+// claimHasRequests reports whether the policy's claim template selects at
+// least one request for the resource under admission. Errors are returned as
+// a *claimFailure so the resource is denied rather than admitted unclaimed.
+func (p *ResourceQuotaEnforcementPlugin) claimHasRequests(policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext) (bool, error) {
+	claim, err := p.templateEngine.RenderClaim(policy, p.convertToEngineContext(evalContext))
+	if err != nil {
+		return false, renderFailure(err)
+	}
+	return len(claim.Spec.Requests) > 0, nil
 }
 
 // admissionOutcomeFor maps a claim failure kind to the label emitted on

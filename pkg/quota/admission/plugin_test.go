@@ -81,13 +81,13 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 					Target: quotav1alpha1.ClaimTargetSpec{
 						ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 							Metadata: quotav1alpha1.ObjectMetaTemplate{},
-							Spec: quotav1alpha1.ResourceClaimSpec{
+							Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 								ConsumerRef: quotav1alpha1.ConsumerRef{
 									APIGroup: "resourcemanager.miloapis.com",
 									Kind:     "Organization",
 									Name:     "test-org",
 								},
-								Requests: []quotav1alpha1.ResourceRequest{
+								Requests: []quotav1alpha1.ResourceRequestTemplate{
 									{
 										ResourceType: "networking.datumapis.com/HTTPProxy",
 										Amount:       1,
@@ -179,13 +179,13 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 					Target: quotav1alpha1.ClaimTargetSpec{
 						ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 							Metadata: quotav1alpha1.ObjectMetaTemplate{},
-							Spec: quotav1alpha1.ResourceClaimSpec{
+							Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 								ConsumerRef: quotav1alpha1.ConsumerRef{
 									APIGroup: "resourcemanager.miloapis.com",
 									Kind:     "Organization",
 									Name:     "test-org",
 								},
-								Requests: []quotav1alpha1.ResourceRequest{
+								Requests: []quotav1alpha1.ResourceRequestTemplate{
 									{
 										ResourceType: "apps/Deployment",
 										Amount:       1,
@@ -245,13 +245,13 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 					Target: quotav1alpha1.ClaimTargetSpec{
 						ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 							Metadata: quotav1alpha1.ObjectMetaTemplate{},
-							Spec: quotav1alpha1.ResourceClaimSpec{
+							Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 								ConsumerRef: quotav1alpha1.ConsumerRef{
 									APIGroup: "resourcemanager.miloapis.com",
 									Kind:     "Organization",
 									Name:     "test-org",
 								},
-								Requests: []quotav1alpha1.ResourceRequest{
+								Requests: []quotav1alpha1.ResourceRequestTemplate{
 									{
 										ResourceType: "apps/Deployment",
 										Amount:       1,
@@ -312,13 +312,13 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 					Target: quotav1alpha1.ClaimTargetSpec{
 						ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 							Metadata: quotav1alpha1.ObjectMetaTemplate{},
-							Spec: quotav1alpha1.ResourceClaimSpec{
+							Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 								ConsumerRef: quotav1alpha1.ConsumerRef{
 									APIGroup: "resourcemanager.miloapis.com",
 									Kind:     "Organization",
 									Name:     "test-org",
 								},
-								Requests: []quotav1alpha1.ResourceRequest{
+								Requests: []quotav1alpha1.ResourceRequestTemplate{
 									{
 										ResourceType: "apps/Deployment",
 										Amount:       1,
@@ -860,8 +860,8 @@ func TestResourceQuotaEnforcementPlugin_InitializationValidation(t *testing.T) {
 				plugin.resourceTypeValidator = mockValidator
 				plugin.resourceClaimValidator = validation.NewResourceClaimValidator(fakeDynamicClient, mockValidator)
 				plugin.resourceRegistrationValidator = validation.NewResourceRegistrationValidator(mockValidator)
-				plugin.claimCreationPolicyValidator = validation.NewClaimCreationPolicyValidator(mockValidator)
 				celValidator, _ := validation.NewCELValidator()
+				plugin.claimCreationPolicyValidator = validation.NewClaimCreationPolicyValidator(celValidator, mockValidator)
 				grantTemplateValidator, _ := validation.NewGrantTemplateValidator(mockValidator)
 				plugin.grantCreationPolicyValidator = validation.NewGrantCreationPolicyValidator(celValidator, grantTemplateValidator)
 				plugin.resourceGrantValidator = validation.NewResourceGrantValidator(mockValidator)
@@ -1027,13 +1027,13 @@ func TestClaimWaitScenarios(t *testing.T) {
 					Target: quotav1alpha1.ClaimTargetSpec{
 						ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 							Metadata: quotav1alpha1.ObjectMetaTemplate{},
-							Spec: quotav1alpha1.ResourceClaimSpec{
+							Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 								ConsumerRef: quotav1alpha1.ConsumerRef{
 									APIGroup: "resourcemanager.miloapis.com",
 									Kind:     "Organization",
 									Name:     "test-org",
 								},
-								Requests: []quotav1alpha1.ResourceRequest{
+								Requests: []quotav1alpha1.ResourceRequestTemplate{
 									{
 										ResourceType: "apps/Deployment",
 										Amount:       1,
@@ -1337,13 +1337,13 @@ func newDeterministicClaimPolicy() *quotav1alpha1.ClaimCreationPolicy {
 					Metadata: quotav1alpha1.ObjectMetaTemplate{
 						Name: "endpointslice-{{ trigger.metadata.name }}",
 					},
-					Spec: quotav1alpha1.ResourceClaimSpec{
+					Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 						ConsumerRef: quotav1alpha1.ConsumerRef{
 							APIGroup: "resourcemanager.miloapis.com",
 							Kind:     "Project",
 							Name:     "test-project",
 						},
-						Requests: []quotav1alpha1.ResourceRequest{
+						Requests: []quotav1alpha1.ResourceRequestTemplate{
 							{
 								ResourceType: "discovery.miloapis.com/endpointslices",
 								Amount:       1,
@@ -1681,13 +1681,13 @@ func newFixedNameClaimPolicy(claimName string) *quotav1alpha1.ClaimCreationPolic
 			Target: quotav1alpha1.ClaimTargetSpec{
 				ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 					Metadata: quotav1alpha1.ObjectMetaTemplate{Name: claimName},
-					Spec: quotav1alpha1.ResourceClaimSpec{
+					Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 						ConsumerRef: quotav1alpha1.ConsumerRef{
 							APIGroup: "resourcemanager.miloapis.com",
 							Kind:     "Organization",
 							Name:     "test-org",
 						},
-						Requests: []quotav1alpha1.ResourceRequest{
+						Requests: []quotav1alpha1.ResourceRequestTemplate{
 							{ResourceType: "apps/Deployment", Amount: 1},
 						},
 					},
@@ -1960,9 +1960,9 @@ func TestClusterScopedClaimNamespace(t *testing.T) {
 					ResourceClaimTemplate: quotav1alpha1.ResourceClaimTemplate{
 						// No Metadata.Namespace — cluster-scoped target relies on the default.
 						Metadata: quotav1alpha1.ObjectMetaTemplate{},
-						Spec: quotav1alpha1.ResourceClaimSpec{
+						Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 							ConsumerRef: quotav1alpha1.ConsumerRef{APIGroup: "resourcemanager.miloapis.com", Kind: "Organization", Name: "test-org"},
-							Requests:    []quotav1alpha1.ResourceRequest{{ResourceType: "example.com/ClusterWidget", Amount: 1}},
+							Requests:    []quotav1alpha1.ResourceRequestTemplate{{ResourceType: "example.com/ClusterWidget", Amount: 1}},
 						},
 					},
 				},

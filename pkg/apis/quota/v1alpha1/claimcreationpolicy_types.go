@@ -75,7 +75,79 @@ type ResourceClaimTemplate struct {
 	// String fields support CEL expressions.
 	//
 	// +kubebuilder:validation:Required
-	Spec ResourceClaimSpec `json:"spec"`
+	Spec ResourceClaimTemplateSpec `json:"spec"`
+}
+
+// ResourceClaimTemplateSpec defines the **ResourceClaim** spec rendered by a
+// ClaimCreationPolicy. It mirrors ResourceClaimSpec and adds a per-request
+// condition that selects which requests the rendered claim includes.
+type ResourceClaimTemplateSpec struct {
+	// ConsumerRef identifies the quota consumer making this claim. When
+	// omitted, the admission plugin fills it from the authenticated user's
+	// context (organization or project). The name supports CEL expressions.
+	//
+	// +kubebuilder:validation:Optional
+	ConsumerRef ConsumerRef `json:"consumerRef,omitempty"`
+
+	// Requests specifies the resource types and amounts to claim. Each resource
+	// type can appear only once. Requests whose condition evaluates to false
+	// are left out of the rendered claim.
+	// When every request is left out, no claim is created and the triggering
+	// resource is admitted.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=20
+	Requests []ResourceRequestTemplate `json:"requests"`
+
+	// ResourceRef is populated automatically during admission and cannot be
+	// set in a template.
+	//
+	// +optional
+	ResourceRef *UnversionedObjectReference `json:"resourceRef,omitempty"`
+}
+
+// ResourceRequestTemplate defines a single resource request rendered into a
+// **ResourceClaim**, with an optional condition controlling whether the
+// request is included.
+type ResourceRequestTemplate struct {
+	// ResourceType identifies the specific resource type being claimed. Must
+	// exactly match a ResourceRegistration.spec.resourceType that is currently
+	// active. The quota system validates this reference during claim processing.
+	//
+	// Examples:
+	//
+	//   - "resourcemanager.miloapis.com/projects"
+	//   - "compute_cpu"
+	//   - "storage.volumes"
+	//
+	// +kubebuilder:validation:Required
+	ResourceType string `json:"resourceType"`
+
+	// Amount specifies how much quota to claim for this resource type. Must be
+	// measured in the BaseUnit defined by the corresponding ResourceRegistration.
+	//
+	// For Entity registrations: Use 1 for single resource instances (1 Project, 1
+	// User) For Allocation registrations: Use actual capacity amounts (2048 for
+	// 2048 MB, 1000 for 1000 millicores)
+	//
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Required
+	Amount int64 `json:"amount"`
+
+	// Condition is a CEL expression that must evaluate to true for this
+	// request to be included in the rendered claim. Like trigger constraints,
+	// it is a pure CEL expression WITHOUT {{ }} delimiters and has access to
+	// the trigger, user, and requestInfo variables. An empty condition always
+	// includes the request.
+	//
+	// Example:
+	//
+	//   - "trigger.spec.ipFamily == 'IPv4' && trigger.spec.addressScope == 'Public'"
+	//
+	// +optional
+	// +kubebuilder:validation:MaxLength=1024
+	Condition string `json:"condition,omitempty"`
 }
 
 // ObjectMetaTemplate defines metadata fields that support template rendering for created objects.
@@ -319,6 +391,7 @@ func (t *ClaimTriggerResource) GetGVK() schema.GroupVersionKind {
 // ### Field Constraints and Limits
 // - Maximum 10 constraints per trigger (spec.trigger.constraints)
 // - Static amounts only in v1alpha1 (no expression-based quota amounts)
+// - Each template request may set a boolean CEL condition; when none apply, no claim is created
 // - Template metadata labels are literal strings (no expression processing)
 // - Template annotation values support CEL expressions
 //
