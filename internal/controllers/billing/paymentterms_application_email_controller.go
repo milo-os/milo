@@ -15,6 +15,7 @@ import (
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -397,10 +398,22 @@ func orDash(s string) string {
 	return s
 }
 
-// SetupWithManager wires the controller into the manager.
+// SetupWithManager wires the controller into the manager. Billing installs
+// the application API, so a control plane without billing skips the
+// controller instead of failing to start: watching an API that isn't served
+// would stop the whole manager. Installing billing later needs a restart to
+// turn the emails on.
 func (r *PaymentTermsApplicationEmailController) SetupWithManager(mgr ctrl.Manager) error {
 	if r.MaxEventAge <= 0 {
 		return fmt.Errorf("max event age must be positive, got %s", r.MaxEventAge)
+	}
+	gvk := billingv1alpha1.GroupVersion.WithKind("BillingArrangementApplication")
+	if _, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			mgr.GetLogger().Info("Billing's application API isn't served, so payment terms application emails are off", "kind", gvk.String())
+			return nil
+		}
+		return fmt.Errorf("failed to look up %s: %w", gvk, err)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&billingv1alpha1.BillingArrangementApplication{}).
