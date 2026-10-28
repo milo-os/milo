@@ -29,6 +29,18 @@ type NoteResource interface {
 	GetNoteKind() string
 }
 
+// creatorResourceRef names the note a creator's PolicyBinding grants: a Note with its namespace, without which the
+// binding cannot be resolved, and a ClusterNote with none.
+func creatorResourceRef(note NoteResource) *iamv1alpha1.ResourceReference {
+	return &iamv1alpha1.ResourceReference{
+		APIGroup:  "notes.miloapis.com",
+		Kind:      note.GetNoteKind(),
+		Name:      note.GetName(),
+		UID:       string(note.GetUID()),
+		Namespace: note.GetNamespace(),
+	}
+}
+
 // ensureCreatorEditorPolicyBinding creates or checks a PolicyBinding for the note creator
 func ensureCreatorEditorPolicyBinding(
 	ctx context.Context,
@@ -82,12 +94,7 @@ func ensureCreatorEditorPolicyBinding(
 				},
 			},
 			ResourceSelector: iamv1alpha1.ResourceSelector{
-				ResourceRef: &iamv1alpha1.ResourceReference{
-					APIGroup: "notes.miloapis.com",
-					Kind:     noteResource.GetNoteKind(),
-					Name:     noteResource.GetName(),
-					UID:      string(noteResource.GetUID()),
-				},
+				ResourceRef: creatorResourceRef(noteResource),
 			},
 		},
 	}
