@@ -86,6 +86,7 @@ import (
 
 	billingv1alpha1 "go.miloapis.com/billing/api/v1alpha1"
 	controlplane "go.miloapis.com/milo/internal/control-plane"
+	billingcontroller "go.miloapis.com/milo/internal/controllers/billing"
 	iamcontroller "go.miloapis.com/milo/internal/controllers/iam"
 	notescontroller "go.miloapis.com/milo/internal/controllers/notes"
 	notificationcontroller "go.miloapis.com/milo/internal/controllers/notification"
@@ -169,6 +170,30 @@ var (
 	// for these reasons still count down to auto-deletion after the retention
 	// window; only the customer-facing warning e-mail is suppressed.
 	ProjectSuspensionWarningExcludedReasons []string
+
+	// PaymentTermsApplication*EmailTemplate are the templates for the
+	// emails about payment terms applications.
+	PaymentTermsApplicationReceivedEmailTemplate  string
+	PaymentTermsApplicationSubmittedEmailTemplate string
+	PaymentTermsApplicationApprovedEmailTemplate  string
+	PaymentTermsApplicationDeclinedEmailTemplate  string
+
+	// PaymentTermsApplicationSupportEmail is where the notice of each new
+	// payment terms application is sent. Empty sends none.
+	PaymentTermsApplicationSupportEmail string
+
+	// PaymentTermsApplicationPortalURL and PaymentTermsApplicationStaffPortalURL
+	// are the base URLs the application emails link to.
+	PaymentTermsApplicationPortalURL      string
+	PaymentTermsApplicationStaffPortalURL string
+
+	// PaymentTermsApplicationEmailNamespace is where payment terms
+	// application Email resources are created.
+	PaymentTermsApplicationEmailNamespace string
+
+	// PaymentTermsApplicationEmailMaxAge is how long after an application is
+	// submitted or decided its email may still be sent.
+	PaymentTermsApplicationEmailMaxAge time.Duration
 
 	QuotaMaxConcurrentReconciles int
 
@@ -332,6 +357,15 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailTemplate, "project-suspension-deletion-warning-email-template", "emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarningemailtemplate", "The name of the template used to warn a suspended project's organization about upcoming deletion.")
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailNamespace, "project-suspension-deletion-warning-email-namespace", "milo-system", "The namespace suspension deletion warning Email resources are created in, kept as a stable, centralized audit trail.")
 	fs.StringSliceVar(&ProjectSuspensionWarningExcludedReasons, "project-suspension-warning-excluded-reasons", []string{"Fraud", "Abuse"}, "Comma-separated suspension reasons for which countdown deletion warning e-mails are NOT sent (e.g. Fraud,Abuse). Projects suspended for these reasons still auto-delete after the retention window.")
+	fs.StringVar(&PaymentTermsApplicationReceivedEmailTemplate, "payment-terms-application-received-email-template", "emailtemplates.notification.miloapis.com-paymenttermsapplicationreceivedemailtemplate", "The name of the template used to confirm a payment terms application to the applicant.")
+	fs.StringVar(&PaymentTermsApplicationSubmittedEmailTemplate, "payment-terms-application-submitted-email-template", "emailtemplates.notification.miloapis.com-paymenttermsapplicationsubmittedemailtemplate", "The name of the template used to tell support about a new payment terms application.")
+	fs.StringVar(&PaymentTermsApplicationApprovedEmailTemplate, "payment-terms-application-approved-email-template", "emailtemplates.notification.miloapis.com-paymenttermsapplicationapprovedemailtemplate", "The name of the template used to tell the applicant their payment terms application was approved.")
+	fs.StringVar(&PaymentTermsApplicationDeclinedEmailTemplate, "payment-terms-application-declined-email-template", "emailtemplates.notification.miloapis.com-paymenttermsapplicationdeclinedemailtemplate", "The name of the template used to tell the applicant their payment terms application was declined.")
+	fs.StringVar(&PaymentTermsApplicationSupportEmail, "payment-terms-application-support-email", "support@datum.net", "The address told about each new payment terms application: the support mailbox, which Help Scout turns into a conversation. Empty sends no notice.")
+	fs.StringVar(&PaymentTermsApplicationPortalURL, "payment-terms-application-portal-url", "https://cloud.datum.net", "The cloud portal base URL linked from payment terms application emails.")
+	fs.StringVar(&PaymentTermsApplicationStaffPortalURL, "payment-terms-application-staff-portal-url", "https://staff.datum.net", "The staff portal base URL linked from the new payment terms application notice.")
+	fs.StringVar(&PaymentTermsApplicationEmailNamespace, "payment-terms-application-email-namespace", "milo-system", "The namespace payment terms application Email resources are created in.")
+	fs.DurationVar(&PaymentTermsApplicationEmailMaxAge, "payment-terms-application-email-max-age", 72*time.Hour, "How long after a payment terms application is submitted or decided its email may still be sent, so a first rollout doesn't email people about old applications.")
 	fs.IntVar(&QuotaMaxConcurrentReconciles, "quota-max-concurrent-reconciles", 1, "The number of AllowanceBuckets and the number of ResourceClaims the quota controllers reconcile in parallel.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
 	fs.StringVar(&PlatformInvitationEmailVariableActionUrl, "platform-invitation-email-variable-action-url", "https://cloud.datum.net", "The action url for the platform invitation email.")
@@ -741,6 +775,23 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			if err := userWaitlistCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up user waitlist controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			paymentTermsApplicationEmailCtrl := billingcontroller.PaymentTermsApplicationEmailController{
+				Client:                 ctrl.GetClient(),
+				EmailNamespace:         PaymentTermsApplicationEmailNamespace,
+				ReceivedEmailTemplate:  PaymentTermsApplicationReceivedEmailTemplate,
+				SubmittedEmailTemplate: PaymentTermsApplicationSubmittedEmailTemplate,
+				ApprovedEmailTemplate:  PaymentTermsApplicationApprovedEmailTemplate,
+				DeclinedEmailTemplate:  PaymentTermsApplicationDeclinedEmailTemplate,
+				SupportEmailAddress:    PaymentTermsApplicationSupportEmail,
+				PortalURL:              PaymentTermsApplicationPortalURL,
+				StaffPortalURL:         PaymentTermsApplicationStaffPortalURL,
+				MaxEventAge:            PaymentTermsApplicationEmailMaxAge,
+			}
+			if err := paymentTermsApplicationEmailCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up payment terms application email controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
