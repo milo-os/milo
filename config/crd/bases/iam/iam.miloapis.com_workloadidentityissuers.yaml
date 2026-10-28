@@ -1,0 +1,273 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+    discovery.miloapis.com/parent-contexts: Project
+  name: workloadidentityissuers.iam.miloapis.com
+spec:
+  group: iam.miloapis.com
+  names:
+    kind: WorkloadIdentityIssuer
+    listKind: WorkloadIdentityIssuerList
+    plural: workloadidentityissuers
+    singular: workloadidentityissuer
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.issuer
+      name: Issuer
+      type: string
+    - jsonPath: .spec.disabled
+      name: Disabled
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='DomainVerified')].status
+      name: Domain Verified
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          WorkloadIdentityIssuer registers, in one project, an issuer whose tokens workloads may present. A
+          controller verifies the issuer's signing keys and publishes the usable ones in status; consumers read
+          status only.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkloadIdentityIssuerSpec registers an OpenID Connect issuer.
+            properties:
+              disabled:
+                description: Disabled stops every consumer from accepting tokens from
+                  this issuer.
+                type: boolean
+              maxTokenLifetime:
+                description: |-
+                  MaxTokenLifetime bounds the lifetime consumers accept for tokens from this issuer, measured as exp
+                  minus iat. When unset it is one hour. At most 24 hours.
+                maxLength: 32
+                type: string
+                x-kubernetes-validations:
+                - message: maxTokenLifetime must be more than zero and at most 24h
+                  rule: duration(self) > duration('0s') && duration(self) <= duration('24h')
+              oidc:
+                description: OIDC is the OpenID Connect issuer and where its signing
+                  keys come from.
+                properties:
+                  issuerUri:
+                    description: |-
+                      IssuerURI is the issuer's identifier, compared exactly with a token's iss claim. It must start with
+                      "https://" in lower case, use port 443, name a DNS host rather than an IP address, and carry no query,
+                      fragment or user information.
+                    maxLength: 512
+                    minLength: 9
+                    type: string
+                    x-kubernetes-validations:
+                    - message: issuerUri cannot be changed
+                      rule: self == oldSelf
+                    - message: issuerUri must start with https:// in lower case, use
+                        port 443 and a DNS hostname rather than an IP address, and
+                        carry no query, fragment or user information
+                      rule: self.startsWith('https://') && isURL(self) && url(self).getScheme()
+                        == 'https' && url(self).getPort() in ['', '443'] && size(url(self).getQuery())
+                        == 0 && !self.contains('#') && !self.contains('@') && !self.startsWith('https://[')
+                        && !self.matches('^https://[0-9.]+([:/?].*)?$')
+                  jwks:
+                    description: JWKS says where the issuer's signing keys come from.
+                    properties:
+                      explicitUrl:
+                        description: ExplicitURL is the key set's URL, under the same
+                          rules as issuerUri except that it may carry a query.
+                        maxLength: 512
+                        type: string
+                        x-kubernetes-validations:
+                        - message: explicitUrl must start with https:// in lower case,
+                            use port 443 and a DNS hostname rather than an IP address,
+                            and carry no fragment or user information
+                          rule: self.startsWith('https://') && isURL(self) && url(self).getScheme()
+                            == 'https' && url(self).getPort() in ['', '443'] && !self.contains('#')
+                            && !self.contains('@') && !self.startsWith('https://[')
+                            && !self.matches('^https://[0-9.]+([:/?].*)?$')
+                      inline:
+                        description: |-
+                          Inline is a JSON Web Key Set document (RFC 7517), for issuers the control plane cannot reach. It holds
+                          public keys only.
+                        maxLength: 32768
+                        minLength: 2
+                        type: string
+                        x-kubernetes-validations:
+                        - message: 'inline must hold public keys only: remove the
+                            private key members (d, p, q, dp, dq, qi, oth, k) and
+                            rotate the key'
+                          rule: '!self.matches(''"(d|p|q|dp|dq|qi|oth|k)"[[:space:]]*:'')'
+                      source:
+                        default: Discovery
+                        description: Source is Discovery (the issuer's discovery document
+                          names the key set), ExplicitURL, or Inline.
+                        enum:
+                        - Discovery
+                        - ExplicitURL
+                        - Inline
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: explicitUrl is set only for ExplicitURL, and inline
+                        only for Inline
+                      rule: 'self.source == ''ExplicitURL'' ? (has(self.explicitUrl)
+                        && !has(self.inline)) : (self.source == ''Inline'' ? (has(self.inline)
+                        && !has(self.explicitUrl)) : (!has(self.explicitUrl) && !has(self.inline)))'
+                required:
+                - issuerUri
+                - jwks
+                type: object
+              requiredClaims:
+                additionalProperties:
+                  description: ClaimValue is the exact string value a required claim
+                    must have.
+                  maxLength: 512
+                  type: string
+                description: RequiredClaims are claims a token must carry with exactly
+                  these string values.
+                maxProperties: 16
+                type: object
+                x-kubernetes-validations:
+                - message: claim names must be 1 to 128 characters
+                  rule: self.all(k, size(k) >= 1 && size(k) <= 128)
+                - message: iss, aud, exp, nbf, iat and jti are checked by other fields
+                    and cannot be required here
+                  rule: self.all(k, !(k in ['iss', 'aud', 'exp', 'nbf', 'iat', 'jti']))
+            required:
+            - oidc
+            type: object
+          status:
+            description: WorkloadIdentityIssuerStatus is what consumers read.
+            properties:
+              conditions:
+                description: 'Conditions: Ready, DomainVerified and Disabled.'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              issuer:
+                description: 'Issuer is the exact iss value tokens carry: spec.oidc.issuerUri.'
+                type: string
+              keySet:
+                description: |-
+                  KeySet is the verified JSON Web Key Set: only the keys a token verifier can use, Ed25519 (EdDSA),
+                  P-256 (ES256) and RSA of at least 2048 bits (RS256), with use "sig" or none and alg matching the key,
+                  each with a kid unique in the set, and each with its public members only.
+                type: string
+              keySetGeneration:
+                description: KeySetGeneration increases each time KeySet changes.
+                format: int64
+                type: integer
+              lastFetchTime:
+                description: |-
+                  LastFetchTime is when the key set in KeySet was last obtained and verified: for an inline key set,
+                  when KeySet last changed.
+                format: date-time
+                type: string
+              maxTokenLifetime:
+                description: |-
+                  MaxTokenLifetime is the lifetime bound in effect: spec.maxTokenLifetime, or one hour when that is
+                  unset.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  describes.
+                format: int64
+                type: integer
+              requiredClaims:
+                additionalProperties:
+                  description: ClaimValue is the exact string value a required claim
+                    must have.
+                  maxLength: 512
+                  type: string
+                description: |-
+                  RequiredClaims is spec.requiredClaims as of ObservedGeneration: the claims a token must carry with
+                  exactly these string values.
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
