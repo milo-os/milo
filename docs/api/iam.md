@@ -3849,9 +3849,10 @@ WorkloadIdentityIssuerSpec registers an OpenID Connect issuer.
         <td>string</td>
         <td>
           MaxTokenLifetime bounds the lifetime consumers accept for tokens from this issuer, measured as exp
-minus iat. When unset it is one hour. At most 24 hours.<br/>
+minus iat. When unset it is one hour. At least one second, since consumers apply it in whole seconds,
+and at most 24 hours.<br/>
           <br/>
-            <i>Validations</i>:<li>duration(self) > duration('0s') && duration(self) <= duration('24h'): maxTokenLifetime must be more than zero and at most 24h</li>
+            <i>Validations</i>:<li>duration(self) >= duration('1s') && duration(self) <= duration('24h'): maxTokenLifetime must be at least 1s and at most 24h</li>
         </td>
         <td>false</td>
       </tr><tr>

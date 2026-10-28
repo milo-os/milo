@@ -66,12 +66,13 @@ spec:
               maxTokenLifetime:
                 description: |-
                   MaxTokenLifetime bounds the lifetime consumers accept for tokens from this issuer, measured as exp
-                  minus iat. When unset it is one hour. At most 24 hours.
+                  minus iat. When unset it is one hour. At least one second, since consumers apply it in whole seconds,
+                  and at most 24 hours.
                 maxLength: 32
                 type: string
                 x-kubernetes-validations:
-                - message: maxTokenLifetime must be more than zero and at most 24h
-                  rule: duration(self) > duration('0s') && duration(self) <= duration('24h')
+                - message: maxTokenLifetime must be at least 1s and at most 24h
+                  rule: duration(self) >= duration('1s') && duration(self) <= duration('24h')
               oidc:
                 description: OIDC is the OpenID Connect issuer and where its signing
                   keys come from.

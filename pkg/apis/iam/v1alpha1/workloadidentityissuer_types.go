@@ -39,11 +39,12 @@ type WorkloadIdentityIssuerSpec struct {
 	RequiredClaims map[string]ClaimValue `json:"requiredClaims,omitempty"`
 
 	// MaxTokenLifetime bounds the lifetime consumers accept for tokens from this issuer, measured as exp
-	// minus iat. When unset it is one hour. At most 24 hours.
+	// minus iat. When unset it is one hour. At least one second, since consumers apply it in whole seconds,
+	// and at most 24 hours.
 	// +optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s') && duration(self) <= duration('24h')",message="maxTokenLifetime must be more than zero and at most 24h"
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s') && duration(self) <= duration('24h')",message="maxTokenLifetime must be at least 1s and at most 24h"
 	MaxTokenLifetime *metav1.Duration `json:"maxTokenLifetime,omitempty"`
 
 	// Disabled stops every consumer from accepting tokens from this issuer.

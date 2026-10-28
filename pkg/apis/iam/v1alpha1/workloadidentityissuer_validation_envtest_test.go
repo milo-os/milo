@@ -139,6 +139,11 @@ func TestAcceptedIssuersAndDefaults(t *testing.T) {
 		obj.Spec.MaxTokenLifetime = &metav1.Duration{Duration: 24 * time.Hour}
 		create(t, obj)
 	})
+	t.Run("a 1s maximum token lifetime", func(t *testing.T) {
+		obj := oidcIssuer("accept-1s", "https://idp.example.com", iamv1alpha1.JWKSSource{})
+		obj.Spec.MaxTokenLifetime = &metav1.Duration{Duration: time.Second}
+		create(t, obj)
+	})
 }
 
 // issuer builds an object from raw fields, so a case can send what a typed client would omit.
@@ -165,7 +170,7 @@ func TestRefusedIssuers(t *testing.T) {
 		noOIDC     = "spec.oidc: Required value"
 		issuerRule = "issuerUri must start with https:// in lower case, use port 443 and a DNS hostname"
 		sourceRule = "explicitUrl is set only for ExplicitURL, and inline only for Inline"
-		lifetime   = "maxTokenLifetime must be more than zero and at most 24h"
+		lifetime   = "maxTokenLifetime must be at least 1s and at most 24h"
 		reserved   = "iss, aud, exp, nbf, iat and jti are checked by other fields"
 		private    = "inline must hold public keys only"
 	)
@@ -200,6 +205,7 @@ func TestRefusedIssuers(t *testing.T) {
 		{"Discovery with inline", oidcSpec("https://idp.example.com", map[string]any{"source": "Discovery", "inline": twoKeySet}), sourceRule},
 		{"a 25h maximum token lifetime", with(oidcSpec("https://idp.example.com", discovery), "maxTokenLifetime", "25h"), lifetime},
 		{"a zero maximum token lifetime", with(oidcSpec("https://idp.example.com", discovery), "maxTokenLifetime", "0s"), lifetime},
+		{"a sub-second maximum token lifetime", with(oidcSpec("https://idp.example.com", discovery), "maxTokenLifetime", "500ms"), lifetime},
 		{"a required iss claim", with(oidcSpec("https://idp.example.com", discovery),
 			"requiredClaims", map[string]any{"iss": "https://idp.example.com"}), reserved},
 		{"17 required claims", with(oidcSpec("https://idp.example.com", discovery), "requiredClaims", manyClaims), "Too many"},
