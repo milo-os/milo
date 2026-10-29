@@ -3,54 +3,13 @@ package projectstate_test
 import (
 	"context"
 	"testing"
-	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/component-base/metrics/legacyregistry"
 
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/internal/apiserver/projectstate/projectstatetest"
 )
-
-// TestLiveFromView_AnswersALiveUnforcedProject covers the read's view:
-// a Project the reflector shows live is answered without storage, and a name
-// whose DELETE was recorded is not, because only storage knows which Project
-// it refers to now.
-func TestLiveFromView_AnswersALiveUnforcedProject(t *testing.T) {
-	c, client := projectstatetest.NewCache(t, projectstatetest.NewProjectWithUID("p", "uid-1"))
-	waitForProject(t, c, "p", projectstate.Project{UID: "uid-1"}, true)
-	gets := projectstatetest.StorageAnswers(client, projectstatetest.NewProjectWithUID("p", "uid-2"), nil)
-
-	if got, ok := c.LiveFromView("p"); !ok || got.UID != "uid-1" {
-		t.Fatalf("expected the reflector's live uid-1, got %+v, %v", got, ok)
-	}
-	c.ForceLiveLookup("p")
-	if got, ok := c.LiveFromView("p"); ok {
-		t.Fatalf("expected no answer for a name whose DELETE was recorded, got %+v", got)
-	}
-	if n := gets.Load(); n != 0 {
-		t.Fatalf("expected the view to read no storage, got %d GETs", n)
-	}
-}
-
-// TestLiveFromView_UnseenOrDeletingIsNotLive covers the two other answers the
-// view cannot give: a name the reflector has not seen, and a Project it
-// shows deleting.
-func TestLiveFromView_UnseenOrDeletingIsNotLive(t *testing.T) {
-	deleting := projectstatetest.NewProjectWithUID("d", "uid-1")
-	deleting.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
-	deleting.SetFinalizers([]string{"example.com/finalizer"})
-	c, _ := projectstatetest.NewCache(t, deleting)
-	waitForProject(t, c, "d", projectstate.Project{UID: "uid-1", Deleting: true}, true)
-
-	if got, ok := c.LiveFromView("unseen"); ok {
-		t.Fatalf("expected no answer for an unseen name, got %+v", got)
-	}
-	if got, ok := c.LiveFromView("d"); ok {
-		t.Fatalf("expected no answer for a deleting Project, got %+v", got)
-	}
-}
 
 // TestLookup_CountsEachLiveReadByReasonFoundAndRequest keeps the live reads'
 // cost visible in production: each storage read counts once, by why the

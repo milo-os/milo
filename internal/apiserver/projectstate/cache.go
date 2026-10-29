@@ -39,6 +39,15 @@ const (
 	forceLiveLookupSize = 100
 )
 
+// The missing list keeps the names storage answered NotFound for, so a loop of
+// invented names costs one storage read per name in that time. Upstream's
+// NamespaceLifecycle keeps no such list, so it takes the force-live list's
+// bounds, the nearest precedent.
+const (
+	missingLookupTTL  = forceLiveLookupTTL
+	missingLookupSize = forceLiveLookupSize
+)
+
 // ProjectGVR identifies the cluster-scoped Project resource.
 var ProjectGVR = schema.GroupVersionResource{
 	Group:    "resourcemanager.miloapis.com",
@@ -72,6 +81,10 @@ type Cache struct {
 	// forceLive holds the names of Projects deleted in the last
 	// forceLiveLookupTTL, which the reflector may still show live.
 	forceLive *utilcache.LRUExpireCache
+
+	// missing holds the names the reflector does not hold and storage answered
+	// NotFound for in the last missingLookupTTL.
+	missing *utilcache.LRUExpireCache
 }
 
 // NewCache creates a Cache that watches Projects through client. Start runs it.
@@ -79,12 +92,14 @@ func NewCache(client dynamic.Interface) *Cache {
 	return NewCacheWithClock(client, clock.RealClock{})
 }
 
-// NewCacheWithClock creates a Cache whose force-live list keeps time by clk.
+// NewCacheWithClock creates a Cache whose force-live and missing lists keep
+// time by clk.
 func NewCacheWithClock(client dynamic.Interface, clk clock.Clock) *Cache {
 	c := &Cache{
 		client:    client,
 		store:     newProjectStore(),
 		forceLive: utilcache.NewLRUExpireCacheWithClock(forceLiveLookupSize, clk),
+		missing:   utilcache.NewLRUExpireCacheWithClock(missingLookupSize, clk),
 	}
 
 	lw := &cache.ListWatch{
@@ -126,12 +141,14 @@ func (noWatchListSemantics) IsWatchListSemanticsUnSupported() bool { return true
 // there is no separate indexer behind it. It retains, per Project name, an
 // entry derived once per delta the Reflector processes rather than re-parsed
 // on every request. Reflector calls Add/Update/Delete/Replace synchronously
-// as it processes the watch stream (single consumer, no listener fan-out), so
-// reads always see the latest processed state with no dispatch lag.
+// as it processes the watch stream, so reads always see the latest processed
+// state with no dispatch lag. Listeners hear of a delete, a relist and a
+// periodic resync after the map has changed.
 type projectStore struct {
-	mu       sync.RWMutex
-	projects map[string]entry
-	synced   bool
+	mu        sync.RWMutex
+	projects  map[string]entry
+	synced    bool
+	listeners listeners
 }
 
 // entry is what the store keeps of one Project object: its identity and
@@ -182,6 +199,7 @@ func (s *projectStore) Delete(obj interface{}) error {
 	s.mu.Lock()
 	delete(s.projects, u.GetName())
 	s.mu.Unlock()
+	s.listeners.each(func(l Listener) { l.ProjectGone(u.GetName()) })
 	return nil
 }
 
@@ -202,10 +220,15 @@ func (s *projectStore) Replace(list []interface{}, _ string) error {
 	s.projects = fresh
 	s.synced = true
 	s.mu.Unlock()
-	return nil
+	return s.Resync()
 }
 
-func (s *projectStore) Resync() error { return nil }
+// Resync tells the listeners to check what they hold against the view. The
+// Reflector calls it every defaultResyncPeriod, and Replace after a relist.
+func (s *projectStore) Resync() error {
+	s.listeners.each(func(l Listener) { l.ViewResynced() })
+	return nil
+}
 
 func (s *projectStore) hasSynced() bool {
 	s.mu.RLock()
@@ -259,14 +282,30 @@ func (c *Cache) ReadinessCheck() healthz.HealthChecker {
 // view that lags storage does not decide alone for a name it has not seen,
 // or for one just deleted. A name storage does not hold is NotFound; any
 // other failure of the GET is an InternalError, as upstream returns it.
+//
+// A name the reflector does not hold that storage answered NotFound for in the
+// last missingLookupTTL is NotFound with no GET. The reflector is asked first,
+// so a Project created under such a name is answered as soon as it is seen.
 func (c *Cache) Lookup(ctx context.Context, name string) (Project, error) {
 	e, seen := c.store.lookup(name)
 	if seen && !c.liveLookupForced(name, e.project) {
 		return e.project, nil
 	}
+	if _, missing := c.missing.Get(name); missing && !seen {
+		return Project{}, apierrors.NewNotFound(ProjectGVR.GroupResource(), name)
+	}
+	return c.lookupStorage(ctx, name, seen)
+}
+
+// lookupStorage reads name from storage, and records a NotFound for a name the
+// reflector does not hold in the missing list.
+func (c *Cache) lookupStorage(ctx context.Context, name string, seen bool) (Project, error) {
 	u, err := c.client.Resource(ProjectGVR).Get(ctx, name, metav1.GetOptions{})
 	countLiveLookup(ctx, seen, err)
 	if apierrors.IsNotFound(err) {
+		if !seen {
+			c.missing.Add(name, true, missingLookupTTL)
+		}
 		return Project{}, err
 	}
 	if err != nil {
@@ -292,21 +331,6 @@ func (c *Cache) liveLookupForced(name string, cached Project) bool {
 // Project's DELETE, before the reflector can have seen the deletion.
 func (c *Cache) ForceLiveLookup(name string) {
 	c.forceLive.Add(name, true, forceLiveLookupTTL)
-}
-
-// LiveFromView returns the Project the reflector shows live under name, and
-// false when it holds none, shows it deleting, or the name's DELETE was
-// recorded in the last forceLiveLookupTTL: then only storage could say which
-// Project the name refers to. It never reads storage.
-func (c *Cache) LiveFromView(name string) (Project, bool) {
-	e, ok := c.store.lookup(name)
-	if !ok || e.project.Deleting {
-		return Project{}, false
-	}
-	if _, forced := c.forceLive.Get(name); forced {
-		return Project{}, false
-	}
-	return e.project, true
 }
 
 // Project returns the named Project's state, and false when the cache holds no
