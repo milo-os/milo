@@ -10,12 +10,14 @@ import (
 // ClaimCreationPolicyValidator validates ClaimCreationPolicy resources including
 // claim template structure/syntax and resource type registration.
 type ClaimCreationPolicyValidator struct {
+	CELValidator          *CELValidator
 	ResourceTypeValidator ResourceTypeValidator
 }
 
 // NewClaimCreationPolicyValidator creates a new ClaimCreationPolicyValidator.
-func NewClaimCreationPolicyValidator(resourceTypeValidator ResourceTypeValidator) *ClaimCreationPolicyValidator {
+func NewClaimCreationPolicyValidator(celValidator *CELValidator, resourceTypeValidator ResourceTypeValidator) *ClaimCreationPolicyValidator {
 	return &ClaimCreationPolicyValidator{
+		CELValidator:          celValidator,
 		ResourceTypeValidator: resourceTypeValidator,
 	}
 }
@@ -35,6 +37,8 @@ func (v *ClaimCreationPolicyValidator) Validate(ctx context.Context, policy *quo
 			})
 		}
 	}
+
+	allErrs = append(allErrs, v.validateRequestConditions(policy)...)
 
 	// Skip resource type validation when configured because it queries API server state
 	if !opts.SkipAPIStateValidation {
@@ -64,6 +68,27 @@ func (v *ClaimCreationPolicyValidator) validateResourceTypes(ctx context.Context
 					err.Error(),
 				))
 			}
+		}
+	}
+	return allErrs
+}
+
+// validateRequestConditions compile-checks each claim template request
+// condition as a boolean CEL expression.
+func (v *ClaimCreationPolicyValidator) validateRequestConditions(policy *quotav1alpha1.ClaimCreationPolicy) field.ErrorList {
+	var allErrs field.ErrorList
+	requestsPath := field.NewPath("spec", "target", "resourceClaimTemplate", "spec", "requests")
+
+	for i, request := range policy.Spec.Target.ResourceClaimTemplate.Spec.Requests {
+		if request.Condition == "" {
+			continue
+		}
+		if err := v.CELValidator.ValidateBoolExpression(request.Condition); err != nil {
+			allErrs = append(allErrs, field.Invalid(
+				requestsPath.Index(i).Child("condition"),
+				request.Condition,
+				err.Error(),
+			))
 		}
 	}
 	return allErrs
