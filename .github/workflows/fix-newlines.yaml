@@ -74,16 +74,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ github.head_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SCRIPT_REF: ${{ github.event.pull_request.base.sha }}
           FIXED_COUNT: ${{ steps.fix.outputs.fixed_count }}
         run: |
           SIGN_COMMIT="$RUNNER_TEMP/sign-commit"
-          gh api -H "Accept: application/vnd.github.raw+json" "repos/${GITHUB_REPOSITORY}/contents/scripts/sign-commit?ref=${BASE_SHA}" > "$SIGN_COMMIT"
+          err=$(gh api -H "Accept: application/vnd.github.raw+json" "repos/${GITHUB_REPOSITORY}/contents/scripts/sign-commit?ref=${SCRIPT_REF}" 2>&1 >"$SIGN_COMMIT") || {
+            if [[ $err == *"HTTP 404"* ]]; then
+              echo "::notice::The base branch has no scripts/sign-commit yet, so the newline fix was not committed."
+              exit 0
+            fi
+            echo "$err" >&2
+            exit 1
+          }
           chmod +x "$SIGN_COMMIT"
           EXPECTED_HEAD=$(git rev-parse HEAD)
           export EXPECTED_HEAD
           MESSAGE=$(printf 'chore: add missing newlines at end of files\n\nAutomatically added newlines to %s file(s)' "$FIXED_COUNT")
-          git diff -z --name-only | "$SIGN_COMMIT" -z "$BRANCH" "$MESSAGE"
+          git diff -z --name-only | env -u BASE_SHA "$SIGN_COMMIT" -z "$BRANCH" "$MESSAGE"
 
       - name: Comment on PR
         if: steps.fix.outputs.has_changes == 'true'
