@@ -6,12 +6,20 @@ on:
       - 'go.mod'
       - 'go.sum'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)) }}
+
 jobs:
   iam_integration_tests:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.MILO_LINUX_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
       - name: Install dependencies
         run: go mod download
       - name: Install envtest API server

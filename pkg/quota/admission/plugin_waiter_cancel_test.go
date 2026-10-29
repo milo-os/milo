@@ -25,9 +25,9 @@ type waitingWatchManager struct {
 	byName     int
 }
 
-func (m *waitingWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (<-chan ClaimResult, context.CancelFunc, error) {
+func (m *waitingWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (ClaimWaiter, error) {
 	m.once.Do(func() { close(m.registered) })
-	return make(chan ClaimResult, 1), func() {}, nil
+	return make(chanWaiter, 1), nil
 }
 
 func (m *waitingWatchManager) UnregisterClaimWaiter(claimName, namespace string) {
