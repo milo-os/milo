@@ -344,12 +344,12 @@ func TestNamespacesStorageNeverWaitsOnBootstrap(t *testing.T) {
 		return fakeStorage{}, func() {}, nil
 	}
 	cfg := &storagebackend.ConfigForResource{}
-	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, inner, everyProjectKnown(), b)(
+	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, inner, everyProjectKnown(), b, testDrain)(
 		cfg, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate namespaces: %v", err)
 	}
-	claims, _, err := ProjectAwareDecorator(schema.GroupResource{Group: "quota.miloapis.com", Resource: "resourceclaims"}, inner, everyProjectKnown(), b)(
+	claims, _, err := ProjectAwareDecorator(schema.GroupResource{Group: "quota.miloapis.com", Resource: "resourceclaims"}, inner, everyProjectKnown(), b, testDrain)(
 		cfg, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate resourceclaims: %v", err)
@@ -454,19 +454,19 @@ func (f *fakeProjects) Lookup(_ context.Context, name string) (projectstate.Proj
 	return projectstate.Project{}, apierrors.NewNotFound(projectstate.ProjectGVR.GroupResource(), name)
 }
 
-// LiveFromView answers from the view alone: a name with a live entry, or any
-// name with all set; never a deleting entry, and nothing when err is set.
-func (f *fakeProjects) LiveFromView(name string) (projectstate.Project, bool) {
+// Project answers as the view would: a name with an entry, live or deleting,
+// or any name with all set.
+func (f *fakeProjects) Project(name string) (projectstate.Project, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.err != nil {
-		return projectstate.Project{}, false
-	}
 	if p, ok := f.projects[name]; ok {
-		return p, !p.Deleting
+		return p, true
 	}
 	return projectstate.Project{UID: types.UID("uid-" + name)}, f.all
 }
+
+// AddListener registers nothing: these Projects never leave a view.
+func (f *fakeProjects) AddListener(projectstate.Listener) func() { return func() {} }
 
 func (f *fakeProjects) set(name string, p projectstate.Project) {
 	f.mu.Lock()
@@ -521,14 +521,14 @@ func TestDeletingProjectIsNotBootstrapped(t *testing.T) {
 }
 
 // TestMissingProjectIsNotBootstrapped covers a name storage holds no Project
-// for: a read is served, and nothing is written into its plane.
+// for: a read is refused, and nothing is written into its plane.
 func TestMissingProjectIsNotBootstrapped(t *testing.T) {
 	projects := noProjectKnown()
 	var calls atomic.Int32
 	m := newTestMux(newNamespaceBootstrapper(time.Minute, countingRun(&calls)), projects)
 
-	if err := m.Get(requestFor("p", "get"), "/k", storage.GetOptions{}, nil); err != nil {
-		t.Fatalf("expected a read into a missing project to be served, got %v", err)
+	if err := m.Get(requestFor("p", "get"), "/k", storage.GetOptions{}, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected a read into a missing project to be refused NotFound, got %v", err)
 	}
 	if n := calls.Load(); n != 0 {
 		t.Fatalf("expected no bootstrap for a missing project, got %d", n)
@@ -562,11 +562,11 @@ func TestUnseenProjectIsBootstrappedOnceFromItsLiveRead(t *testing.T) {
 	}
 }
 
-// TestReadOfAnUnseenProjectReadsNoStorage covers a read into a Project the
-// reflector does not hold, as the controller manager's watches into a deleted
-// Project are: a read refuses nothing and the view cannot bootstrap it,
-// so storage is not read and nothing is bootstrapped. Its first write does.
-func TestReadOfAnUnseenProjectReadsNoStorage(t *testing.T) {
+// TestReadOfAnUnseenLiveProjectAsksStorage covers a read into a Project the
+// reflector does not hold yet, as one just created is: storage answers that it
+// exists, so the read is served and the Project is bootstrapped once. Only a
+// NotFound is kept, so each read asks storage until the reflector holds it.
+func TestReadOfAnUnseenLiveProjectAsksStorage(t *testing.T) {
 	client := projectstatetest.NewClient(t)
 	gets := projectstatetest.StorageAnswers(client, projectstatetest.NewProjectWithUID("p", "uid-1"), nil)
 	var calls atomic.Int32
@@ -577,8 +577,8 @@ func TestReadOfAnUnseenProjectReadsNoStorage(t *testing.T) {
 			t.Fatalf("expected a %s to be served, got %v", verb, err)
 		}
 	}
-	if n, b := gets.Load(), calls.Load(); n != 0 || b != 0 {
-		t.Fatalf("expected no storage read and no bootstrap for reads, got %d reads and %d bootstraps", n, b)
+	if n, b := gets.Load(), calls.Load(); n != 3 || b != 1 {
+		t.Fatalf("expected a storage read per read and one bootstrap, got %d reads and %d bootstraps", n, b)
 	}
 }
 
@@ -620,11 +620,12 @@ func TestRecreatedNameIsBootstrappedAfterItsDelete(t *testing.T) {
 	}
 }
 
-// TestReadOfAForcedNameIsNotBootstrapped covers a read into a Project whose
+// TestReadOfAForcedNameFollowsStorage covers a read into a Project whose
 // DELETE was recorded while the reflector still shows it live: the view
-// cannot say which Project the name refers to, and a read decides nothing
-// else, so storage is not read and nothing is bootstrapped.
-func TestReadOfAForcedNameIsNotBootstrapped(t *testing.T) {
+// cannot say which Project the name refers to, so storage decides, as it does
+// for a write. Here storage holds a Project created again, so it is
+// bootstrapped by its own UID.
+func TestReadOfAForcedNameFollowsStorage(t *testing.T) {
 	c, client := projectstatetest.NewCache(t, projectstatetest.NewProjectWithUID("p", "uid-1"))
 	var calls atomic.Int32
 	m := newTestMux(newNamespaceBootstrapper(time.Minute, countingRun(&calls)), c)
@@ -632,9 +633,11 @@ func TestReadOfAForcedNameIsNotBootstrapped(t *testing.T) {
 	gets := projectstatetest.StorageAnswers(client, projectstatetest.NewProjectWithUID("p", "uid-2"), nil)
 
 	c.ForceLiveLookup("p")
-	_ = m.Get(requestFor("p", "watch"), "/k", storage.GetOptions{}, nil)
-	if n, b := gets.Load(), calls.Load(); n != 0 || b != 0 {
-		t.Fatalf("expected no storage read and no bootstrap, got %d reads and %d bootstraps", n, b)
+	if err := m.Get(requestFor("p", "watch"), "/k", storage.GetOptions{}, nil); err != nil {
+		t.Fatalf("expected a watch into the Project storage holds to be served, got %v", err)
+	}
+	if n, b := gets.Load(), calls.Load(); n != 1 || b != 1 {
+		t.Fatalf("expected one storage read and one bootstrap, got %d reads and %d bootstraps", n, b)
 	}
 }
 
@@ -679,32 +682,32 @@ func TestWriteIntoAMissingProjectIsRefused(t *testing.T) {
 	}
 }
 
-// TestReadIntoAMissingProjectIsServed covers a read or a delete into the
-// plane of a Project storage does not hold: it is not bootstrapped and
-// not refused, so a teardown consumer sees what it saw before. A DELETE of an
-// object with finalizers reaches storage as GuaranteedUpdate, so the
-// request's verb, not the storage call, decides.
-func TestReadIntoAMissingProjectIsServed(t *testing.T) {
+// TestReadOrDeleteIntoAMissingProjectIsRefused covers a read or a delete into
+// the plane of a Project storage does not hold: it is refused NotFound, as a
+// write is, and not bootstrapped. Serving it would build a child that lives
+// until the process stops. A DELETE of an object with finalizers reaches
+// storage as GuaranteedUpdate, and is refused the same way.
+func TestReadOrDeleteIntoAMissingProjectIsRefused(t *testing.T) {
 	var calls atomic.Int32
 	m := newTestMux(newNamespaceBootstrapper(time.Minute, countingRun(&calls)), noProjectKnown())
 
 	for _, verb := range []string{"get", "list", "watch"} {
-		if err := m.Get(requestFor("p", verb), "/k", storage.GetOptions{}, nil); err != nil {
-			t.Fatalf("expected a %s to be served, got %v", verb, err)
+		if err := m.Get(requestFor("p", verb), "/k", storage.GetOptions{}, nil); !apierrors.IsNotFound(err) {
+			t.Fatalf("expected a %s to be refused NotFound, got %v", verb, err)
 		}
 	}
-	if err := m.GuaranteedUpdate(requestFor("p", "delete"), "/k", nil, false, nil, nil, nil); err != nil {
-		t.Fatalf("expected a delete to be served, got %v", err)
+	if err := m.GuaranteedUpdate(requestFor("p", "delete"), "/k", nil, false, nil, nil, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected a delete to be refused NotFound, got %v", err)
 	}
 	if n := calls.Load(); n != 0 {
 		t.Fatalf("expected no bootstrap, got %d", n)
 	}
 }
 
-// TestFailedLookupRefusesAWriteAndServesARead covers a lookup that fails for
-// any reason but NotFound: a write gets the InternalError and its
-// client retries, a read is served, and neither bootstraps blind.
-func TestFailedLookupRefusesAWriteAndServesARead(t *testing.T) {
+// TestFailedLookupRefusesEveryRequest covers a lookup that fails for any
+// reason but NotFound: a write and a read each get the InternalError and their
+// clients retry, and neither bootstraps blind.
+func TestFailedLookupRefusesEveryRequest(t *testing.T) {
 	projects := noProjectKnown()
 	projects.err = apierrors.NewInternalError(errors.New("loopback unavailable"))
 	var calls atomic.Int32
@@ -713,8 +716,8 @@ func TestFailedLookupRefusesAWriteAndServesARead(t *testing.T) {
 	if err := m.Create(requestFor("p", "create"), "/k", nil, nil, 0); !apierrors.IsInternalError(err) {
 		t.Fatalf("expected a create to be refused with an InternalError, got %v", err)
 	}
-	if err := m.Get(requestFor("p", "get"), "/k", storage.GetOptions{}, nil); err != nil {
-		t.Fatalf("expected a get to be served, got %v", err)
+	if err := m.Get(requestFor("p", "get"), "/k", storage.GetOptions{}, nil); !apierrors.IsInternalError(err) {
+		t.Fatalf("expected a get to be refused with an InternalError, got %v", err)
 	}
 	if n := calls.Load(); n != 0 {
 		t.Fatalf("expected no bootstrap, got %d", n)
@@ -731,10 +734,11 @@ func fakeChildStorage(*storagebackend.ConfigForResource, string, func(runtime.Ob
 // TestNamespaceWriteIntoAMissingProjectIsRefused covers the kind that does
 // not bootstrap: the namespaces storage has no bootstrapper, and a
 // Namespace stored under a gone Project's name would reappear in a Project
-// created again under it. The lookup is the mux's, so the write is refused.
+// created again under it. The lookup is the mux's, so the write is refused,
+// and so is a read, which would build a child.
 func TestNamespaceWriteIntoAMissingProjectIsRefused(t *testing.T) {
 	b := newNamespaceBootstrapper(time.Minute, countingRun(new(atomic.Int32)))
-	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, fakeChildStorage, noProjectKnown(), b)(
+	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, fakeChildStorage, noProjectKnown(), b, testDrain)(
 		&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate namespaces: %v", err)
@@ -743,8 +747,8 @@ func TestNamespaceWriteIntoAMissingProjectIsRefused(t *testing.T) {
 	if err := ns.Create(requestFor("p", "create"), "/k", nil, nil, 0); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected a Namespace create into a missing project to be refused NotFound, got %v", err)
 	}
-	if err := ns.Get(requestFor("p", "get"), "/k", storage.GetOptions{}, nil); err != nil {
-		t.Fatalf("expected a Namespace read into a missing project to be served, got %v", err)
+	if err := ns.Get(requestFor("p", "get"), "/k", storage.GetOptions{}, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected a Namespace read into a missing project to be refused NotFound, got %v", err)
 	}
 }
 
@@ -775,7 +779,7 @@ func (emptyOptionsGetter) GetRESTOptions(schema.GroupResource, runtime.Object) (
 // Project is refused there too.
 func TestCoreProviderWriteIntoAMissingProjectIsRefused(t *testing.T) {
 	provider := &capturingProvider{}
-	if _, err := WrapProvider(provider, noProjectKnown()).NewRESTStorage(nil, emptyOptionsGetter{}); err != nil {
+	if _, err := WrapProvider(provider, noProjectKnown(), testDrain).NewRESTStorage(nil, emptyOptionsGetter{}); err != nil {
 		t.Fatalf("NewRESTStorage: %v", err)
 	}
 	getter, ok := provider.getter.(roGetter)
@@ -806,10 +810,13 @@ func (l lookupForbidden) Lookup(_ context.Context, name string) (projectstate.Pr
 	return projectstate.Project{}, nil
 }
 
-func (l lookupForbidden) LiveFromView(name string) (projectstate.Project, bool) {
+func (l lookupForbidden) Project(name string) (projectstate.Project, bool) {
 	l.t.Fatalf("asked the view for %q where no lookup is wanted", name)
 	return projectstate.Project{}, false
 }
+
+// AddListener registers nothing: subscribing at construction is no lookup.
+func (lookupForbidden) AddListener(projectstate.Listener) func() { return func() {} }
 
 // TestRootRequestNeverLooksUp covers the lookup's own read: a request
 // with no project, as the GET of a Project is, never reaches the lookup, so
@@ -825,28 +832,6 @@ func TestRootRequestNeverLooksUp(t *testing.T) {
 	}
 	if err := m.Get(context.Background(), "/k", storage.GetOptions{}, nil); err != nil {
 		t.Fatalf("root get: %v", err)
-	}
-}
-
-// TestReadOfAKindThatDoesNotBootstrapNeverLooksUp keeps the lookup to the
-// requests whose answer is used: a read or a delete of a kind with no
-// bootstrapper refuses nothing and bootstraps nothing, so it must not pay a
-// live read. A write of that kind still looks its Project up.
-func TestReadOfAKindThatDoesNotBootstrapNeverLooksUp(t *testing.T) {
-	m := newTestMux(nil, lookupForbidden{t})
-
-	for _, verb := range []string{"get", "list", "watch"} {
-		if err := m.Get(requestFor("p", verb), "/k", storage.GetOptions{}, nil); err != nil {
-			t.Fatalf("expected a %s to be served, got %v", verb, err)
-		}
-	}
-	if err := m.GuaranteedUpdate(requestFor("p", "delete"), "/k", nil, false, nil, nil, nil); err != nil {
-		t.Fatalf("expected a delete to be served, got %v", err)
-	}
-
-	m.projects = noProjectKnown()
-	if err := m.Create(requestFor("p", "create"), "/k", nil, nil, 0); !apierrors.IsNotFound(err) {
-		t.Fatalf("expected a write of that kind to be looked up and refused, got %v", err)
 	}
 }
 

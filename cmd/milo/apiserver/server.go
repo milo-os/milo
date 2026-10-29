@@ -348,17 +348,28 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	return prepared.Run(ctx)
 }
 
+// childDrain is how long a gone Project's child storage serves the requests that picked it before its storage
+// stops: twice the request timeout, apiextensions' bound for the requests on a CRD storage it tears down
+// (k8s.io/apiextensions-apiserver v0.37.1, pkg/apiserver/customresource_handler.go lines 565-583).
+func childDrain(config CompletedConfig) time.Duration {
+	return 2 * config.ControlPlane.Generic.RequestTimeout
+}
+
+// makeExtensionsProjectAware wraps both of apiextensions' RESTOptions getters with project-aware storage.
+func makeExtensionsProjectAware(config CompletedConfig, bootstrapper *projectstorage.NamespaceBootstrapper) {
+	ext := config.APIExtensions
+	ext.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
+		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config))
+	ext.ExtraConfig.CRDRESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
+		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config))
+}
+
 // CreateServerChain creates the apiservers connected via delegation
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 
 	bootstrapper := projectstorage.NewNamespaceBootstrapper(config.ControlPlane.Generic.LoopbackClientConfig, projectNamespaceBootstrapTimeout)
-
-	config.APIExtensions.GenericConfig.RESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper)
-
-	config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter =
-		projectstorage.WithProjectAwareDecoratorAndBootstrapper(config.APIExtensions.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper)
+	makeExtensionsProjectAware(config, bootstrapper)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
@@ -405,7 +416,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 
 	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
 	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates))
+		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config)))
 	}
 
 	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {
