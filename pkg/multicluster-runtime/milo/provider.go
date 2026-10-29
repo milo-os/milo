@@ -65,6 +65,9 @@ type Options struct {
 	// ClusterOptions are the options passed to the cluster constructor.
 	ClusterOptions []cluster.Option
 
+	// PrestartInformers are created before a project's cache starts, so they sync together.
+	PrestartInformers []client.Object
+
 	// InternalServiceDiscovery will result in the provider to look for
 	// ProjectControlPlane resources in the local manager's cluster, and establish
 	// a connection via the internal service address. Otherwise, the provider will
@@ -297,11 +300,9 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 		log.Error(err, "Failed to create cluster object", "key", key, "endpoint", cfg.Host)
 		return ctrl.Result{}, fmt.Errorf("failed to create cluster: %w", err)
 	}
-	for _, idx := range indexers {
-		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
-			log.Error(err, "Failed to setup cache index field", "key", key, "field", idx.field)
-			return ctrl.Result{}, fmt.Errorf("failed to index field %q: %w", idx.field, err)
-		}
+	if err := p.prepareCache(ctx, cl, indexers); err != nil {
+		log.Error(err, "Failed to prepare cluster cache", "key", key)
+		return ctrl.Result{}, err
 	}
 
 	log.Info("Starting cluster cache", "key", key)
@@ -340,6 +341,23 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	log.Info("Successfully registered and engaged new cluster", "key", key, "endpoint", cfg.Host)
 
 	return ctrl.Result{}, nil
+}
+
+// prepareCache adds the indexers and creates the PrestartInformers before the
+// project's cache starts, so its informers sync together. An informer created
+// after the start would wait for its own sync inside Engage, one after another.
+func (p *Provider) prepareCache(ctx context.Context, cl cluster.Cluster, indexers []index) error {
+	for _, idx := range indexers {
+		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
+			return fmt.Errorf("failed to index field %q: %w", idx.field, err)
+		}
+	}
+	for _, obj := range p.opts.PrestartInformers {
+		if _, err := cl.GetCache().GetInformer(ctx, obj); err != nil {
+			return fmt.Errorf("failed to create informer: %w", err)
+		}
+	}
+	return nil
 }
 
 // syncProjectCache waits for a project cluster's cache to sync, within the
