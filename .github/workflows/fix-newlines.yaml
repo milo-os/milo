@@ -74,11 +74,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           FIXED_COUNT: ${{ steps.fix.outputs.fixed_count }}
         run: |
-          mapfile -t FILES < <(git diff --name-only)
+          SIGN_COMMIT="$RUNNER_TEMP/sign-commit"
+          gh api -H "Accept: application/vnd.github.raw+json" "repos/${GITHUB_REPOSITORY}/contents/scripts/sign-commit?ref=${BASE_SHA}" > "$SIGN_COMMIT"
+          chmod +x "$SIGN_COMMIT"
+          EXPECTED_HEAD=$(git rev-parse HEAD)
+          export EXPECTED_HEAD
           MESSAGE=$(printf 'chore: add missing newlines at end of files\n\nAutomatically added newlines to %s file(s)' "$FIXED_COUNT")
-          scripts/sign-commit "$BRANCH" "$MESSAGE" "${FILES[@]}"
+          git diff -z --name-only | "$SIGN_COMMIT" -z "$BRANCH" "$MESSAGE"
 
       - name: Comment on PR
         if: steps.fix.outputs.has_changes == 'true'
