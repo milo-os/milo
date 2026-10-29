@@ -112,6 +112,10 @@ func ensureCreatorEditorPolicyBinding(
 
 	log.Info("Creating creator PolicyBinding", "policyBinding", bindingName, "namespace", policyBindingNamespace, "user", creator.Name)
 	if err := c.Create(ctx, policyBinding); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// The cache has not seen the binding yet; its own event reconciles the note again.
+			return false, "Waiting for PolicyBinding to be reconciled", nil
+		}
 		return false, "", fmt.Errorf("failed to create creator PolicyBinding: %w", err)
 	}
 
