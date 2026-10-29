@@ -71,16 +71,14 @@ jobs:
 
       - name: Commit changes
         if: steps.fix.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref }}
+          FIXED_COUNT: ${{ steps.fix.outputs.fixed_count }}
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .
-          git commit -m "chore: add missing newlines at end of files
-
-          🤖 Automatically added newlines to ${{ steps.fix.outputs.fixed_count }} file(s)
-
-          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-          git push
+          mapfile -t FILES < <(git diff --name-only)
+          MESSAGE=$(printf 'chore: add missing newlines at end of files\n\nAutomatically added newlines to %s file(s)' "$FIXED_COUNT")
+          scripts/sign-commit "$BRANCH" "$MESSAGE" "${FILES[@]}"
 
       - name: Comment on PR
         if: steps.fix.outputs.has_changes == 'true'
