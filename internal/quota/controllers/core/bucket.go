@@ -74,9 +74,11 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 	}
 	clusterClient := cluster.GetClient()
 
-	// Get the AllowanceBucket
+	// Read the bucket directly: a watch-cache read can lag our last reservation
+	// or status update. Keep resource-version checks on writes so a genuine
+	// concurrent reservation still stops this reconcile.
 	var bucket quotav1alpha1.AllowanceBucket
-	if err := clusterClient.Get(ctx, req.NamespacedName, &bucket); err != nil {
+	if err := cluster.GetAPIReader().Get(ctx, req.NamespacedName, &bucket); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Single-writer pattern: create bucket on first claim reference
 			if err := r.ensureBucketFromClaims(ctx, clusterClient, req.NamespacedName); err != nil {

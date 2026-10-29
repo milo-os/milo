@@ -26,9 +26,16 @@ import (
 type fakeCluster struct {
 	cluster.Cluster
 	client client.Client
+	reader client.Reader
 }
 
 func (c fakeCluster) GetClient() client.Client { return c.client }
+func (c fakeCluster) GetAPIReader() client.Reader {
+	if c.reader != nil {
+		return c.reader
+	}
+	return c.client
+}
 
 type fakeManager struct {
 	mcmanager.Manager
@@ -119,4 +126,33 @@ func TestAllowanceBucketReconcileStopsAtReservationConflict(t *testing.T) {
 	assert.True(t, apierrors.IsConflict(err), "expected a conflict error so the workqueue retries with backoff, got %v", err)
 	assert.Equal(t, 1, bucketStatusUpdates, "the reconcile must stop at the conflicting reservation instead of writing the stale bucket again")
 	assert.Zero(t, claimStatusPatches, "the claim must not be granted when the reservation was not written")
+}
+
+// A queued event may run before the informer observes our preceding status write.
+// The live bucket's resource version must be used, without weakening the write CAS.
+func TestAllowanceBucketReconcileReadsCurrentBucket(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 1, Available: 1}}
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bucket).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
+		return []string{consumerRefKey(obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef)}
+	}).Build()
+	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
+	stale := bucket.DeepCopy()
+	bucket.Status.Limit = 2
+	bucket.Status.Available = 2
+	require.NoError(t, live.Status().Update(ctx, bucket))
+	cached := interceptor.NewClient(live, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if b, ok := obj.(*quotav1alpha1.AllowanceBucket); ok {
+			*b = *stale.DeepCopy()
+			return nil
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: fakeCluster{client: cached, reader: live}}}
+	_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
+	assert.Zero(t, bucket.Status.Limit, "no active grants remain")
 }
