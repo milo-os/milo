@@ -19,6 +19,11 @@ func TestProjectCacheSyncTimeoutRejectsNegative(t *testing.T) {
 	require.ErrorContains(t, err, "must not be negative")
 }
 
+func TestMaxConcurrentReconcilesRejectsNegative(t *testing.T) {
+	_, err := New(nil, Options{MaxConcurrentReconciles: -1})
+	require.ErrorContains(t, err, "must not be negative")
+}
+
 func TestProjectCacheSyncTimeoutCancelsFailedCache(t *testing.T) {
 	for _, timeout := range []time.Duration{0, 10 * time.Millisecond} {
 		t.Run(timeout.String(), func(t *testing.T) {
