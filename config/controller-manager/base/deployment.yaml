@@ -80,6 +80,16 @@ spec:
             value: 10s
           - name: LEADER_ELECT_RETRY_PERIOD
             value: 2s
+          # The leader marks its own pod with a deletion cost, so a rollout
+          # deletes the standby's pod first and moves the lease once.
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
           # Default to INFO level logging
           - name: LOG_LEVEL
             value: "4"
