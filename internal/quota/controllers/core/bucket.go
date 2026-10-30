@@ -121,9 +121,9 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 // Searches cluster-wide because buckets are centralized but grants may be distributed.
 func (r *AllowanceBucketController) updateLimitsFromGrants(ctx context.Context, clusterClient client.Reader, bucket *quotav1alpha1.AllowanceBucket) error {
 
-	// Centralized buckets require scanning all namespaces for grants
+	// Grants may span namespaces, but only this consumer contributes to the limit.
 	var grants quotav1alpha1.ResourceGrantList
-	if err := clusterClient.List(ctx, &grants); err != nil {
+	if err := clusterClient.List(ctx, &grants, client.MatchingFields{"spec.consumerRef.kind": bucket.Spec.ConsumerRef.Kind, "spec.consumerRef.name": bucket.Spec.ConsumerRef.Name}); err != nil {
 		return fmt.Errorf("failed to list ResourceGrants: %w", err)
 	}
 

@@ -95,6 +95,12 @@ func TestAllowanceBucketReconcileStopsAtReservationConflict(t *testing.T) {
 	claimStatusPatches := 0
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Name}
+		}).
 		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
 			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
 		}).
@@ -142,6 +148,12 @@ func TestAllowanceBucketReconcileReadsCurrentBucket(t *testing.T) {
 	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
 	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 1, Available: 1}}
 	live := fake.NewClientBuilder().WithScheme(scheme).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Name}
+		}).
 		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
 			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
 		}).
@@ -182,6 +194,12 @@ func TestAllowanceBucketDoesNotReserveFromStaleClaims(t *testing.T) {
 	pending.Name = "second"
 	pending.Status = quotav1alpha1.ResourceClaimStatus{}
 	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bucket, grant, granted, pending).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Name}
+		}).
 		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
 			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
 		}).
@@ -214,4 +232,34 @@ func TestAllowanceBucketDoesNotReserveFromStaleClaims(t *testing.T) {
 	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
 	assert.EqualValues(t, 1, bucket.Status.Allocated)
 	assert.Zero(t, bucket.Status.Available)
+}
+
+// Live grant reads must stay scoped as the number of project consumers grows.
+func TestAllowanceBucketGrantReadIsConsumerScoped(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	bucket := &quotav1alpha1.AllowanceBucket{Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}}
+	reader := interceptor.NewClient(fake.NewClientBuilder().WithScheme(scheme).Build(), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			options := (&client.ListOptions{}).ApplyOptions(opts)
+			require.NotNil(t, options.FieldSelector, "avoid fetching every consumer's grants")
+			kind, ok := options.FieldSelector.RequiresExactMatch("spec.consumerRef.kind")
+			require.True(t, ok)
+			require.Equal(t, consumer.Kind, kind)
+			name, ok := options.FieldSelector.RequiresExactMatch("spec.consumerRef.name")
+			require.True(t, ok)
+			require.Equal(t, consumer.Name, name)
+			assert.Empty(t, options.Namespace, "consumer grants may span namespaces")
+			list.(*quotav1alpha1.ResourceGrantList).Items = []quotav1alpha1.ResourceGrant{{
+				ObjectMeta: metav1.ObjectMeta{Name: "grant"},
+				Spec:       quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: "example/count", Buckets: []quotav1alpha1.Bucket{{Amount: 7}}}}},
+				Status:     quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}},
+			}}
+			return nil
+		},
+	})
+	require.NoError(t, (&AllowanceBucketController{}).updateLimitsFromGrants(context.Background(), reader, bucket))
+	assert.EqualValues(t, 7, bucket.Status.Limit)
+	assert.EqualValues(t, 1, bucket.Status.GrantCount)
 }
