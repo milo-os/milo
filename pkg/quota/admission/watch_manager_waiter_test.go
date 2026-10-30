@@ -66,6 +66,7 @@ func TestClaimWaiterCancelKeepsANewerWaiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	older.Cancel()
 	newer, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -229,4 +230,65 @@ func claimObject(name, namespace string, uid types.UID) *unstructured.Unstructur
 	claim.SetNamespace(namespace)
 	claim.SetUID(uid)
 	return claim
+}
+
+func TestDuplicateClaimWaiterPreservesInFlightRequest(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	original := registerWaiter(t, w)
+	original.Bind("own")
+	if _, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour); err == nil {
+		t.Fatal("duplicate waiter replaced original")
+	} else if failure, ok := asClaimFailure(err); !ok || failure.kind != claimFailureConflict {
+		t.Fatalf("expected retryable conflict, got %v", err)
+	}
+	w.handleClaimEvent(judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	if result, ok := pendingResult(original); !ok || !result.Granted {
+		t.Fatalf("original waiter lost outcome: %+v (%v)", result, ok)
+	}
+}
+
+func TestDeletedDeniedClaimPreservesQuotaDenial(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter.Bind("own")
+	claim := judgedClaim("claim", "default", "own", false, quotav1alpha1.ResourceClaimDeniedReason)
+	w.handleClaimDeletion(claim)
+	result, ok := pendingResult(waiter)
+	if !ok || result.Error != nil || result.Granted || result.Reason != quotav1alpha1.ResourceClaimDeniedReason {
+		t.Fatalf("got %+v (%v), want quota denial", result, ok)
+	}
+}
+
+func TestDeletedGrantDoesNotAdmitRequest(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter.Bind("own")
+	w.handleClaimDeletion(judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	result, ok := pendingResult(waiter)
+	if !ok || result.Error == nil || result.Granted {
+		t.Fatalf("deleted capacity must not admit: %+v (%v)", result, ok)
+	}
+}
+
+func TestDeletedDenialForAnotherUIDDoesNotEndWaiter(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	waiter, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter.Bind("own")
+	w.handleClaimDeletion(judgedClaim("claim", "default", "older", false, quotav1alpha1.ResourceClaimDeniedReason))
+	if result, ok := pendingResult(waiter); ok {
+		t.Fatalf("old claim ended new waiter: %+v", result)
+	}
 }

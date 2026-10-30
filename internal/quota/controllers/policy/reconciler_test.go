@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -154,13 +155,13 @@ func newClaimPolicy(name string, generation int64) *quotav1alpha1.ClaimCreationP
 						Name:      "test-claim",
 						Namespace: "default",
 					},
-					Spec: quotav1alpha1.ResourceClaimSpec{
+					Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 						ConsumerRef: quotav1alpha1.ConsumerRef{
 							APIGroup: "test",
 							Kind:     "Test",
 							Name:     "test",
 						},
-						Requests: []quotav1alpha1.ResourceRequest{
+						Requests: []quotav1alpha1.ResourceRequestTemplate{
 							{ResourceType: "cpu", Amount: 1},
 						},
 					},
@@ -204,8 +205,13 @@ func setupClaimReconciler(t *testing.T, objs ...client.Object) (*ClaimCreationPo
 	scheme := testScheme()
 	c := newFakeClient(scheme, objs...)
 
+	celValidator, err := validation.NewCELValidator()
+	if err != nil {
+		t.Fatalf("Failed to create CEL validator: %v", err)
+	}
+
 	rtv := &noopResourceTypeValidator{}
-	pv := validation.NewClaimCreationPolicyValidator(rtv)
+	pv := validation.NewClaimCreationPolicyValidator(celValidator, rtv)
 
 	mgr := &testManager{cluster: &testCluster{client: c}}
 
@@ -394,5 +400,29 @@ func TestGrantCreationPolicyReconciler_ObservedGenerationSetOnValidationFailure(
 	readyCond := meta.FindStatusCondition(after.Status.Conditions, quotav1alpha1.GrantCreationPolicyReady)
 	if readyCond == nil || readyCond.Status != metav1.ConditionFalse {
 		t.Errorf("Expected Ready=False on validation failure, got %v", readyCond)
+	}
+}
+
+func TestClaimCreationPolicyReconciler_NotReadyOnInvalidRequestCondition(t *testing.T) {
+	policy := newClaimPolicy("test-policy", 1)
+	policy.Spec.Target.ResourceClaimTemplate.Spec.Requests[0].Condition = "trigger.spec.ipFamily"
+	reconciler, c := setupClaimReconciler(t, policy)
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, reconcileRequest("test-policy")); err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+
+	var after quotav1alpha1.ClaimCreationPolicy
+	if err := c.Get(ctx, types.NamespacedName{Name: "test-policy"}, &after); err != nil {
+		t.Fatalf("Failed to get policy: %v", err)
+	}
+
+	readyCond := meta.FindStatusCondition(after.Status.Conditions, quotav1alpha1.ClaimCreationPolicyReady)
+	if readyCond == nil || readyCond.Status != metav1.ConditionFalse || readyCond.Reason != quotav1alpha1.ClaimCreationPolicyValidationFailedReason {
+		t.Fatalf("Expected Ready=False with reason %s, got %v", quotav1alpha1.ClaimCreationPolicyValidationFailedReason, readyCond)
+	}
+	if !strings.Contains(readyCond.Message, "requests[0].condition") {
+		t.Errorf("Expected Ready message to name the condition field, got %q", readyCond.Message)
 	}
 }
