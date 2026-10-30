@@ -1,0 +1,8 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: access-rejection-test-user
+spec:
+  email: rejection.user@example.com
+  givenName: Rejection
+  familyName: User
