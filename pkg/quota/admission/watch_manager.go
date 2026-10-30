@@ -852,6 +852,13 @@ func (w *watchManager) handleClaimDeletion(obj interface{}) {
 		return
 	}
 
+	// Cleanup can delete a denied claim before its final update is delivered.
+	// Preserve a denial carried by the delete event, still bound to this UID.
+	if result := w.evaluateClaimStatus(unstructuredObj); result != nil && !result.Granted {
+		w.offer(key, waiter, unstructuredObj.GetUID(), *result, "denied")
+		return
+	}
+
 	// Claim was deleted - notify waiter, if it is the waiter's own claim
 	w.offer(key, waiter, unstructuredObj.GetUID(), ClaimResult{
 		Granted: false,
