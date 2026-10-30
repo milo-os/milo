@@ -95,6 +95,12 @@ func TestAllowanceBucketReconcileStopsAtReservationConflict(t *testing.T) {
 	claimStatusPatches := 0
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Name}
+		}).
 		WithObjects(bucket, grant, claim).
 		WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}, &quotav1alpha1.ResourceClaim{}).
 		WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
@@ -135,7 +141,13 @@ func TestAllowanceBucketReconcileReadsCurrentBucket(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
 	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 1, Available: 1}}
-	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bucket).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
+	live := fake.NewClientBuilder().WithScheme(scheme).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Name}
+		}).WithObjects(bucket).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
 		return []string{consumerRefKey(obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef)}
 	}).Build()
 	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
@@ -155,4 +167,51 @@ func TestAllowanceBucketReconcileReadsCurrentBucket(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
 	assert.Zero(t, bucket.Status.Limit, "no active grants remain")
+}
+
+func TestAllowanceBucketDoesNotReserveFromStaleClaims(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	resourceType := "example/count"
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: resourceType}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 1, Allocated: 1}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: resourceType, Buckets: []quotav1alpha1.Bucket{{Amount: 1}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	granted := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: "first"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: resourceType, Amount: 1}}}, Status: quotav1alpha1.ResourceClaimStatus{Allocations: []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: resourceType, Status: quotav1alpha1.ResourceClaimAllocationStatusGranted, AllocatedAmount: 1, AllocatingBucket: "bucket"}}}}
+	pending := granted.DeepCopy()
+	pending.Name = "second"
+	pending.Status = quotav1alpha1.ResourceClaimStatus{}
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bucket, grant, granted, pending).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Name}
+		}).Build()
+	patches := 0
+	cached := interceptor.NewClient(live, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if claims, ok := list.(*quotav1alpha1.ResourceClaimList); ok {
+				old := granted.DeepCopy()
+				old.Status = quotav1alpha1.ResourceClaimStatus{}
+				claims.Items = []quotav1alpha1.ResourceClaim{*old, *pending}
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			claim := obj.(*quotav1alpha1.ResourceClaim)
+			patches++
+			assert.Equal(t, "second", claim.Name, "already granted claims must not be reserved again")
+			assert.Equal(t, quotav1alpha1.ResourceClaimAllocationStatusDenied, claim.Status.Allocations[0].Status, "the first claim already occupies all capacity")
+			return nil
+		},
+	})
+	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: fakeCluster{client: cached, reader: live}}}
+	_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.Equal(t, 1, patches)
+	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
+	assert.EqualValues(t, 1, bucket.Status.Allocated)
+	assert.Zero(t, bucket.Status.Available)
 }
