@@ -31,6 +31,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+	"go.miloapis.com/milo/pkg/quota"
 	"go.miloapis.com/milo/pkg/quota/engine"
 	"go.miloapis.com/milo/pkg/quota/validation"
 	milorequest "go.miloapis.com/milo/pkg/request"
@@ -866,8 +867,8 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 //     claimFailureConflict. The DeniedAutoClaimCleanupController will remove
 //     the stale claim shortly; the user should retry.
 //   - Pending / no condition → returns a conflict while younger than five
-//     minutes; deletes an abandoned claim with identity/version preconditions and proceeds to
-//     Create a fresh one. This covers claims left behind by a previous
+//     minutes; deletes an abandoned claim with identity/version preconditions
+//     before creating a fresh one. This covers claims left behind by a previous
 //     admission timeout.
 //
 // Any non-NotFound Get error falls through to Create so that transient API
@@ -973,13 +974,13 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 			// A pending claim can belong to a request still being evaluated.
 			// Match the lifecycle controller's five-minute abandonment window.
 			createdAt := existing.GetCreationTimestamp()
-			if createdAt.IsZero() || time.Since(createdAt.Time) < 5*time.Minute {
+			if createdAt.IsZero() || time.Since(createdAt.Time) < quota.DefaultStalePendingClaimAge {
 				return "", newConflictFailure("concurrent quota evaluation in progress", nil)
 			}
 			// Stale pending claim - delete so we can create a fresh one. This
 			// mirrors what the stale-claim GC controller would eventually do,
-			// but doing it inline allows the current admission request to
-			// succeed on the fresh claim.
+			// after the abandonment window, an inline delete lets this retry
+			// evaluate a fresh claim.
 			claimResolutionTotal.WithLabelValues("deleted_pending").Inc()
 			if delErr := client.Resource(gvr).Namespace(namespace).Delete(ctx, claimName, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: ptr.To(existing.GetUID()), ResourceVersion: ptr.To(existing.GetResourceVersion())}}); delErr != nil && !errors.IsNotFound(delErr) {
 				p.logger.Info("Failed to delete stale pending ResourceClaim before retry",
