@@ -66,6 +66,7 @@ func TestClaimWaiterCancelKeepsANewerWaiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	older.Cancel()
 	newer, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -229,4 +230,20 @@ func claimObject(name, namespace string, uid types.UID) *unstructured.Unstructur
 	claim.SetNamespace(namespace)
 	claim.SetUID(uid)
 	return claim
+}
+
+func TestDuplicateClaimWaiterPreservesInFlightRequest(t *testing.T) {
+	w := startedWatchManager(t)
+	defer w.Stop()
+	original := registerWaiter(t, w)
+	original.Bind("own")
+	if _, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour); err == nil {
+		t.Fatal("duplicate waiter replaced original")
+	} else if failure, ok := asClaimFailure(err); !ok || failure.kind != claimFailureConflict {
+		t.Fatalf("expected retryable conflict, got %v", err)
+	}
+	w.handleClaimEvent(judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	if result, ok := pendingResult(original); !ok || !result.Granted {
+		t.Fatalf("original waiter lost outcome: %+v (%v)", result, ok)
+	}
 }

@@ -28,6 +28,7 @@ import (
 	"k8s.io/component-base/metrics"
 	legacyregistry "k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 	"go.miloapis.com/milo/pkg/quota/engine"
@@ -734,6 +735,9 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to register waiter")
+		if failure, ok := asClaimFailure(err); ok {
+			return failure
+		}
 		return newInternalFailure(fmt.Errorf("failed to register waiter: %w", err))
 	}
 	defer waiter.Cancel()
@@ -861,7 +865,8 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 //   - Denied (Granted=False, reason=QuotaExceeded) → returns a
 //     claimFailureConflict. The DeniedAutoClaimCleanupController will remove
 //     the stale claim shortly; the user should retry.
-//   - Pending / no condition → deletes the stale claim and falls through to
+//   - Pending / no condition → returns a conflict while younger than five
+//     minutes; deletes an abandoned claim with identity/version preconditions and proceeds to
 //     Create a fresh one. This covers claims left behind by a previous
 //     admission timeout.
 //
@@ -965,12 +970,18 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 			denialMsg := extractGrantedConditionMessage(existing)
 			return "", newConflictFailure(denialMsg, nil)
 		case existingClaimPending:
+			// A pending claim can belong to a request still being evaluated.
+			// Match the lifecycle controller's five-minute abandonment window.
+			createdAt := existing.GetCreationTimestamp()
+			if createdAt.IsZero() || time.Since(createdAt.Time) < 5*time.Minute {
+				return "", newConflictFailure("concurrent quota evaluation in progress", nil)
+			}
 			// Stale pending claim - delete so we can create a fresh one. This
 			// mirrors what the stale-claim GC controller would eventually do,
 			// but doing it inline allows the current admission request to
 			// succeed on the fresh claim.
 			claimResolutionTotal.WithLabelValues("deleted_pending").Inc()
-			if delErr := client.Resource(gvr).Namespace(namespace).Delete(ctx, claimName, metav1.DeleteOptions{}); delErr != nil && !errors.IsNotFound(delErr) {
+			if delErr := client.Resource(gvr).Namespace(namespace).Delete(ctx, claimName, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: ptr.To(existing.GetUID()), ResourceVersion: ptr.To(existing.GetResourceVersion())}}); delErr != nil && !errors.IsNotFound(delErr) {
 				p.logger.Info("Failed to delete stale pending ResourceClaim before retry",
 					"claimName", claimName,
 					"namespace", namespace,
