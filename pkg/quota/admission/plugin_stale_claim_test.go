@@ -71,7 +71,15 @@ func retryOverStaleClaim(t *testing.T, grantFresh, staleGrantedLate bool) error 
 		t.Fatal(err)
 	}
 	stale := judgedClaim(claimName, namespace, staleClaimUID, false, quotav1alpha1.ResourceClaimPendingReason)
+	stale.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-10 * time.Minute)))
 	client := fake.NewSimpleDynamicClient(scheme, stale)
+	client.PrependReactor("delete", "resourceclaims", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		pre := action.(clienttesting.DeleteAction).GetDeleteOptions().Preconditions
+		if pre == nil || pre.UID == nil || *pre.UID != stale.GetUID() || pre.ResourceVersion == nil || *pre.ResourceVersion != stale.GetResourceVersion() {
+			t.Error("stale cleanup must bind deletion to inspected UID and resource version")
+		}
+		return false, nil, nil
+	})
 	// The API server gives a created object a UID of its own.
 	client.PrependReactor("create", "resourceclaims", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		action.(clienttesting.CreateAction).GetObject().(*unstructured.Unstructured).SetUID(freshClaimUID)
@@ -169,5 +177,30 @@ func deploymentAttrs(name, namespace string) *testAdmissionAttributes {
 		name:      name,
 		namespace: namespace,
 		userInfo:  &user.DefaultInfo{Name: "test-user"},
+	}
+}
+
+func TestConcurrentRequestDoesNotDeletePendingClaim(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := quotav1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	claim := judgedClaim("fixed-claim", "default", staleClaimUID, false, quotav1alpha1.ResourceClaimPendingReason)
+	claim.SetCreationTimestamp(metav1.Now())
+	client := fake.NewSimpleDynamicClient(scheme, claim)
+	plugin := newStaleClaimPlugin(t, client, "fixed-claim")
+	defer func() {
+		if wm, ok := plugin.watchManagers.Load(""); ok {
+			wm.(*watchManager).Stop()
+		}
+	}()
+	err := plugin.Validate(context.Background(), deploymentAttrs("test-deployment", "default"), nil)
+	if err == nil {
+		t.Fatal("pending claim must not admit another request")
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "delete" {
+			t.Fatal("concurrent request deleted an in-flight claim")
+		}
 	}
 }

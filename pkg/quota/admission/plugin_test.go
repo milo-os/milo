@@ -1715,10 +1715,11 @@ func existingClaim(name, namespace string, granted *bool, reason, message string
 		"quota.miloapis.com/created-by": "claim-creation-plugin",
 	}
 	meta := map[string]interface{}{
-		"name":        name,
-		"namespace":   namespace,
-		"labels":      labels,
-		"annotations": annotations,
+		"name":              name,
+		"namespace":         namespace,
+		"labels":            labels,
+		"annotations":       annotations,
+		"creationTimestamp": time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339),
 	}
 	obj := map[string]interface{}{
 		"apiVersion": "quota.miloapis.com/v1alpha1",
