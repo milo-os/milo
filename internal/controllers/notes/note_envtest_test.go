@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notesv1alpha1 "go.miloapis.com/milo/pkg/apis/notes/v1alpha1"
@@ -37,6 +42,7 @@ const (
 
 type noteEnv struct {
 	ctx    context.Context
+	cfg    *rest.Config
 	client client.WithWatch // reads and writes through the API server
 	user   *iamv1alpha1.User
 }
@@ -51,7 +57,7 @@ func TestCreatorEditorPolicyBinding(t *testing.T) {
 	t.Run("a new Note's binding names its namespace, and the Note is Ready once the binding is", func(t *testing.T) {
 		note := env.note(t, "new")
 		_, err := env.reconcile(note)
-		require.Error(t, err, "the binding is not Ready yet")
+		require.NoError(t, err, "a binding that is not Ready yet is a wait, not a failure")
 
 		pb := env.binding(t, note)
 		require.Equal(t, noteNamespace, pb.Spec.ResourceSelector.ResourceRef.Namespace)
@@ -61,25 +67,59 @@ func TestCreatorEditorPolicyBinding(t *testing.T) {
 		require.True(t, env.noteReady(t, note))
 	})
 
+	t.Run("a wait for the binding is no error and no requeue: the Note's Ready condition reports it", func(t *testing.T) {
+		note := env.note(t, "waits")
+		res, err := env.reconcile(note)
+		require.NoError(t, err, "a wait is not counted as a reconcile error")
+		require.Zero(t, res, "the binding's own change starts the next reconcile, through the watch on it")
+		require.False(t, env.noteReady(t, note))
+		require.Equal(t, "PolicyBindingNotReady", env.readyReason(t, note))
+	})
+
+	t.Run("a status write from an older read of the note does not conflict", func(t *testing.T) {
+		for _, note := range []NoteResource{env.note(t, "older-read"), env.clusterNote(t, "older-read")} {
+			// The note as an informer cache can still hold it after the controller's own status write.
+			older := note.DeepCopyObject().(client.Object)
+			_, err := env.reconcile(note)
+			require.NoError(t, err)
+			env.markReady(t, env.binding(t, note))
+
+			_, err = env.reconcileWith(env.staleReader(older), note)
+			require.NoError(t, err, "%s: the note controllers are the status's only writer, so an older read must not "+
+				"make it conflict", note.GetNoteKind())
+			require.True(t, env.ready(note), note.GetNoteKind())
+		}
+	})
+
+	t.Run("a create that meets a binding the cache has not seen yet is a wait", func(t *testing.T) {
+		note := env.note(t, "unseen")
+		env.plantBinding(t, note, withNamespace(note), true)
+
+		_, err := env.reconcileWith(env.unseenReader(), note)
+		require.NoError(t, err, "AlreadyExists here means the cache lags; the binding's own event reconciles the note")
+		require.False(t, env.noteReady(t, note))
+	})
+
 	t.Run("F1-F4 a binding made without the namespace is deleted by its UID, waited for, and made again", func(t *testing.T) {
 		note := env.note(t, "broken")
 		old := env.plantBinding(t, note, withoutNamespace(note), true, providerFinalizer)
 
 		_, err := env.reconcile(note)
-		require.Error(t, err, "F1 the Note is not Ready while its binding is replaced")
+		require.NoError(t, err, "F1 the replacement is a wait, not a failure")
+		require.False(t, env.noteReady(t, note), "F1 the Note is not Ready while its binding is replaced")
 		held := env.binding(t, note)
 		require.Equal(t, old.UID, held.UID)
 		require.NotNil(t, held.DeletionTimestamp, "F1 the old binding is deleted")
 
 		_, err = env.reconcile(note)
-		require.Error(t, err, "F2 the Note waits while the provider holds the old binding")
+		require.NoError(t, err, "F2 the Note waits while the provider holds the old binding")
 		require.Equal(t, old.UID, env.binding(t, note).UID, "F2 nothing is made while the old binding is deleting")
 		require.Equal(t, "Waiting for the out-of-date PolicyBinding to be deleted", env.readyMessage(t, note),
 			"F2 no second delete")
 
 		env.release(t, held)
 		_, err = env.reconcile(note)
-		require.Error(t, err, "F3 the new binding is not Ready yet")
+		require.NoError(t, err, "F3 the new binding is not Ready yet: a wait")
 		made := env.binding(t, note)
 		require.NotEqual(t, old.UID, made.UID)
 		require.Equal(t, noteNamespace, made.Spec.ResourceSelector.ResourceRef.Namespace, "F3")
@@ -116,47 +156,125 @@ func TestCreatorEditorPolicyBinding(t *testing.T) {
 		require.Equal(t, "Replacing PolicyBinding with an out-of-date resource selector", env.readyMessage(t, note))
 
 		_, err = env.reconcile(note)
-		require.Error(t, err, "the new binding is not Ready yet")
+		require.NoError(t, err, "the new binding is not Ready yet: a wait")
 		require.Equal(t, noteNamespace, env.binding(t, note).Spec.ResourceSelector.ResourceRef.Namespace)
 	})
 
 	t.Run("F7 a same-named binding the Note does not own is never deleted", func(t *testing.T) {
 		note := env.note(t, "foreign")
 		foreign := env.plantBinding(t, note, withoutNamespace(note), false)
-		env.reconcileTwiceKeeps(t, note, foreign, "not Ready, as before the fix")
+		env.reconcileTwiceKeeps(t, note, foreign)
+		require.False(t, env.noteReady(t, note), "not Ready, as before the fix")
 	})
 
 	t.Run("F8 a correct binding is never written", func(t *testing.T) {
 		note := env.note(t, "correct")
 		pb := env.plantBinding(t, note, withNamespace(note), true)
 		env.markReady(t, pb)
-		env.reconcileTwiceKeeps(t, note, pb, "")
+		env.reconcileTwiceKeeps(t, note, pb)
 		require.True(t, env.noteReady(t, note))
 	})
 
 	t.Run("F9 a ClusterNote's binding names no namespace and is never replaced", func(t *testing.T) {
 		cn := env.clusterNote(t, "cluster")
 		_, err := env.reconcile(cn)
-		require.Error(t, err, "the binding is not Ready yet")
+		require.NoError(t, err, "a binding that is not Ready yet is a wait, not a failure")
 		pb := env.binding(t, cn)
 		require.Empty(t, pb.Spec.ResourceSelector.ResourceRef.Namespace)
 		env.markReady(t, pb)
-		env.reconcileTwiceKeeps(t, cn, pb, "")
+		env.reconcileTwiceKeeps(t, cn, pb)
 	})
 }
 
-// reconcileTwiceKeeps reconciles the note twice and asserts that the binding is the same object, unwritten and not
-// deleting. wantErr is the reason the reconcile fails, or empty when it must succeed.
-func (e *noteEnv) reconcileTwiceKeeps(t *testing.T, note NoteResource, pb *iamv1alpha1.PolicyBinding, wantErr string) {
+// TestNoteControllersWatchTheirBinding runs both note controllers in a manager, through their own SetupWithManager, as
+// the controller manager does. The binding stays not Ready for a while, then a test marks it Ready as the provider
+// would. A wait is no error and asks for no requeue, so only the watch on the binding can bring a note to Ready; without
+// it the note never gets there. No wait, and no race between the controller's writes and its cache, may count as a
+// reconcile error.
+func TestNoteControllersWatchTheirBinding(t *testing.T) {
+	env := startNoteEnv(t)
+	env.startManager(t)
+	notes := []NoteResource{env.note(t, "watched"), env.clusterNote(t, "watched")}
+
+	var bindings []*iamv1alpha1.PolicyBinding
+	for _, note := range notes {
+		bindings = append(bindings, env.eventuallyBinding(t, note))
+	}
+	time.Sleep(bindingHold)
+	for i, note := range notes {
+		require.False(t, env.ready(note), "%s is not Ready while its binding is not", note.GetNoteKind())
+		env.markReady(t, bindings[i])
+		marked := time.Now()
+		require.Eventually(t, func() bool { return env.ready(note) }, readyWithin, 5*time.Millisecond,
+			"%s follows its binding through the watch", note.GetNoteKind())
+		t.Logf("%s Ready %d ms after its binding", note.GetNoteKind(), time.Since(marked).Milliseconds())
+	}
+	require.Zero(t, reconcileErrors(t, "note"), "a Note's wait is not a reconcile error")
+	require.Zero(t, reconcileErrors(t, "clusternote"), "a ClusterNote's wait is not a reconcile error")
+}
+
+const (
+	// bindingHold is how long the test keeps a binding not Ready: long enough for a wait returned as an error to be
+	// retried, and so counted, many times.
+	bindingHold = 2 * time.Second
+	// readyWithin bounds the watch's delivery. It only absorbs a loaded machine: without the watch a note is never
+	// reconciled again, so no bound would let it pass.
+	readyWithin = 5 * time.Second
+)
+
+// startManager starts a manager with both note controllers, wired as the controller manager wires them.
+func (e *noteEnv) startManager(t *testing.T) {
+	t.Helper()
+	mgr, err := ctrl.NewManager(e.cfg, ctrl.Options{
+		Scheme:                 e.client.Scheme(),
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+	})
+	require.NoError(t, err)
+	require.NoError(t, (&NoteController{Client: mgr.GetClient(), CreatorEditorRoleName: creatorEditorRole,
+		CreatorEditorRoleNamespace: roleNamespace}).SetupWithManager(mgr))
+	require.NoError(t, (&ClusterNoteController{Client: mgr.GetClient(), CreatorEditorRoleName: creatorEditorRole,
+		CreatorEditorRoleNamespace: roleNamespace}).SetupWithManager(mgr))
+	go func() { _ = mgr.Start(e.ctx) }()
+}
+
+// eventuallyBinding waits for the controller to create the note's creator binding and returns it.
+func (e *noteEnv) eventuallyBinding(t *testing.T, note NoteResource) *iamv1alpha1.PolicyBinding {
+	t.Helper()
+	pb := &iamv1alpha1.PolicyBinding{}
+	require.Eventually(t, func() bool { return e.client.Get(e.ctx, bindingKey(note), pb) == nil },
+		10*time.Second, 20*time.Millisecond, "the controller creates %s's binding", note.GetNoteKind())
+	return pb
+}
+
+// reconcileErrors reads controller-runtime's reconcile error counter for one controller from its metrics registry.
+func reconcileErrors(t *testing.T, controller string) float64 {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "controller_runtime_reconcile_errors_total" {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			for _, label := range m.GetLabel() {
+				if label.GetName() == "controller" && label.GetValue() == controller {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// reconcileTwiceKeeps reconciles the note twice and asserts that each reconcile succeeds and that the binding is the
+// same object, unwritten and not deleting.
+func (e *noteEnv) reconcileTwiceKeeps(t *testing.T, note NoteResource, pb *iamv1alpha1.PolicyBinding) {
 	t.Helper()
 	before := e.binding(t, note)
 	for range 2 {
 		_, err := e.reconcile(note)
-		if wantErr == "" {
-			require.NoError(t, err)
-		} else {
-			require.Error(t, err, wantErr)
-		}
+		require.NoError(t, err)
 	}
 	after := e.binding(t, note)
 	require.Equal(t, pb.UID, after.UID)
@@ -202,7 +320,7 @@ func startNoteEnv(t *testing.T) *noteEnv {
 		Spec:       iamv1alpha1.UserSpec{Email: "creator@example.com"},
 	}
 	require.NoError(t, direct.Create(ctx, user))
-	return &noteEnv{ctx: ctx, client: direct, user: user}
+	return &noteEnv{ctx: ctx, cfg: cfg, client: direct, user: user}
 }
 
 func (e *noteEnv) note(t *testing.T, name string) *notesv1alpha1.Note {
@@ -233,14 +351,29 @@ func (e *noteEnv) clusterNote(t *testing.T, name string) *notesv1alpha1.ClusterN
 	return cn
 }
 
-// staleReader reads every PolicyBinding as stale, as an informer cache can until a later event reaches it; every
-// other read and every write goes to the API server.
-func (e *noteEnv) staleReader(stale *iamv1alpha1.PolicyBinding) client.Client {
+// staleReader reads every object of a stale copy's type as that copy, as an informer cache can until a later event
+// reaches it; every other read and every write goes to the API server.
+func (e *noteEnv) staleReader(stale ...client.Object) client.Client {
 	return interceptor.NewClient(e.client, interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if pb, ok := obj.(*iamv1alpha1.PolicyBinding); ok {
-				stale.DeepCopyInto(pb)
-				return nil
+			for _, s := range stale {
+				if reflect.TypeOf(s) == reflect.TypeOf(obj) {
+					reflect.ValueOf(obj).Elem().Set(reflect.ValueOf(s.DeepCopyObject()).Elem())
+					return nil
+				}
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+}
+
+// unseenReader reads every PolicyBinding as absent, as an informer cache does until the binding's create reaches it;
+// every other read and every write goes to the API server.
+func (e *noteEnv) unseenReader() client.Client {
+	return interceptor.NewClient(e.client, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*iamv1alpha1.PolicyBinding); ok {
+				return apierrors.NewNotFound(iamv1alpha1.SchemeGroupVersion.WithResource("policybindings").GroupResource(), key.Name)
 			}
 			return c.Get(ctx, key, obj, opts...)
 		},
@@ -358,6 +491,30 @@ func (e *noteEnv) noteReady(t *testing.T, note *notesv1alpha1.Note) bool {
 	t.Helper()
 	require.NoError(t, e.client.Get(e.ctx, client.ObjectKeyFromObject(note), note))
 	return meta.IsStatusConditionTrue(note.Status.Conditions, noteReadyConditionType)
+}
+
+// ready reads a Note or a ClusterNote again and reports whether its Ready condition is True; a failed read is false.
+// It asserts nothing, because require.Eventually calls it from another goroutine.
+func (e *noteEnv) ready(note NoteResource) bool {
+	if err := e.client.Get(e.ctx, client.ObjectKeyFromObject(note), note); err != nil {
+		return false
+	}
+	conditions := []metav1.Condition{}
+	switch n := note.(type) {
+	case *notesv1alpha1.Note:
+		conditions = n.Status.Conditions
+	case *notesv1alpha1.ClusterNote:
+		conditions = n.Status.Conditions
+	}
+	return meta.IsStatusConditionTrue(conditions, noteReadyConditionType)
+}
+
+func (e *noteEnv) readyReason(t *testing.T, note *notesv1alpha1.Note) string {
+	t.Helper()
+	require.NoError(t, e.client.Get(e.ctx, client.ObjectKeyFromObject(note), note))
+	cond := meta.FindStatusCondition(note.Status.Conditions, noteReadyConditionType)
+	require.NotNil(t, cond)
+	return cond.Reason
 }
 
 func (e *noteEnv) readyMessage(t *testing.T, note *notesv1alpha1.Note) string {

@@ -26,9 +26,16 @@ import (
 type fakeCluster struct {
 	cluster.Cluster
 	client client.Client
+	reader client.Reader
 }
 
 func (c fakeCluster) GetClient() client.Client { return c.client }
+func (c fakeCluster) GetAPIReader() client.Reader {
+	if c.reader != nil {
+		return c.reader
+	}
+	return c.client
+}
 
 type fakeManager struct {
 	mcmanager.Manager
@@ -88,6 +95,18 @@ func TestAllowanceBucketReconcileStopsAtReservationConflict(t *testing.T) {
 	claimStatusPatches := 0
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Name}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Name}
+		}).
 		WithObjects(bucket, grant, claim).
 		WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}, &quotav1alpha1.ResourceClaim{}).
 		WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
@@ -119,4 +138,128 @@ func TestAllowanceBucketReconcileStopsAtReservationConflict(t *testing.T) {
 	assert.True(t, apierrors.IsConflict(err), "expected a conflict error so the workqueue retries with backoff, got %v", err)
 	assert.Equal(t, 1, bucketStatusUpdates, "the reconcile must stop at the conflicting reservation instead of writing the stale bucket again")
 	assert.Zero(t, claimStatusPatches, "the claim must not be granted when the reservation was not written")
+}
+
+// A queued event may run before the informer observes our preceding status write.
+// The live bucket's resource version must be used, without weakening the write CAS.
+func TestAllowanceBucketReconcileReadsCurrentBucket(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 1, Available: 1}}
+	live := fake.NewClientBuilder().WithScheme(scheme).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Name}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Name}
+		}).WithObjects(bucket).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
+		return []string{consumerRefKey(obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef)}
+	}).Build()
+	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
+	stale := bucket.DeepCopy()
+	bucket.Status.Limit = 2
+	bucket.Status.Available = 2
+	require.NoError(t, live.Status().Update(ctx, bucket))
+	cached := interceptor.NewClient(live, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if b, ok := obj.(*quotav1alpha1.AllowanceBucket); ok {
+			*b = *stale.DeepCopy()
+			return nil
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: fakeCluster{client: cached, reader: live}}}
+	_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
+	assert.Zero(t, bucket.Status.Limit, "no active grants remain")
+}
+
+func TestAllowanceBucketDoesNotReserveFromStaleClaims(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	resourceType := "example/count"
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: resourceType}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 1, Allocated: 1}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: resourceType, Buckets: []quotav1alpha1.Bucket{{Amount: 1}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	granted := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: "first"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: resourceType, Amount: 1}}}, Status: quotav1alpha1.ResourceClaimStatus{Allocations: []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: resourceType, Status: quotav1alpha1.ResourceClaimAllocationStatusGranted, AllocatedAmount: 1, AllocatingBucket: "bucket"}}}}
+	pending := granted.DeepCopy()
+	pending.Name = "second"
+	pending.Status = quotav1alpha1.ResourceClaimStatus{}
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bucket, grant, granted, pending).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceGrant{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef.Name}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.kind", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Kind}
+		}).
+		WithIndex(&quotav1alpha1.ResourceClaim{}, "spec.consumerRef.name", func(obj client.Object) []string {
+			return []string{obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef.Name}
+		}).Build()
+	patches := 0
+	cached := interceptor.NewClient(live, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if claims, ok := list.(*quotav1alpha1.ResourceClaimList); ok {
+				old := granted.DeepCopy()
+				old.Status = quotav1alpha1.ResourceClaimStatus{}
+				claims.Items = []quotav1alpha1.ResourceClaim{*old, *pending}
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			claim := obj.(*quotav1alpha1.ResourceClaim)
+			patches++
+			assert.Equal(t, "second", claim.Name, "already granted claims must not be reserved again")
+			assert.Equal(t, quotav1alpha1.ResourceClaimAllocationStatusDenied, claim.Status.Allocations[0].Status, "the first claim already occupies all capacity")
+			return nil
+		},
+	})
+	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: fakeCluster{client: cached, reader: live}}}
+	_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.Equal(t, 1, patches)
+	require.NoError(t, live.Get(ctx, client.ObjectKeyFromObject(bucket), bucket))
+	assert.EqualValues(t, 1, bucket.Status.Allocated)
+	assert.Zero(t, bucket.Status.Available)
+}
+
+// Live grant reads must stay scoped as the number of project consumers grows.
+func TestAllowanceBucketGrantReadIsConsumerScoped(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	bucket := &quotav1alpha1.AllowanceBucket{Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}}
+	reader := interceptor.NewClient(fake.NewClientBuilder().WithScheme(scheme).Build(), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			options := (&client.ListOptions{}).ApplyOptions(opts)
+			require.NotNil(t, options.FieldSelector, "avoid fetching every consumer's grants")
+			kind, ok := options.FieldSelector.RequiresExactMatch("spec.consumerRef.kind")
+			require.True(t, ok)
+			require.Equal(t, consumer.Kind, kind)
+			name, ok := options.FieldSelector.RequiresExactMatch("spec.consumerRef.name")
+			require.True(t, ok)
+			require.Equal(t, consumer.Name, name)
+			assert.Empty(t, options.Namespace, "consumer grants may span namespaces")
+			list.(*quotav1alpha1.ResourceGrantList).Items = []quotav1alpha1.ResourceGrant{{
+				ObjectMeta: metav1.ObjectMeta{Name: "grant"},
+				Spec:       quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: "example/count", Buckets: []quotav1alpha1.Bucket{{Amount: 7}}}}},
+				Status:     quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}},
+			}}
+			return nil
+		},
+	})
+	require.NoError(t, (&AllowanceBucketController{}).updateLimitsFromGrants(context.Background(), reader, bucket))
+	assert.EqualValues(t, 7, bucket.Status.Limit)
+	assert.EqualValues(t, 1, bucket.Status.GrantCount)
 }

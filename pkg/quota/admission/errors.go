@@ -3,6 +3,8 @@ package admission
 import (
 	"errors"
 	"fmt"
+
+	"go.miloapis.com/milo/pkg/quota/engine"
 )
 
 // errAlreadyGranted is a sentinel returned by createResourceClaim when an
@@ -113,4 +115,15 @@ func newInternalFailure(cause error) *claimFailure {
 // detail (policy name, offending field) for logs and traces.
 func newMisconfiguredFailure(reason string, cause error) *claimFailure {
 	return &claimFailure{kind: claimFailureMisconfigured, reason: reason, cause: cause}
+}
+
+// renderFailure classifies an error from rendering a policy's claim template.
+// A request condition that cannot be evaluated is a policy defect, not a
+// transient fault.
+func renderFailure(err error) *claimFailure {
+	var condErr *engine.RequestConditionError
+	if errors.As(err, &condErr) {
+		return newMisconfiguredFailure("RequestConditionEvaluationFailed", err)
+	}
+	return newInternalFailure(fmt.Errorf("failed to render claim template: %w", err))
 }

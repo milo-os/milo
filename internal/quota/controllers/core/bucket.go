@@ -74,9 +74,11 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 	}
 	clusterClient := cluster.GetClient()
 
-	// Get the AllowanceBucket
+	// Read the bucket directly: a watch-cache read can lag our last reservation
+	// or status update. Keep resource-version checks on writes so a genuine
+	// concurrent reservation still stops this reconcile.
 	var bucket quotav1alpha1.AllowanceBucket
-	if err := clusterClient.Get(ctx, req.NamespacedName, &bucket); err != nil {
+	if err := cluster.GetAPIReader().Get(ctx, req.NamespacedName, &bucket); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Single-writer pattern: create bucket on first claim reference
 			if err := r.ensureBucketFromClaims(ctx, clusterClient, req.NamespacedName); err != nil {
@@ -93,16 +95,20 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 
 	bucket.Status.ObservedGeneration = bucket.Generation
 
-	if err := r.updateLimitsFromGrants(ctx, clusterClient, &bucket); err != nil {
+	if err := r.updateLimitsFromGrants(ctx, cluster.GetAPIReader(), &bucket); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update limits from grants: %w", err)
 	}
 
-	if err := r.updateUsageFromClaims(ctx, clusterClient, &bucket); err != nil {
+	claims, err := listCurrentConsumerClaims(ctx, cluster.GetAPIReader(), bucket.Spec.ConsumerRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.updateUsageFromClaims(ctx, claims, &bucket); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update usage from claims: %w", err)
 	}
 
 	// processPendingClaims performs intermediate status updates for atomic quota reservation.
-	if err := r.processPendingClaims(ctx, clusterClient, &bucket); err != nil {
+	if err := r.processPendingClaims(ctx, clusterClient, claims, &bucket); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed processing pending grants: %w", err)
 	}
 
@@ -113,11 +119,11 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 
 // updateLimitsFromGrants calculates total quota limits from active ResourceGrants.
 // Searches cluster-wide because buckets are centralized but grants may be distributed.
-func (r *AllowanceBucketController) updateLimitsFromGrants(ctx context.Context, clusterClient client.Client, bucket *quotav1alpha1.AllowanceBucket) error {
+func (r *AllowanceBucketController) updateLimitsFromGrants(ctx context.Context, clusterClient client.Reader, bucket *quotav1alpha1.AllowanceBucket) error {
 
-	// Centralized buckets require scanning all namespaces for grants
+	// Grants may span namespaces, but only this consumer contributes to the limit.
 	var grants quotav1alpha1.ResourceGrantList
-	if err := clusterClient.List(ctx, &grants); err != nil {
+	if err := clusterClient.List(ctx, &grants, client.MatchingFields{"spec.consumerRef.kind": bucket.Spec.ConsumerRef.Kind, "spec.consumerRef.name": bucket.Spec.ConsumerRef.Name}); err != nil {
 		return fmt.Errorf("failed to list ResourceGrants: %w", err)
 	}
 
@@ -163,14 +169,7 @@ func (r *AllowanceBucketController) updateLimitsFromGrants(ctx context.Context, 
 
 // updateUsageFromClaims calculates the total allocated usage from ResourceClaims
 // based on individual request allocations that have been granted.
-func (r *AllowanceBucketController) updateUsageFromClaims(ctx context.Context, clusterClient client.Client, bucket *quotav1alpha1.AllowanceBucket) error {
-	// Find all ResourceClaims cluster-wide that reference this bucket's consumer
-	var claims quotav1alpha1.ResourceClaimList
-	if err := clusterClient.List(ctx, &claims,
-		client.MatchingFields{resourceClaimConsumerRefIndex: consumerRefKey(bucket.Spec.ConsumerRef)},
-	); err != nil {
-		return fmt.Errorf("failed to list ResourceClaims: %w", err)
-	}
+func (r *AllowanceBucketController) updateUsageFromClaims(ctx context.Context, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket) error {
 
 	var totalAllocated int64
 	var claimCount int32
@@ -264,14 +263,8 @@ func (r *AllowanceBucketController) isResourceGrantActive(grant *quotav1alpha1.R
 // processPendingClaims attempts to grant pending requests that reference this bucket.
 // For each eligible claim, it evaluates individual requests that match this bucket,
 // reserves capacity, then marks specific request allocations as Granted/Denied.
-func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, clusterClient client.Client, bucket *quotav1alpha1.AllowanceBucket) error {
+func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, clusterClient client.Client, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket) error {
 	logger := log.FromContext(ctx)
-	var claims quotav1alpha1.ResourceClaimList
-	if err := clusterClient.List(ctx, &claims,
-		client.MatchingFields{resourceClaimConsumerRefIndex: consumerRefKey(bucket.Spec.ConsumerRef)},
-	); err != nil {
-		return fmt.Errorf("failed to list ResourceClaims: %w", err)
-	}
 
 	// Current state for available calculation during this reconcile loop
 	limit := bucket.Status.Limit
@@ -580,4 +573,21 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 	}
 
 	return requests
+}
+
+// listCurrentConsumerClaims uses server-supported selectors, not the composite
+// informer index. One live snapshot drives both usage and pending reservations.
+func listCurrentConsumerClaims(ctx context.Context, reader client.Reader, consumer quotav1alpha1.ConsumerRef) (*quotav1alpha1.ResourceClaimList, error) {
+	var claims quotav1alpha1.ResourceClaimList
+	if err := reader.List(ctx, &claims, client.MatchingFields{"spec.consumerRef.kind": consumer.Kind, "spec.consumerRef.name": consumer.Name}); err != nil {
+		return nil, fmt.Errorf("failed to list current ResourceClaims: %w", err)
+	}
+	filtered := claims.Items[:0]
+	for _, claim := range claims.Items {
+		if consumerRefKey(claim.Spec.ConsumerRef) == consumerRefKey(consumer) {
+			filtered = append(filtered, claim)
+		}
+	}
+	claims.Items = filtered
+	return &claims, nil
 }

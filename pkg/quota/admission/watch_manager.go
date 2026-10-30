@@ -298,6 +298,11 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 
 	// Register the waiter BEFORE checking for existing claims
 	w.waitersLock.Lock()
+	if _, exists := w.waiters[key]; exists {
+		w.waitersLock.Unlock()
+		cancelFunc()
+		return nil, newConflictFailure("concurrent quota evaluation in progress", nil)
+	}
 	w.waiters[key] = waiter
 	w.waitersLock.Unlock()
 
@@ -844,6 +849,13 @@ func (w *watchManager) handleClaimDeletion(obj interface{}) {
 	w.waitersLock.RUnlock()
 
 	if !exists {
+		return
+	}
+
+	// Cleanup can delete a denied claim before its final update is delivered.
+	// Preserve a denial carried by the delete event, still bound to this UID.
+	if result := w.evaluateClaimStatus(unstructuredObj); result != nil && !result.Granted {
+		w.offer(key, waiter, unstructuredObj.GetUID(), *result, "denied")
 		return
 	}
 

@@ -641,6 +641,7 @@ Claims created by ClaimCreationPolicy include:
 ### Field Constraints and Limits
 - Maximum 10 constraints per trigger (spec.trigger.constraints)
 - Static amounts only in v1alpha1 (no expression-based quota amounts)
+- Each template request may set a boolean CEL condition; when none apply, no claim is created
 - Template metadata labels are literal strings (no expression processing)
 - Template annotation values support CEL expressions
 
@@ -1018,7 +1019,7 @@ Examples:
 
 
 
-ResourceRequest defines a single resource request within a ResourceClaim.
+ResourceRequestTemplate defines a single resource request within a ResourceClaim.
 Each request specifies a resource type and the amount of quota being claimed.
 
 <table>
@@ -1072,6 +1073,22 @@ Examples:
   - "custom-service-quota"<br/>
         </td>
         <td>true</td>
+      </tr><tr>
+        <td><b>condition</b></td>
+        <td>string</td>
+        <td>
+          Condition is a CEL expression that must evaluate to true for this
+request to be included in the rendered claim. Like trigger constraints,
+it is a pure CEL expression WITHOUT {{ }} delimiters and has access to
+the trigger, user, and requestInfo variables. An empty condition always
+includes the request. When no request in the template is included, no
+claim is created and the triggering resource is admitted.
+
+Example:
+
+  - "trigger.spec.ipFamily == 'IPv4' && trigger.spec.addressScope == 'Public'"<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
