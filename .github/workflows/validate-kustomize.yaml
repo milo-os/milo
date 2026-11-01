@@ -9,4 +9,4 @@ concurrency:
 
 jobs:
   validate-kustomize:
-    uses: datum-cloud/actions/.github/workflows/validate-kustomize.yaml@v1.24.0
+    uses: datum-cloud/actions/.github/workflows/validate-kustomize.yaml@v1.26.0
