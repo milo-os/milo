@@ -56,6 +56,8 @@ rules:
   - billing.miloapis.com
   resources:
   - billingaccounts
+  - billingarrangementapplications
+  - billingarrangements
   verbs:
   - get
   - list
