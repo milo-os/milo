@@ -18,11 +18,11 @@ import (
 	"k8s.io/apiserver/pkg/storage"
 )
 
-// A project's first writes race to create its counter row, from two replicas.
-// They still get gapless revisions of their own.
+// A project's first writes race to create its counter row, from two replicas
+// with both commit paths. They still get gapless revisions of their own.
 func TestConcurrentFirstWrites(t *testing.T) {
 	_, base := testSetup(t)
-	replicas := []testStore{otherReplica(t, base), otherReplica(t, base)}
+	replicas := []testStore{otherReplica(t, base), otherReplica(t, base, GroupCommit(false))}
 	ctx := t.Context()
 	const writers = 32
 	revs := make([]int64, writers)

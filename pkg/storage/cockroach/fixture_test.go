@@ -44,6 +44,9 @@ const (
 	testDSNEnv     = "MILO_COCKROACH_TEST_DSN"
 	testRequireEnv = "MILO_COCKROACH_TEST_REQUIRE"
 	testImageEnv   = "MILO_COCKROACH_TEST_IMAGE"
+	// testNoGroupCommitEnv runs the shared backend, and with it the upstream
+	// suite, with GroupCommit off.
+	testNoGroupCommitEnv = "MILO_COCKROACH_TEST_NO_GROUP_COMMIT"
 )
 
 // clusterHelmRelease deploys the CockroachDB the test environments use. Its
@@ -114,7 +117,11 @@ func TestMain(m *testing.M) {
 	testDBDSN, drop, backendErr = createDatabase(ctx, baseDSN, fmt.Sprintf("milo_storage_test_%d", time.Now().UnixNano()))
 	if backendErr == nil {
 		if backendErr = Migrate(ctx, testDBDSN); backendErr == nil {
-			backend, backendErr = Open(ctx, testDBDSN, testOptions())
+			opts := []Option{testOptions()}
+			if os.Getenv(testNoGroupCommitEnv) != "" {
+				opts = append(opts, GroupCommit(false))
+			}
+			backend, backendErr = Open(ctx, testDBDSN, opts...)
 		}
 	}
 	code := m.Run()

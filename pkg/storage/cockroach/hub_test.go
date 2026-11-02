@@ -205,7 +205,8 @@ func TestHubPublishesReleasedWrites(t *testing.T) {
 
 // A revision's commit time is recorded only once it's released, in order, so
 // a replica that knows revision 3's also knows 2's. Reads at 2 rely on that
-// when they fall back to the instant before 3 committed.
+// when they fall back to the instant before 3 committed, which inside one
+// batch would be before 2 existed.
 func TestHubRecordsCommitTimesInReleaseOrder(t *testing.T) {
 	h := memoryHub()
 	batch := committedAt(2)

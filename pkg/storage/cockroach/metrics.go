@@ -32,6 +32,22 @@ var (
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 	)
+	batchSize = k8smetrics.NewHistogram(
+		&k8smetrics.HistogramOpts{
+			Name:           "cockroachstorage_commit_batch_writes",
+			Help:           "Writes per group-commit batch: one for a quiet project, more when a project's writes queue behind each other",
+			Buckets:        k8smetrics.ExponentialBuckets(1, 2, 9),
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	batchWait = k8smetrics.NewHistogram(
+		&k8smetrics.HistogramOpts{
+			Name:           "cockroachstorage_commit_queue_seconds",
+			Help:           "Time a write waits for its group-commit batch to start: the latency batching adds",
+			Buckets:        k8smetrics.ExponentialBuckets(0.0005, 2, 14),
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
 	expiredObjects = k8smetrics.NewCounter(
 		&k8smetrics.CounterOpts{
 			Name:           "cockroachstorage_expired_objects_total",
@@ -151,7 +167,7 @@ var (
 )
 
 func init() {
-	legacyregistry.MustRegister(feedLag, delivery, expiredObjects, purgedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
+	legacyregistry.MustRegister(feedLag, delivery, batchSize, batchWait, expiredObjects, purgedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
 		recentEventBytes, dbOperations, dbErrors, retries, openWatchers, closedWatchers, bookmarks, feedWaits)
 	legacyregistry.CustomMustRegister(poolMetrics)
 }

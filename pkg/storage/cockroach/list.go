@@ -226,7 +226,8 @@ type listRows struct {
 }
 
 // openListRows opens the snapshot q reads and the rows it sees there: the
-// current state or an exact revision.
+// current state, an exact revision, or a revision inside a batch, rebuilt from
+// the rows before it.
 func (s *store) openListRows(ctx context.Context, q listQuery) (rows listRows, err error) {
 	conn, err := s.b.pool.Acquire(ctx)
 	if err != nil {
@@ -258,6 +259,11 @@ func (s *store) openListRows(ctx context.Context, q listQuery) (rows listRows, e
 	}
 	rows.rev = snap.currentRev
 	switch {
+	case q.rev > snap.currentRev && snap.fromSuccessor:
+		// rev and rev+1 committed together after all, so the instant before
+		// rev+1 is before rev too, and this replica doesn't know rev's time.
+		rows.expired = true
+		return rows, nil
 	case q.rev > snap.currentRev:
 		rows.tooLarge = true
 		return rows, nil
@@ -268,7 +274,12 @@ func (s *store) openListRows(ctx context.Context, q listQuery) (rows listRows, e
 	case q.rev > 0:
 		rows.rev = q.rev
 	}
-	return rows, nil
+	if q.rev > 0 && q.rev < snap.currentRev {
+		// q.rev's batch went on past it, and every write in a batch shares one
+		// timestamp, so no snapshot holds the state at q.rev alone.
+		rows.rowSource, err = s.openBatchRows(ctx, conn, snap.ts, q.rev, start, end)
+	}
+	return rows, err
 }
 
 // maxPageSize caps the pages a filtered list grows to, as etcd3 does, so a
@@ -337,6 +348,7 @@ type snapshot struct {
 	ts             hlc
 	currentRev     int64
 	atRequestedRev bool
+	fromSuccessor  bool
 }
 
 // openSnapshot opens a snapshot on conn at a timestamp where the project is at
@@ -345,7 +357,7 @@ type snapshot struct {
 func (s *store) openSnapshot(ctx context.Context, conn *pgxpool.Conn, rev int64, prefetch func(*pgx.Batch)) (snapshot, error) {
 	var snap snapshot
 	if rev > 0 {
-		snap.ts, snap.atRequestedRev = s.b.revTS.readAt(s.project, rev)
+		snap.ts, snap.fromSuccessor, snap.atRequestedRev = s.b.revTS.readAt(s.project, rev)
 	}
 	var b pgx.Batch
 	if snap.atRequestedRev {
@@ -468,6 +480,89 @@ func (l liveRows) countWhere(ctx context.Context, start, cond string, args ...an
 	err := l.q.QueryRow(ctx, `SELECT count(*) FROM objects WHERE project = $1 AND key >= $2 AND key < $3 AND `+cond,
 		append([]any{l.project, start, l.end}, args...)...).Scan(&n)
 	return n, err
+}
+
+// batchRows reads a range at a revision inside a batch, from a snapshot at
+// the batch's end. Rows the batch wrote after rev show as they were before
+// the batch, and rows it created after rev don't show.
+type batchRows struct {
+	liveRows
+	rev        int64
+	liveBefore map[string]row
+}
+
+func (b batchRows) page(ctx context.Context, start string, size int64) (rowPage, error) {
+	p, err := b.read(ctx, start, size, `(NOT deleted OR rv > $4)`, b.rev)
+	if err != nil {
+		return p, err
+	}
+	rows := p.rows[:0]
+	for _, r := range p.rows {
+		if r.rev > b.rev {
+			before, ok := b.liveBefore[r.key]
+			if !ok {
+				continue
+			}
+			r = before
+		}
+		rows = append(rows, r)
+	}
+	p.rows = rows
+	return p, nil
+}
+
+func (b batchRows) count(ctx context.Context, start string) (int64, error) {
+	n, err := b.countWhere(ctx, start, `NOT deleted AND rv <= $4`, b.rev)
+	for key := range b.liveBefore {
+		if key >= start && key < b.end {
+			n++
+		}
+	}
+	return n, err
+}
+
+// openBatchRows returns the rows of [start, end) as of rev, which a batch
+// committed at ts wrote before its other writes. It leaves conn in a
+// snapshot at ts.
+func (s *store) openBatchRows(ctx context.Context, conn *pgxpool.Conn, ts hlc, rev int64, start, end string) (rowSource, error) {
+	// The keys the batch wrote after rev read as they were before the batch,
+	// which is also their state at rev, since a batch writes each key once. No
+	// other write commits between the batch's timestamp and the one before it,
+	// because every write locks the project's counter row.
+	live := liveRows{q: conn, project: s.project, end: end}
+	rows, err := conn.Query(ctx, `SELECT key FROM objects WHERE project = $1 AND key >= $2 AND key < $3 AND rv > $4`, s.project, start, end, rev)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(keys) == 0 {
+		return live, err
+	}
+
+	// CockroachDB fixes a transaction's timestamp when it starts, so reading at
+	// another timestamp takes another transaction. Every transaction runs on
+	// conn, which this read already holds, because taking a second connection
+	// could deadlock the pool when concurrent reads each hold one and wait for
+	// another. The read before the batch and the return to a snapshot at ts
+	// go in one round trip.
+	var prior []row
+	var b pgx.Batch
+	b.Queue(`COMMIT`)
+	b.Queue(snapshotSQL(ts.prev()))
+	b.Queue(`SELECT key, rv, value FROM objects WHERE project = $1 AND key = ANY($2) AND NOT deleted`, s.project, keys).Query(func(rows pgx.Rows) error {
+		prior, err = pgx.CollectRows(rows, scanRow)
+		return err
+	})
+	b.Queue(`COMMIT`)
+	b.Queue(snapshotSQL(ts))
+	if err := conn.SendBatch(ctx, &b).Close(); err != nil {
+		return nil, err
+	}
+	liveBefore := make(map[string]row, len(prior))
+	for _, r := range prior {
+		liveBefore[r.key] = r
+	}
+	return batchRows{liveRows: live, rev: rev, liveBefore: liveBefore}, nil
 }
 
 func setItems(v reflect.Value, items []runtime.Object) {

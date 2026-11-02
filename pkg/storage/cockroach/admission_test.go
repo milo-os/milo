@@ -89,6 +89,36 @@ func TestAdmissionCancellationWhileWaiting(t *testing.T) {
 	})
 }
 
+// The server's slots cap transactions, not writes. A batch of a project's
+// writes takes one slot, and another project's batch waits for it.
+func TestTransactionsShareTheServersSlots(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		next := newGate()
+		a := newAdmission("server", 1, time.Minute)
+		g := newGroupCommitter(admittedBatches{a, next})
+		defer g.stop()
+		first := commitAsync(t.Context(), g, "first", "a")
+		<-next.started
+		second, third := commitAsync(t.Context(), g, "first", "b"), commitAsync(t.Context(), g, "first", "c")
+		other := commitAsync(t.Context(), g, "other", "a")
+		synctest.Wait()
+		require.Equal(t, 1, a.keys[""].inFlight)
+
+		next.proceed <- struct{}{}
+		require.NoError(t, (<-first).err)
+		// The two batches now queued take the slot one at a time.
+		for range 2 {
+			<-next.started
+			synctest.Wait()
+			require.Equal(t, 1, a.keys[""].inFlight)
+			next.proceed <- struct{}{}
+		}
+		for _, done := range []<-chan writeOutcome{second, third, other} {
+			require.NoError(t, (<-done).err)
+		}
+	})
+}
+
 // A write's slot in its project is held while the write runs below it.
 func TestAdmittedWritesHoldASlotWhileTheWriteRuns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

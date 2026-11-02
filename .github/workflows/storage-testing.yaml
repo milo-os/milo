@@ -17,6 +17,11 @@ jobs:
     # The tests start CockroachDB in Docker, so the job needs a runner that
     # provides it.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group-commit: [on, off]
+    name: cockroachdb_storage_tests (group commit ${{ matrix.group-commit }})
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -28,4 +33,5 @@ jobs:
         env:
           # Fail instead of skipping when the tests can't start CockroachDB.
           MILO_COCKROACH_TEST_REQUIRE: "1"
+          MILO_COCKROACH_TEST_NO_GROUP_COMMIT: ${{ matrix.group-commit == 'off' && '1' || '' }}
         run: go test -race -timeout 10m ./pkg/storage/cockroach/

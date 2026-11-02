@@ -40,6 +40,7 @@ type Option func(*options)
 
 type options struct {
 	maxConns                    int32
+	groupCommit                 bool
 	projectWrites, transactions int
 	admissionWait               time.Duration
 	lagReadiness                time.Duration
@@ -51,6 +52,7 @@ type options struct {
 
 func defaultOptions() options {
 	return options{
+		groupCommit:   true,
 		admissionWait: time.Second,
 		hub:           defaultHubConfig(),
 		feedRetry:     time.Second,
@@ -72,17 +74,24 @@ func MaxConns(n int32) Option {
 	return func(o *options) { o.maxConns = n }
 }
 
+// GroupCommit sets whether a project's concurrent writes commit together, in
+// one transaction. Quiet projects wait for nothing. It's on by default, and
+// turning it off is a diagnostic fallback.
+func GroupCommit(enabled bool) Option {
+	return func(o *options) { o.groupCommit = enabled }
+}
+
 // MaxProjectWritesInFlight caps the writes in flight per project. A write past
 // the cap waits briefly for a slot and then gets 429 Too Many Requests. Zero
-// keeps the default of 8.
+// keeps the default of 8, or 256 with GroupCommit.
 func MaxProjectWritesInFlight(n int) Option {
 	return func(o *options) { o.projectWrites = n }
 }
 
 // MaxTransactionsInFlight caps the write transactions in flight in this
-// process. A write past the cap waits briefly and then gets 429 Too Many
-// Requests. Zero keeps the default of three quarters of the pool's
-// connections.
+// process. Each transaction is one write, or one batch with GroupCommit. A
+// write past the cap waits briefly and then gets 429 Too Many Requests. Zero
+// keeps the default of three quarters of the pool's connections.
 func MaxTransactionsInFlight(n int) Option {
 	return func(o *options) { o.transactions = n }
 }
@@ -122,7 +131,10 @@ const (
 	connLifetimeJitter = 2 * time.Minute
 )
 
-const defaultProjectWrites = 8
+const (
+	defaultProjectWrites            = 8
+	defaultProjectWritesGroupCommit = maxBatchWrites
+)
 
 func (o options) validate() error {
 	if o.maxConns < 0 || o.projectWrites < 0 || o.transactions < 0 || o.lagReadiness < 0 {
@@ -183,9 +195,16 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	b.hub = newHub(b.revTS, o.hub)
 	b.feed = &feed{pool: pool, connConfig: cfg.ConnConfig, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
 
-	b.committer = newCommitter(b.tryCommitBatch,
-		newAdmission("project", cmp.Or(o.projectWrites, defaultProjectWrites), o.admissionWait),
-		newAdmission("server", cmp.Or(o.transactions, int(cfg.MaxConns)*3/4), o.admissionWait))
+	projectWrites := defaultProjectWrites
+	if o.groupCommit {
+		projectWrites = defaultProjectWritesGroupCommit
+	}
+	var stopWrites func()
+	b.committer, stopWrites = newCommitter(b.tryCommitBatch,
+		newAdmission("project", cmp.Or(o.projectWrites, projectWrites), o.admissionWait),
+		newAdmission("server", cmp.Or(o.transactions, int(cfg.MaxConns)*3/4), o.admissionWait),
+		o.groupCommit)
+	b.onClose(stopWrites)
 
 	// A tombstone outlasts the events that replay its delete, so a feed that
 	// resumes from its cursor still finds it.
@@ -327,13 +346,16 @@ func (r revisionTimestamps) get(project string, rev int64) (hlc, bool) {
 
 // readAt returns a timestamp at which project's state is exactly rev: rev's
 // own commit time, or else the instant before rev+1 committed, since nothing
-// else in the project commits between the two.
-func (r revisionTimestamps) readAt(project string, rev int64) (ts hlc, ok bool) {
+// else in the project commits between the two. The fallback, which successor
+// reports, holds only when rev and rev+1 committed separately. The hub
+// records commit times in release order, so knowing rev+1's means knowing
+// rev's, unless rev's has just expired.
+func (r revisionTimestamps) readAt(project string, rev int64) (ts hlc, successor, ok bool) {
 	if ts, ok := r.get(project, rev); ok {
-		return ts, true
+		return ts, false, true
 	}
 	ts, ok = r.get(project, rev+1)
-	return ts.prev(), ok
+	return ts.prev(), ok, ok
 }
 
 func (r revisionTimestamps) forget(project string, rev int64) {

@@ -66,26 +66,37 @@ type writeOutcome struct {
 }
 
 // The write path is a stack of layers, each adding one concern, and
-// newCommitter stacks them. Above unbatched the layers handle one write at a
-// time, and below it one transaction's worth.
+// newCommitter stacks them. Above group commit the layers handle one write at
+// a time, and below it one transaction's worth.
 
 // newCommitter stacks the write path's layers, which from the top are:
 //
-//  1. admittedWrites holds a slot under the write's project for the whole
-//     write, so one busy project can't take every transaction.
-//  2. unbatched gives each write a batch, and a transaction, of its own.
+//  1. admittedWrites holds a slot under the write's project while it queues
+//     and waits for its result, so one busy project can't take every
+//     transaction. A caller that gives up releases the slot, even if its
+//     write's batch goes on.
+//  2. With groupCommit, groupCommitter queues a project's writes into shared
+//     batches. Otherwise unbatched gives each write a batch of its own.
 //  3. admittedBatches holds one of the server's slots for each transaction,
 //     which keeps the transactions in flight below the pool's connections.
 //  4. retryingBatches reruns a transaction that aborted on a conflict. It sits
-//     below the server's slots, so a retry reruns the same batch in the slot
-//     it already holds.
+//     below the server's slots and group commit, so a retry reruns the same
+//     batch in the slot it already holds.
 //  5. observedBatches times each attempt in the operation metrics.
 //  6. attempt runs one transaction.
-func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission) committer {
+//
+// It also returns what stops the stack when the backend closes.
+func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission, groupCommit bool) (committer, func()) {
 	var txn batchCommitter = observedBatches{attempt}
 	txn = retryingBatches{txn}
 	txn = admittedBatches{serverSlots, txn}
-	return admittedWrites{projectSlots, unbatched{txn}}
+	var perProject committer = unbatched{txn}
+	stop := func() {}
+	if groupCommit {
+		g := newGroupCommitter(txn)
+		perProject, stop = g, g.stop
+	}
+	return admittedWrites{projectSlots, perProject}, stop
 }
 
 // committer commits one write into a project.
@@ -107,7 +118,9 @@ func (f batchFunc) commitBatch(ctx context.Context, project string, b writeBatch
 }
 
 // writeBatch is writes that can commit together in one transaction: at least
-// one, each of an object key, and no key twice. newWriteBatch builds one.
+// one, each of an object key, and no key twice, which keeps a key's writes in
+// the order they were submitted and lets readList rebuild a revision inside a
+// batch from the rows before it. newWriteBatch builds one.
 type writeBatch struct {
 	writes []write
 	// keys are the keys the transaction locks: the counter's, then each
