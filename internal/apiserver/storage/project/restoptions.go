@@ -12,18 +12,30 @@ import (
 	"go.miloapis.com/milo/internal/projectscope"
 )
 
+// Option adjusts the project-aware storage.
+type Option func(*roGetter)
+
+// WithStorage replaces etcd storage for both project-scoped and shared resources.
+func WithStorage(child generic.StorageDecorator) Option {
+	return func(g *roGetter) { g.storage = child }
+}
+
 // Wrap the upstream RESTOptionsGetter to install a per-project decorator that looks each request's
 // Project up in projects, and destroys a gone Project's children after drain.
 func WithProjectAwareDecorator(inner generic.RESTOptionsGetter, projects ProjectLookup,
-	drain time.Duration) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, projects: projects, drain: drain}
+	drain time.Duration, opts ...Option) generic.RESTOptionsGetter {
+	return WithProjectAwareDecoratorAndBootstrapper(inner, projects, nil, drain, opts...)
 }
 
 // WithProjectAwareDecoratorAndBootstrapper wraps the RESTOptionsGetter with project-aware storage
 // and bootstraps project namespaces through the shared bootstrapper.
 func WithProjectAwareDecoratorAndBootstrapper(inner generic.RESTOptionsGetter, projects ProjectLookup,
-	bootstrapper *NamespaceBootstrapper, drain time.Duration) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, projects: projects, bootstrapper: bootstrapper, drain: drain}
+	bootstrapper *NamespaceBootstrapper, drain time.Duration, opts ...Option) generic.RESTOptionsGetter {
+	g := roGetter{inner: inner, projects: projects, bootstrapper: bootstrapper, drain: drain}
+	for _, o := range opts {
+		o(&g)
+	}
+	return g
 }
 
 type roGetter struct {
@@ -34,18 +46,18 @@ type roGetter struct {
 	drain        time.Duration
 }
 
-// NOTE: matches your two-arg signature (GroupResource, runtime.Object).
 func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object) (generic.RESTOptions, error) {
 	opts, err := g.inner.GetRESTOptions(gr, example)
 	if err != nil {
 		return opts, err
 	}
-	// 🔒 Leave the kinds every project shares, such as CRD *definitions*, global
 	if projectscope.StaysGlobal(gr) {
+		if g.storage != nil {
+			opts.Decorator = g.storage
+		}
 		return opts, nil
 	}
 
-	// Ensure we always wrap with our project-aware decorator.
 	storage := g.storage
 	if storage == nil {
 		storage = etcdshared.StorageWithSharedCacher()

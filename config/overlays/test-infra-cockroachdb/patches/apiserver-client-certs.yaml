@@ -1,0 +1,21 @@
+# The root client certificate the chart's self-signer issues. A strategic merge
+# adds the volume and mount by name, whether or not the Deployment has any yet.
+# The pod's fsGroup can read the files through mode 0440.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milo-apiserver
+spec:
+  template:
+    spec:
+      containers:
+        - name: milo-apiserver
+          volumeMounts:
+            - name: cockroachdb-client-certs
+              mountPath: /etc/cockroachdb/certs
+              readOnly: true
+      volumes:
+        - name: cockroachdb-client-certs
+          secret:
+            secretName: cockroachdb-client-secret
+            defaultMode: 0440

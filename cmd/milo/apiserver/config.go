@@ -63,6 +63,7 @@ import (
 	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
 	discoveryctx "go.miloapis.com/milo/pkg/server/discovery"
 	datumfilters "go.miloapis.com/milo/pkg/server/filters"
+	generic "k8s.io/apiserver/pkg/registry/generic"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
 )
@@ -84,6 +85,10 @@ type Config struct {
 	// NewConfig, injected into admission plugins, started by a post-start
 	// hook, and read by the project namespace bootstrap.
 	ProjectStates *projectstate.Cache
+
+	// Storage builds the storage of every resource when set. Nil keeps etcd
+	// behind the shared watch cache.
+	Storage generic.StorageDecorator
 
 	ExtraConfig
 }
@@ -161,6 +166,8 @@ type completedConfig struct {
 	DiscoveryRegistry *discoveryctx.Registry
 
 	ProjectStates *projectstate.Cache
+
+	Storage generic.StorageDecorator
 
 	ExtraConfig
 }
@@ -382,6 +389,8 @@ func (c *Config) Complete() (CompletedConfig, error) {
 		DiscoveryRegistry: c.DiscoveryRegistry,
 
 		ProjectStates: c.ProjectStates,
+
+		Storage: c.Storage,
 
 		ExtraConfig: c.ExtraConfig,
 	}}, nil

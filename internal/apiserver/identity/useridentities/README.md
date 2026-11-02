@@ -2,7 +2,7 @@ Virtual UserIdentities API (identity.miloapis.com/v1alpha1)
 
 This package implements Milo's public, virtual UserIdentities API. It exposes
 identity.miloapis.com/v1alpha1, Resource=useridentities without persisting anything
-to etcd. All operations are delegated to a provider API so RBAC and audit
+to the API server's storage. All operations are delegated to a provider API so RBAC and audit
 reflect the end-user.
 
 Components and flow
