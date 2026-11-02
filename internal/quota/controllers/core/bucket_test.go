@@ -486,3 +486,25 @@ func TestAllowanceBucketCountsAGrantedClaimOnce(t *testing.T) {
 		})
 	}
 }
+
+// Allocations are keyed by resource type, so a claim holds one allocation per type. Its requests of one type are
+// decided together, as one amount: two reservations would leave one allocation and leak the other amount.
+func TestAllowanceBucketDecidesAClaimsRequestsOfOneTypeTogether(t *testing.T) {
+	claim := testClaim("both", 1, "")
+	claim.Spec.Requests = append(claim.Spec.Requests, quotav1alpha1.ResourceRequest{ResourceType: "example/count", Amount: 2})
+	consumer := claim.Spec.ConsumerRef
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 5}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: "example/count", Buckets: []quotav1alpha1.Bucket{{Amount: 5}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	liveLists := 0
+	c := claimTestCluster(t, bucket, grant, []*quotav1alpha1.ResourceClaim{claim}, &liveLists)
+	cacheHolding(&c, claim)
+	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
+	_, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(bucket), bucket))
+	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(claim), claim))
+	held, _ := grantedAmount(claim, "example/count")
+	assert.EqualValues(t, 3, held, "the claim's one allocation holds both requests")
+	assert.Equal(t, held, bucket.Status.Allocated, "the bucket reserves what the claim holds, and leaks nothing")
+	assert.EqualValues(t, 1, bucket.Status.ClaimCount)
+}
