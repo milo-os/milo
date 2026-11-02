@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -106,7 +107,10 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 
 	bucket.Status.Available = max(0, bucket.Status.Limit-bucket.Status.Allocated)
 
-	return r.updateStatusIfChanged(ctx, clusterClient, &bucket, originalStatus)
+	if result, err := r.updateStatusIfChanged(ctx, clusterClient, &bucket, originalStatus); err != nil {
+		return result, err
+	}
+	return ctrl.Result{RequeueAfter: bucketRecheckInterval}, nil
 }
 
 // updateLimitsFromGrants calculates total quota limits from active ResourceGrants.
@@ -644,6 +648,12 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 
 	return requests
 }
+
+// bucketRecheckInterval brings every bucket back after its last reconcile. A reservation that no claim holds shows as
+// a cached total below the live allocation once the cache is current, which makes a live recompute; a quiet bucket gets
+// no event to show it. Each recheck costs one bucket GET and one grant LIST of the consumer, and a claim LIST only
+// when the totals differ.
+const bucketRecheckInterval = time.Hour
 
 // consumerClaims returns the consumer's claims from the informer cache when their granted total equals the live
 // bucket's allocation, and from the API server when it does not; it reports whether they were read live. A different

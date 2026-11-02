@@ -508,3 +508,20 @@ func TestAllowanceBucketDecidesAClaimsRequestsOfOneTypeTogether(t *testing.T) {
 	assert.Equal(t, held, bucket.Status.Allocated, "the bucket reserves what the claim holds, and leaks nothing")
 	assert.EqualValues(t, 1, bucket.Status.ClaimCount)
 }
+
+// A reservation that no claim holds shows as a cached total below the live allocation once the cache is current, and
+// that makes a live recompute. A quiet bucket gets no event to show it, so every reconcile comes back after an interval.
+func TestAllowanceBucketComesBackAfterTheRecheckInterval(t *testing.T) {
+	claims := []*quotav1alpha1.ResourceClaim{testClaim("kept", 1, quotav1alpha1.ResourceClaimAllocationStatusGranted)}
+	consumer := claims[0].Spec.ConsumerRef
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 3, Allocated: 1}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: "example/count", Buckets: []quotav1alpha1.Bucket{{Amount: 3}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	liveLists := 0
+	c := claimTestCluster(t, bucket, grant, claims, &liveLists)
+	cacheHolding(&c, claims...)
+	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
+	result, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	assert.Equal(t, bucketRecheckInterval, result.RequeueAfter)
+	assert.Positive(t, bucketRecheckInterval)
+}
