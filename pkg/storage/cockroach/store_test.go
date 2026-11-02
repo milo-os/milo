@@ -7,7 +7,7 @@ import (
 )
 
 // Conformance with storage.Interface: the upstream storage tests that etcd3's
-// store_test.go runs, apart from the watch tests.
+// store_test.go runs. See watch_test.go for the watch tests.
 //
 // The ones etcd3 runs and this store doesn't:
 //   - RunOptionalTestProgressNotify: only the watch cache asks for progress

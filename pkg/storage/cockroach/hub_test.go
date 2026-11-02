@@ -10,8 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/apis/example"
 	"k8s.io/apiserver/pkg/storage"
 )
 
@@ -143,6 +146,26 @@ func subscribe(t *testing.T, h *hub, target watchTarget, from int64) ([]*feedEve
 	released, sub, err := h.subscribe(t.Context(), target, from)
 	require.NoError(t, err)
 	return released, sub
+}
+
+// onlySubscription is the project's one subscription.
+func onlySubscription(t *testing.T, h *hub) *subscription {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	subs := h.projects["project"].watchers
+	require.Len(t, subs, 1)
+	for sub := range subs {
+		return sub
+	}
+	return nil
+}
+
+func memoryWatcher(t *testing.T, h *hub) *watcher {
+	s := &store{b: &Backend{hub: h}, alive: t.Context(), versioner: storage.APIObjectVersioner{}, newFunc: func() runtime.Object { return &example.Pod{} }}
+	w := newWatcher(t.Context(), s, everything, storage.Everything)
+	t.Cleanup(w.Stop)
+	return w
 }
 
 // testEpoch is when arrive's writes commit. It's recent, so the hub records
@@ -281,6 +304,16 @@ func TestHubSubscribeCancelled(t *testing.T) {
 	})
 }
 
+func TestWatcherFutureRevisionTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		w := memoryWatcher(t, memoryHub())
+		go w.run(100, false, false)
+		e := <-w.result
+		require.Equal(t, watch.Error, e.Type)
+		require.True(t, storage.IsTooLargeResourceVersion(apierrors.FromObject(e.Object.(*metav1.Status))))
+	})
+}
+
 func TestHubBookmarksRespectQueue(t *testing.T) {
 	h := memoryHub()
 	target := everything
@@ -311,6 +344,48 @@ func TestHubDropsSlowWatcher(t *testing.T) {
 	feed := h.projects["project"]
 	require.NotContains(t, feed.watchers, sub)
 	require.Equal(t, int64(watcherBuffer+2), feed.seq.latest(), "dropping a watcher interrupted the recent events")
+}
+
+func TestWatcherDrainsBeforeError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := memoryHub()
+		w := memoryWatcher(t, h)
+		go w.run(initialRevision, false, false)
+		synctest.Wait()
+		sub := onlySubscription(t, h)
+		h.mu.Lock()
+		sub.in <- &feedEvent{op: watch.Bookmark, rev: 2}
+		h.projects["project"].drop(sub, apierrors.NewResourceExpired("relist"), "reset")
+		h.mu.Unlock()
+
+		first := <-w.result
+		require.Equal(t, watch.Bookmark, first.Type)
+		require.Equal(t, "2", first.Object.(*example.Pod).ResourceVersion)
+		last := <-w.result
+		require.Equal(t, watch.Error, last.Type)
+		require.Equal(t, int32(410), last.Object.(*metav1.Status).Code)
+		_, open := <-w.result
+		require.False(t, open)
+	})
+}
+
+func TestWatcherStopUnblocksDelivery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := memoryHub()
+		w := memoryWatcher(t, h)
+		w.result = make(chan watch.Event)
+		go w.run(initialRevision, false, false)
+		synctest.Wait()
+		onlySubscription(t, h).in <- &feedEvent{op: watch.Bookmark, rev: 2}
+		synctest.Wait()
+		w.Stop()
+		synctest.Wait()
+		_, open := <-w.result
+		require.False(t, open, "watch delivered an event after it stopped")
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		require.Empty(t, h.projects["project"].watchers)
+	})
 }
 
 // A timestamp is kept only until it is a window old, however often it is

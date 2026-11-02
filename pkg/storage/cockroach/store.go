@@ -10,7 +10,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3"
 	"k8s.io/apiserver/pkg/storage/value"
@@ -154,11 +153,6 @@ func (s *store) Stats(ctx context.Context) (storage.Stats, error) {
 func (s *store) EnableResourceSizeEstimation(storage.KeysFunc) error { return nil }
 
 func (s *store) ReadinessCheck() error { return nil }
-
-// Watch isn't supported yet.
-func (s *store) Watch(context.Context, string, storage.ListOptions) (watch.Interface, error) {
-	return nil, errors.New("cockroach storage: watches are not supported yet")
-}
 
 // RequestWatchProgress does nothing. Only the watch cache asks for progress,
 // and nothing caches these stores.

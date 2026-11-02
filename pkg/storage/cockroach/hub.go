@@ -310,6 +310,14 @@ func (h *hub) subscribe(ctx context.Context, target watchTarget, from int64) ([]
 	return released, sub, nil
 }
 
+func (h *hub) unsubscribe(sub *subscription) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if t, ok := h.projects[sub.project]; ok {
+		delete(t.watchers, sub)
+	}
+}
+
 // compactRevision returns the oldest revision a watch of project can start
 // from, or 0 while it can start from any.
 func (h *hub) compactRevision(project string) int64 {

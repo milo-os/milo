@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/apis/example"
 	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
 	storagetesting "k8s.io/apiserver/pkg/storage/testing"
@@ -299,6 +301,21 @@ func createPod(ctx context.Context, t *testing.T, s testStore, name string) *exa
 	out := &example.Pod{}
 	require.NoError(t, s.Create(ctx, "/pods/test-ns/"+name, pod, out, 0))
 	return out
+}
+
+// nextEvent returns w's next event. It fails the test if none arrives within
+// wait.ForeverTestTimeout, as upstream's storage tests do, so an event the
+// hub never releases shows as a failure rather than a hung run.
+func nextEvent(t *testing.T, w watch.Interface) watch.Event {
+	t.Helper()
+	select {
+	case e, ok := <-w.ResultChan():
+		require.True(t, ok, "watch closed")
+		return e
+	case <-time.After(wait.ForeverTestTimeout):
+		t.Fatalf("no watch event within %s", wait.ForeverTestTimeout)
+		return watch.Event{}
+	}
 }
 
 // checkStorageInvariants verifies that a key's stored value went through the
