@@ -165,6 +165,16 @@ func TestListInconsistentContinuation(t *testing.T) {
 	storagetesting.RunTestListInconsistentContinuation(ctx, t, s, compaction(s))
 }
 
+func TestCreateWithTTL(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestCreateWithTTL(ctx, t, sweeping(t, s))
+}
+
+func TestGuaranteedUpdateWithTTL(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestGuaranteedUpdateWithTTL(ctx, t, sweeping(t, s))
+}
+
 func TestCompactRevision(t *testing.T) {
 	ctx, s := testSetup(t)
 	storagetesting.RunTestCompactRevision(ctx, t, s, increaseRV(s), compaction(s))

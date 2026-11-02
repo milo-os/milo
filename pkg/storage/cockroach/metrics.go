@@ -32,6 +32,20 @@ var (
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 	)
+	expiredObjects = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_expired_objects_total",
+			Help:           "Objects whose TTL passed that this process deleted, each with its own revision and DELETED event",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	purgedTombstones = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_purged_tombstones_total",
+			Help:           "Tombstones of deleted objects this process removed once watchers no longer needed them",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
 	feedRestarts = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "cockroachstorage_watch_feed_restarts_total",
@@ -128,7 +142,7 @@ var (
 )
 
 func init() {
-	legacyregistry.MustRegister(feedLag, delivery, feedRestarts, watchEvents, pendingEvents, recentEvents,
+	legacyregistry.MustRegister(feedLag, delivery, expiredObjects, purgedTombstones, feedRestarts, watchEvents, pendingEvents, recentEvents,
 		recentEventBytes, dbOperations, dbErrors, retries, openWatchers, closedWatchers, bookmarks, feedWaits)
 	legacyregistry.CustomMustRegister(poolMetrics)
 }

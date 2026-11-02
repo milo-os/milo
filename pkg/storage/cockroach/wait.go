@@ -2,6 +2,7 @@ package cockroach
 
 import (
 	"context"
+	"math/rand/v2"
 	"time"
 )
 
@@ -40,4 +41,10 @@ func every(ctx context.Context, next func() time.Duration, fn func(now time.Time
 // fixed returns a wait of interval every time.
 func fixed(interval time.Duration) func() time.Duration {
 	return func() time.Duration { return interval }
+}
+
+// jittered returns waits between half an interval and one and a half, so
+// replicas that start together drift apart.
+func jittered(interval time.Duration) func() time.Duration {
+	return func() time.Duration { return interval/2 + rand.N(interval) }
 }

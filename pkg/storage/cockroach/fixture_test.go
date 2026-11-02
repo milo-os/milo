@@ -136,6 +136,9 @@ func testOptions() Option {
 		o.hub.awaitTimeout = time.Hour
 		o.feedRetry = 50 * time.Millisecond
 		o.hub.tickInterval = 50 * time.Millisecond
+		// Sweeping has tests of its own and stays out of the way of the rest,
+		// so tests sweep only when they mean to.
+		o.sweepInterval = time.Hour
 	}
 }
 
@@ -293,6 +296,13 @@ func otherReplica(t *testing.T, s testStore, opts ...Option) testStore {
 	// Writes before the feed's baseline would predate everything it knows.
 	require.NoError(t, b.hub.waitReady(t.Context()))
 	return newTestStore(t, b, testConfig(s.project))
+}
+
+// sweeping is s's project on a replica that sweeps often, for tests that wait
+// out a TTL.
+func sweeping(t *testing.T, s testStore) testStore {
+	t.Helper()
+	return otherReplica(t, s, func(o *options) { o.sweepInterval = 100 * time.Millisecond })
 }
 
 func createPod(ctx context.Context, t *testing.T, s testStore, name string) *example.Pod {

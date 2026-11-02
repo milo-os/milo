@@ -30,6 +30,7 @@ type Backend struct {
 	hub          *hub
 	feed         *feed
 	committer    committer
+	sweeper      *sweeper
 	lagReadiness time.Duration
 	stops        []func()
 }
@@ -38,17 +39,19 @@ type Backend struct {
 type Option func(*options)
 
 type options struct {
-	maxConns     int32
-	lagReadiness time.Duration
-	hub          hubConfig
-	feedRetry    time.Duration
-	migrate      bool
+	maxConns      int32
+	lagReadiness  time.Duration
+	hub           hubConfig
+	feedRetry     time.Duration
+	sweepInterval time.Duration
+	migrate       bool
 }
 
 func defaultOptions() options {
 	return options{
-		hub:       defaultHubConfig(),
-		feedRetry: time.Second,
+		hub:           defaultHubConfig(),
+		feedRetry:     time.Second,
+		sweepInterval: time.Second,
 	}
 }
 
@@ -156,7 +159,12 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 
 	b.committer = newCommitter(b.tryCommitBatch)
 
-	// The background work stops first, while the pool is still open.
+	// A tombstone outlasts the events that replay its delete, so a feed that
+	// resumes from its cursor still finds it.
+	b.sweeper = &sweeper{pool: pool, committer: b.committer, tombstoneRetention: 2 * o.hub.replay.window}
+
+	// The background work stops first, because the sweeps write through the
+	// committers.
 	bg, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	var running sync.WaitGroup
 	b.onClose(func() {
@@ -166,6 +174,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	running.Go(func() { b.feed.run(bg) })
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.feed.reportLag) })
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.hub.tick) })
+	running.Go(func() { every(bg, jittered(o.sweepInterval), func(time.Time) { b.sweeper.sweep(bg) }) })
 	return b, nil
 }
 

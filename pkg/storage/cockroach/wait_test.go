@@ -25,3 +25,12 @@ func TestEvery(t *testing.T) {
 		require.Equal(t, []time.Duration{time.Minute, 2 * time.Minute, 3 * time.Minute}, calls)
 	})
 }
+
+func TestJittered(t *testing.T) {
+	next := jittered(time.Minute)
+	for range 100 {
+		wait := next()
+		require.GreaterOrEqual(t, wait, 30*time.Second)
+		require.Less(t, wait, 90*time.Second)
+	}
+}
