@@ -26,16 +26,15 @@ const raceClaims = 20
 
 var raceConsumer = quotav1alpha1.ConsumerRef{APIGroup: "resourcemanager.miloapis.com", Kind: "Project", Name: "race"}
 
-// Claims created at once against a bucket one short of them, decided by one controller or by two racing ones (as a
-// leader handoff can run), against a real API server: the bucket's resourceVersion lets one reservation in at a time,
-// so exactly the limit is granted and the last claim is denied.
+// Claims against a bucket one short of them, against a real API server: created while one controller decides them,
+// or all pending when two controllers start at once (as a leader handoff can run). The bucket's resourceVersion lets
+// one reservation in at a time, so exactly the limit is granted and the last claim is denied.
 func TestAllowanceBucketGrantsExactlyItsLimitAgainstARealAPIServer(t *testing.T) {
-	for name, controllers := range map[string]int{"one controller": 1, "two racing controllers": 2} {
-		t.Run(name, func(t *testing.T) { raceAtTheLimit(t, controllers) })
-	}
+	t.Run("creates racing one controller", func(t *testing.T) { raceAtTheLimit(t, 1, false) })
+	t.Run("two controllers racing over pending claims", func(t *testing.T) { raceAtTheLimit(t, 2, true) })
 }
 
-func raceAtTheLimit(t *testing.T, controllers int) {
+func raceAtTheLimit(t *testing.T, controllers int, claimsFirst bool) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		if os.Getenv("CI") != "" {
 			t.Fatal("KUBEBUILDER_ASSETS must be set in CI; this test needs an envtest API server")
@@ -55,21 +54,32 @@ func raceAtTheLimit(t *testing.T, controllers int) {
 	bucket := seedRaceBucket(ctx, t, direct, raceClaims-1)
 	req := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}}
 
-	// Each controller has a cache of its own, as two processes would; the caches start before the claims exist.
+	var wg sync.WaitGroup
+	createClaims := func() {
+		for i := 0; i < raceClaims; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				if err := direct.Create(ctx, raceClaim(i)); err != nil {
+					t.Error(err)
+				}
+			}(i)
+		}
+	}
+	held := 0
+	if claimsFirst {
+		createClaims()
+		wg.Wait()
+		held = raceClaims
+	}
+	// Each controller has a cache of its own, as two processes would.
 	reconcilers := make([]*AllowanceBucketController, controllers)
 	for i := range reconcilers {
-		cl := startCachedCluster(ctx, t, cfg, scheme, 0)
+		cl := startCachedCluster(ctx, t, cfg, scheme, held)
 		reconcilers[i] = &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: fakeCluster{Cluster: cl, client: cl.GetClient(), reader: cl.GetAPIReader()}}}
 	}
-	var wg sync.WaitGroup
-	for i := 0; i < raceClaims; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			if err := direct.Create(ctx, raceClaim(i)); err != nil {
-				t.Error(err)
-			}
-		}(i)
+	if !claimsFirst {
+		createClaims()
 	}
 	for _, r := range reconcilers {
 		wg.Add(1)
