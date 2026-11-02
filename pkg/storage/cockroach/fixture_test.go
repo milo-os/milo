@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +16,16 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/cockroachdb"
 	"sigs.k8s.io/yaml"
+
+	"k8s.io/apimachinery/pkg/api/apitesting"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apiserver/pkg/apis/example"
+	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
+	storagetesting "k8s.io/apiserver/pkg/storage/testing"
+	"k8s.io/apiserver/pkg/storage/value"
 )
 
 // The tests need a CockroachDB server:
@@ -62,6 +75,17 @@ func testImage() (string, error) {
 		return "", fmt.Errorf("%s does not pin a cockroachdb-chart version", clusterHelmRelease)
 	}
 	return "cockroachdb/cockroach:v" + hr.Spec.Chart.Spec.Version, nil
+}
+
+var (
+	scheme = runtime.NewScheme()
+	codecs = serializer.NewCodecFactory(scheme)
+)
+
+func init() {
+	metav1.AddToGroupVersion(scheme, metav1.SchemeGroupVersion)
+	utilruntime.Must(example.AddToScheme(scheme))
+	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
 // The package's database, set up once by TestMain.
@@ -167,4 +191,116 @@ func testBackend(t *testing.T) *Backend {
 	}
 	require.NoError(t, backendErr)
 	return backend
+}
+
+// testStore is a store in a project of its own, so tests can share a database,
+// whose transformer the upstream tests can replace while it runs.
+type testStore struct {
+	*store
+	swap *swappableTransformer
+}
+
+func (s testStore) UpdatePrefixTransformer(modifier storagetesting.PrefixTransformerModifier) func() {
+	return s.UpdateTransformer(func(original value.Transformer) value.Transformer {
+		// The modifier gets a copy, as in etcd3's tests, so its changes end with revert.
+		transformer := *original.(*storagetesting.PrefixTransformer)
+		return modifier(&transformer)
+	})
+}
+
+func (s testStore) UpdateTransformer(modifier storagetesting.TransformerModifier) func() {
+	s.swap.mu.Lock()
+	defer s.swap.mu.Unlock()
+	original := s.swap.current
+	s.swap.current = modifier(original)
+	return func() {
+		s.swap.mu.Lock()
+		defer s.swap.mu.Unlock()
+		s.swap.current = original
+	}
+}
+
+// swappableTransformer delegates to a transformer that can change.
+type swappableTransformer struct {
+	mu      sync.RWMutex
+	current value.Transformer
+}
+
+func (t *swappableTransformer) TransformFromStorage(ctx context.Context, data []byte, dataCtx value.Context) ([]byte, bool, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.current.TransformFromStorage(ctx, data, dataCtx)
+}
+
+func (t *swappableTransformer) TransformToStorage(ctx context.Context, data []byte, dataCtx value.Context) ([]byte, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.current.TransformToStorage(ctx, data, dataCtx)
+}
+
+func testCodec() runtime.Codec { return apitesting.TestCodec(codecs, examplev1.SchemeGroupVersion) }
+
+func testConfig(project string) Config {
+	return Config{
+		Project:        project,
+		ResourcePrefix: "/pods/",
+		Codec:          testCodec(),
+		Transformer:    storagetesting.NewPrefixTransformer([]byte("test!"), false),
+		NewFunc:        func() runtime.Object { return &example.Pod{} },
+	}
+}
+
+func newTestStore(t *testing.T, b *Backend, c Config) testStore {
+	t.Helper()
+	swap := &swappableTransformer{current: c.Transformer}
+	c.Transformer = swap
+	s, err := newStore(b, c)
+	require.NoError(t, err)
+	return testStore{store: s, swap: swap}
+}
+
+// testSetup is a store on the shared backend, in a project of its own, with
+// the test's changes to its config.
+func testSetup(t *testing.T, changes ...func(*Config)) (context.Context, testStore) {
+	t.Helper()
+	c := testConfig(fmt.Sprintf("test-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), time.Now().UnixNano()))
+	for _, change := range changes {
+		change(&c)
+	}
+	return t.Context(), newTestStore(t, testBackend(t), c)
+}
+
+// otherReplica is s's project on a backend of its own, as another API server
+// replica would see it.
+func otherReplica(t *testing.T, s testStore, opts ...Option) testStore {
+	t.Helper()
+	b, err := Open(t.Context(), testDBDSN, opts...)
+	require.NoError(t, err)
+	t.Cleanup(b.Close)
+	return newTestStore(t, b, testConfig(s.project))
+}
+
+func createPod(ctx context.Context, t *testing.T, s testStore, name string) *example.Pod {
+	t.Helper()
+	pod := &example.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test-ns"}}
+	out := &example.Pod{}
+	require.NoError(t, s.Create(ctx, "/pods/test-ns/"+name, pod, out, 0))
+	return out
+}
+
+// checkStorageInvariants verifies that a key's stored value went through the
+// transformer.
+func checkStorageInvariants(s testStore) storagetesting.KeyValidation {
+	return func(ctx context.Context, t *testing.T, key string) {
+		var v []byte
+		require.NoError(t, s.b.pool.QueryRow(ctx, `SELECT value FROM objects WHERE project = $1 AND key = $2`, s.project, key).Scan(&v))
+		require.True(t, strings.HasPrefix(string(v), "test!"), "value of %q was not transformed: %q", key, v)
+	}
+}
+
+func parseRV(t *testing.T, rv string) int64 {
+	t.Helper()
+	n, err := strconv.ParseInt(rv, 10, 64)
+	require.NoError(t, err)
+	return n
 }

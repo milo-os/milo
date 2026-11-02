@@ -13,11 +13,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// A Backend is the process's connection to the database. It is safe for
-// concurrent use.
+// initialRevision is a project's revision before its first write. Kubernetes
+// reserves 0 to mean any revision.
+const initialRevision = 1
+
+// A Backend is the database connection that every store in the process
+// shares. It is safe for concurrent use.
 type Backend struct {
-	pool  *pgxpool.Pool
-	stops []func()
+	pool      *pgxpool.Pool
+	committer committer
+	stops     []func()
 }
 
 // An Option configures [Open].
@@ -95,6 +100,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	b.onClose(pool.Close)
 	poolMetrics.watch(pool)
 	b.onClose(func() { poolMetrics.forget(pool) })
+	b.committer = newCommitter(b.tryCommitBatch)
 	return b, nil
 }
 
@@ -127,7 +133,7 @@ func (b *Backend) Ping(ctx context.Context) error {
 	return b.pool.Ping(ctx)
 }
 
-// Close closes the pool.
+// Close closes the pool. Stores must not be used after Close.
 func (b *Backend) Close() {
 	for _, stop := range slices.Backward(b.stops) {
 		stop()

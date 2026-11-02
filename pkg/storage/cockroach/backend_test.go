@@ -1,6 +1,7 @@
 package cockroach
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,6 +30,66 @@ func TestOpenRejectsNegativeLimits(t *testing.T) {
 			require.ErrorContains(t, err, "cannot be negative")
 		})
 	}
+}
+
+func TestRetry(t *testing.T) {
+	conflict := &pgconn.PgError{Code: codeSerializationFailure}
+	for name, tc := range map[string]struct {
+		errs     []error
+		attempts int
+	}{
+		"success":            {errs: []error{nil}, attempts: 1},
+		"conflict then done": {errs: []error{conflict, conflict, nil}, attempts: 3},
+		"ambiguous commit":   {errs: []error{&pgconn.PgError{Code: "40003"}}, attempts: 1},
+		"cancelled":          {errs: []error{context.Canceled}, attempts: 1},
+		"conflicts only":     {errs: []error{conflict}, attempts: maxAttempts},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				attempts := 0
+				start := time.Now()
+				_, err := retry(t.Context(), "write", func() (struct{}, error) {
+					err := tc.errs[min(attempts, len(tc.errs)-1)]
+					attempts++
+					return struct{}{}, err
+				})
+				require.Equal(t, tc.attempts, attempts)
+				require.Equal(t, tc.errs[min(attempts, len(tc.errs))-1], err)
+				require.LessOrEqual(t, time.Since(start), time.Duration(attempts)*maxBackoff)
+			})
+		})
+	}
+}
+
+func TestRetryStopsBackingOffWhenCancelled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		attempts := 0
+		_, err := retry(ctx, "write", func() (struct{}, error) {
+			attempts++
+			cancel()
+			return struct{}{}, &pgconn.PgError{Code: codeSerializationFailure}
+		})
+		require.Equal(t, 1, attempts)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestStoreRejectsMissingConfiguration(t *testing.T) {
+	for name, change := range map[string]func(*Config){
+		"codec":           func(c *Config) { c.Codec = nil },
+		"object factory":  func(c *Config) { c.NewFunc = nil },
+		"resource prefix": func(c *Config) { c.ResourcePrefix = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := testConfig("project")
+			change(&c)
+			_, err := newStore(&Backend{}, c)
+			require.Error(t, err)
+		})
+	}
+	_, err := newStore(nil, testConfig("project"))
+	require.Error(t, err)
 }
 
 // writeClientCert writes a fresh self-signed certificate with serial number
