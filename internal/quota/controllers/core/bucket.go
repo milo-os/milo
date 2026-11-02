@@ -100,17 +100,8 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 		return ctrl.Result{}, fmt.Errorf("failed to update limits from grants: %w", err)
 	}
 
-	claims, err := consumerClaims(ctx, cluster, &bucket)
-	if err != nil {
+	if err := r.settleClaims(ctx, cluster, &bucket); err != nil {
 		return ctrl.Result{}, err
-	}
-	if err := r.updateUsageFromClaims(ctx, claims, &bucket); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update usage from claims: %w", err)
-	}
-
-	// processPendingClaims performs intermediate status updates for atomic quota reservation.
-	if err := r.processPendingClaims(ctx, clusterClient, claims, &bucket); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed processing pending grants: %w", err)
 	}
 
 	bucket.Status.Available = max(0, bucket.Status.Limit-bucket.Status.Allocated)
@@ -257,77 +248,116 @@ func (r *AllowanceBucketController) isResourceGrantActive(grant *quotav1alpha1.R
 	return apimeta.IsStatusConditionTrue(grant.Status.Conditions, quotav1alpha1.ResourceGrantActive)
 }
 
-// processPendingClaims attempts to grant pending requests that reference this bucket.
-// For each eligible claim, it evaluates individual requests that match this bucket,
-// reserves capacity, then marks specific request allocations as Granted/Denied.
-func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, clusterClient client.Client, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket) error {
-	logger := log.FromContext(ctx)
+// settleClaims recomputes the bucket's usage from the consumer's claims and decides their pending requests.
+// A cached view decides grants only: the live bucket's allocation still counts a deleted claim until a recompute, so a
+// cache that agrees with it can hold that claim, and a denial is final for the create that waits on it.
+func (r *AllowanceBucketController) settleClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) error {
+	claims, live, err := consumerClaims(ctx, cl, bucket)
+	if err != nil {
+		return err
+	}
+	needsLive, err := r.applyClaims(ctx, cl.GetClient(), claims, bucket, live)
+	if err != nil || !needsLive {
+		return err
+	}
+	if claims, err = listCurrentConsumerClaims(ctx, cl.GetAPIReader(), bucket.Spec.ConsumerRef); err != nil {
+		return err
+	}
+	_, err = r.applyClaims(ctx, cl.GetClient(), claims, bucket, true)
+	return err
+}
 
-	// Current state for available calculation during this reconcile loop
-	limit := bucket.Status.Limit
-	allocated := bucket.Status.Allocated
-	fieldManagerName := fmt.Sprintf("allowance-bucket-%s", bucket.Name)
+// applyClaims recomputes the bucket's usage from the claims, then decides their pending requests. It reports whether
+// it stopped at a denial it may not make (mayDeny false), which needs the live claims.
+func (r *AllowanceBucketController) applyClaims(ctx context.Context, clusterClient client.Client, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, mayDeny bool) (bool, error) {
+	if err := r.updateUsageFromClaims(ctx, claims, bucket); err != nil {
+		return false, fmt.Errorf("failed to update usage from claims: %w", err)
+	}
+	needsLive, err := r.processPendingClaims(ctx, clusterClient, claims, bucket, mayDeny)
+	if err != nil {
+		return false, fmt.Errorf("failed processing pending grants: %w", err)
+	}
+	return needsLive, nil
+}
 
-	for _, claim := range claims.Items {
-		// Process each request that matches this bucket
-		for _, request := range claim.Spec.Requests {
-			// Skip if request doesn't match this bucket
-			if request.ResourceType != bucket.Spec.ResourceType {
-				continue
+// processPendingClaims decides each pending request of this bucket in turn, with intermediate status updates for
+// atomic quota reservation. Without mayDeny it stops at the first request that does not fit and reports it.
+func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, clusterClient client.Client, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, mayDeny bool) (bool, error) {
+	for i := range claims.Items {
+		claim := &claims.Items[i]
+		for _, request := range r.pendingRequests(ctx, claim, bucket.Spec.ResourceType) {
+			fits := bucket.Status.Limit-bucket.Status.Allocated >= request.Amount
+			if !fits && !mayDeny {
+				return true, nil
 			}
-
-			// Check if this request is already processed by looking at allocations
-			if r.isResourceClaimAllocationProcessed(&claim, request.ResourceType) {
-				logger.V(2).Info("Request allocation already processed, skipping",
-					"claimName", claim.Name,
-					"resourceType", request.ResourceType)
-				continue
+			if err := r.decideRequest(ctx, clusterClient, claim, request, bucket, fits); err != nil {
+				return false, err
 			}
-
-			// Check availability using current local view
-			if limit-allocated < request.Amount {
-				logger.Info("Insufficient quota available for request",
-					"claimName", claim.Name,
-					"resourceType", request.ResourceType,
-					"requestAmount", request.Amount,
-					"available", limit-allocated)
-
-				// Mark this specific request as denied
-				if err := r.updateResourceClaimAllocation(ctx, clusterClient, &claim, request.ResourceType, quotav1alpha1.ResourceClaimAllocationStatusDenied,
-					quotav1alpha1.ResourceClaimDeniedReason,
-					fmt.Sprintf("Resource quota exceeded: requested %d, available %d", request.Amount, limit-allocated),
-					0, "", fieldManagerName); err != nil {
-					logger.Error(err, "failed to update request allocation for denial",
-						"claimName", claim.Name, "resourceType", request.ResourceType)
-				}
-				continue
-			}
-
-			// Reserve capacity and keep status fields self-consistent for validation
-			bucket.Status.Allocated = allocated + request.Amount
-			// Recompute Available with clamp to satisfy CRD validation
-			bucket.Status.Available = max(0, bucket.Status.Limit-bucket.Status.Allocated)
-			bucket.Status.ObservedGeneration = bucket.Generation
-
-			if err := clusterClient.Status().Update(ctx, bucket); err != nil {
-				return fmt.Errorf("failed to update bucket during reservation: %w", err)
-			}
-
-			// Reservation successful; update local allocated for subsequent requests
-			allocated = bucket.Status.Allocated
-
-			// Mark this specific request as granted
-			if err := r.updateResourceClaimAllocation(ctx, clusterClient, &claim, request.ResourceType, quotav1alpha1.ResourceClaimAllocationStatusGranted,
-				quotav1alpha1.ResourceClaimGrantedReason,
-				"Capacity reserved",
-				request.Amount, bucket.Name, fieldManagerName); err != nil {
-				logger.Error(err, "failed to update request allocation after reservation",
-					"claimName", claim.Name, "resourceType", request.ResourceType)
-				// Don't revert the bucket allocation - the capacity has been reserved
-				return fmt.Errorf("failed to update request allocation: %w", err)
-			}
-
 		}
+	}
+	return false, nil
+}
+
+// pendingRequests returns the claim's requests for resourceType that have no decision yet.
+func (r *AllowanceBucketController) pendingRequests(ctx context.Context, claim *quotav1alpha1.ResourceClaim, resourceType string) []quotav1alpha1.ResourceRequest {
+	var pending []quotav1alpha1.ResourceRequest
+	for _, request := range claim.Spec.Requests {
+		if request.ResourceType != resourceType {
+			continue
+		}
+		if r.isResourceClaimAllocationProcessed(claim, request.ResourceType) {
+			log.FromContext(ctx).V(2).Info("Request allocation already processed, skipping",
+				"claimName", claim.Name,
+				"resourceType", request.ResourceType)
+			continue
+		}
+		pending = append(pending, request)
+	}
+	return pending
+}
+
+// decideRequest grants a request that fits, reserving its amount on the bucket first, or denies it.
+func (r *AllowanceBucketController) decideRequest(ctx context.Context, clusterClient client.Client, claim *quotav1alpha1.ResourceClaim, request quotav1alpha1.ResourceRequest, bucket *quotav1alpha1.AllowanceBucket, fits bool) error {
+	logger := log.FromContext(ctx)
+	fieldManagerName := fmt.Sprintf("allowance-bucket-%s", bucket.Name)
+	available := bucket.Status.Limit - bucket.Status.Allocated
+	if !fits {
+		logger.Info("Insufficient quota available for request",
+			"claimName", claim.Name,
+			"resourceType", request.ResourceType,
+			"requestAmount", request.Amount,
+			"available", available)
+
+		// Mark this specific request as denied
+		if err := r.updateResourceClaimAllocation(ctx, clusterClient, claim, request.ResourceType, quotav1alpha1.ResourceClaimAllocationStatusDenied,
+			quotav1alpha1.ResourceClaimDeniedReason,
+			fmt.Sprintf("Resource quota exceeded: requested %d, available %d", request.Amount, available),
+			0, "", fieldManagerName); err != nil {
+			logger.Error(err, "failed to update request allocation for denial",
+				"claimName", claim.Name, "resourceType", request.ResourceType)
+		}
+		return nil
+	}
+
+	// Reserve capacity and keep status fields self-consistent for validation
+	bucket.Status.Allocated += request.Amount
+	// Recompute Available with clamp to satisfy CRD validation
+	bucket.Status.Available = max(0, bucket.Status.Limit-bucket.Status.Allocated)
+	bucket.Status.ObservedGeneration = bucket.Generation
+
+	if err := clusterClient.Status().Update(ctx, bucket); err != nil {
+		return fmt.Errorf("failed to update bucket during reservation: %w", err)
+	}
+
+	// Mark this specific request as granted
+	if err := r.updateResourceClaimAllocation(ctx, clusterClient, claim, request.ResourceType, quotav1alpha1.ResourceClaimAllocationStatusGranted,
+		quotav1alpha1.ResourceClaimGrantedReason,
+		"Capacity reserved",
+		request.Amount, bucket.Name, fieldManagerName); err != nil {
+		logger.Error(err, "failed to update request allocation after reservation",
+			"claimName", claim.Name, "resourceType", request.ResourceType)
+		// Don't revert the bucket allocation - the capacity has been reserved
+		return fmt.Errorf("failed to update request allocation: %w", err)
 	}
 	return nil
 }
@@ -573,18 +603,20 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 }
 
 // consumerClaims returns the consumer's claims from the informer cache when they give the live bucket's
-// allocation, and from the API server only when they do not. A cache that lags a grant must not under-count
-// (milo#949), but a live LIST of every claim of the consumer on every reconcile costs the API server the plane's
-// whole claim set. The bucket was just read live, so a cache that agrees with it is current for this bucket.
-func consumerClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) (*quotav1alpha1.ResourceClaimList, error) {
+// allocation, and from the API server only when they do not; it reports whether they were read live. A cache that
+// lags a grant must not under-count (milo#949), but a live LIST of every claim of the consumer on every reconcile
+// costs the API server the plane's whole claim set. Each reservation writes the live bucket's allocation before it
+// grants, so a cache that agrees with it counts every grant, and never less capacity in use than there is.
+func consumerClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) (*quotav1alpha1.ResourceClaimList, bool, error) {
 	var cached quotav1alpha1.ResourceClaimList
 	if err := cl.GetClient().List(ctx, &cached, client.MatchingFields{resourceClaimConsumerRefIndex: consumerRefKey(bucket.Spec.ConsumerRef)}); err != nil {
-		return nil, fmt.Errorf("failed to list cached ResourceClaims: %w", err)
+		return nil, false, fmt.Errorf("failed to list cached ResourceClaims: %w", err)
 	}
 	if allocated, _ := usageOf(&cached, bucket); allocated == bucket.Status.Allocated {
-		return &cached, nil
+		return &cached, false, nil
 	}
-	return listCurrentConsumerClaims(ctx, cl.GetAPIReader(), bucket.Spec.ConsumerRef)
+	claims, err := listCurrentConsumerClaims(ctx, cl.GetAPIReader(), bucket.Spec.ConsumerRef)
+	return claims, true, err
 }
 
 // listCurrentConsumerClaims uses server-supported selectors, not the composite
