@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -25,6 +26,8 @@ const benchClaims = 2159
 // BenchmarkAllowanceBucketReconcile times one bucket reconcile against a real API server whose plane holds
 // benchClaims granted claims, the shape where milo#949's live claim LIST costs the most.
 func BenchmarkAllowanceBucketReconcile(b *testing.B) {
+	// The reconciler logs each pending claim; with no sink, controller-runtime prints a stack trace after 30 s.
+	ctrl.SetLogger(logr.Discard())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	env := &envtest.Environment{CRDDirectoryPaths: []string{filepath.Join("..", "..", "..", "..", "config", "crd", "bases", "quota")}, ErrorIfCRDPathMissing: true}
