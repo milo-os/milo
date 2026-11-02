@@ -299,28 +299,67 @@ func claimTestCluster(t *testing.T, bucket *quotav1alpha1.AllowanceBucket, grant
 	return fakeCluster{client: store, reader: live}
 }
 
-// cacheHolding makes the cluster's cache return these claims, as an informer that lags the store does, and returns
-// the allocation decision each claim gets from a reconcile, by claim name.
+// cacheHolding makes the cluster's cache return these claims, as an informer that lags the store does; with none, the
+// store answers. Claim status patches go to the store, so a later live read sees them. It returns the decision each
+// claim gets from a reconcile, by claim name.
 func cacheHolding(c *fakeCluster, claims ...*quotav1alpha1.ResourceClaim) map[string]string {
+	store := c.client.(client.WithWatch)
 	decisions := map[string]string{}
-	c.client = interceptor.NewClient(c.client.(client.WithWatch), interceptor.Funcs{
-		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+	funcs := interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			claim := obj.(*quotav1alpha1.ResourceClaim)
+			decisions[claim.Name] = claim.Status.Allocations[0].Status
+			var current quotav1alpha1.ResourceClaim
+			if err := store.Get(ctx, client.ObjectKeyFromObject(claim), &current); err != nil {
+				return err
+			}
+			current.Status.Allocations = claim.Status.Allocations
+			return store.Status().Update(ctx, &current)
+		},
+	}
+	if claims != nil {
+		funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if cached, ok := list.(*quotav1alpha1.ResourceClaimList); ok {
 				cached.Items = nil
 				for _, claim := range claims {
-					cached.Items = append(cached.Items, *claim)
+					cached.Items = append(cached.Items, *claim.DeepCopy())
 				}
 				return nil
 			}
 			return cl.List(ctx, list, opts...)
-		},
-		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
-			claim := obj.(*quotav1alpha1.ResourceClaim)
-			decisions[claim.Name] = claim.Status.Allocations[0].Status
-			return nil
-		},
-	})
+		}
+	}
+	c.client = interceptor.NewClient(store, funcs)
 	return decisions
+}
+
+// testClaim returns p1's claim of amount units of example/count; a status records that decision.
+func testClaim(name string, amount int64, status string) *quotav1alpha1.ResourceClaim {
+	claim := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: "example/count", Amount: amount}}}}
+	if status == quotav1alpha1.ResourceClaimAllocationStatusGranted {
+		claim.Status.Allocations = []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: "example/count", Status: status, AllocatedAmount: amount, AllocatingBucket: "bucket"}}
+	} else if status != "" {
+		claim.Status.Allocations = []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: "example/count", Status: status}}
+	}
+	return claim
+}
+
+// reconcileWithCache reconciles p1's example/count bucket, whose grant allows limit and whose live status records
+// allocated, over a store holding live and a cache holding cached (nil: the store answers). It returns the decisions,
+// the stored bucket and the number of live claim LISTs.
+func reconcileWithCache(t *testing.T, limit, allocated int64, live, cached []*quotav1alpha1.ResourceClaim) (map[string]string, *quotav1alpha1.AllowanceBucket, int) {
+	t.Helper()
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: limit, Allocated: allocated}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: "example/count", Buckets: []quotav1alpha1.Bucket{{Amount: limit}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	liveLists := 0
+	c := claimTestCluster(t, bucket, grant, live, &liveLists)
+	decisions := cacheHolding(&c, cached...)
+	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
+	_, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(bucket), bucket))
+	return decisions, bucket, liveLists
 }
 
 // A live LIST of every claim of the consumer on every reconcile costs the API server the plane's whole claim set
@@ -370,4 +409,40 @@ func TestAllowanceBucketDoesNotDenyFromADeletedClaimTheCacheHolds(t *testing.T) 
 	assert.Equal(t, 1, liveLists, "a denial is decided from the live claims")
 	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(bucket), bucket))
 	assert.EqualValues(t, 2, bucket.Status.Allocated)
+}
+
+// A cache can lag a decision and a delete at once and still give the live bucket's allocation. A claim it shows as
+// pending may have been decided since: it is read live first, so it is never reserved twice, and a denial stays final.
+func TestAllowanceBucketReadsAPendingClaimLiveBeforeDecidingIt(t *testing.T) {
+	granted, denied := quotav1alpha1.ResourceClaimAllocationStatusGranted, quotav1alpha1.ResourceClaimAllocationStatusDenied
+	for name, tc := range map[string]struct {
+		limit, allocated int64
+		live, cached     []*quotav1alpha1.ResourceClaim
+	}{
+		"granted since the cache saw it": {3, 2, []*quotav1alpha1.ResourceClaim{testClaim("w", 1, granted), testClaim("x", 1, granted)}, []*quotav1alpha1.ResourceClaim{testClaim("deleted", 1, granted), testClaim("w", 1, granted), testClaim("x", 1, "")}},
+		"denied since the cache saw it":  {3, 1, []*quotav1alpha1.ResourceClaim{testClaim("c", 1, granted), testClaim("x", 2, denied)}, []*quotav1alpha1.ResourceClaim{testClaim("deleted", 1, granted), testClaim("x", 2, "")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			decisions, bucket, _ := reconcileWithCache(t, tc.limit, tc.allocated, tc.live, tc.cached)
+			assert.Empty(t, decisions, "x was decided live already")
+			assert.EqualValues(t, tc.allocated, bucket.Status.Allocated)
+		})
+	}
+}
+
+// The usual denial: the cache is current, the bucket is full, and a pending claim does not fit. It is denied from
+// a live read.
+func TestAllowanceBucketDeniesFromALiveReadWhenTheCacheAgrees(t *testing.T) {
+	claims := []*quotav1alpha1.ResourceClaim{testClaim("kept", 1, quotav1alpha1.ResourceClaimAllocationStatusGranted), testClaim("pending", 1, "")}
+	decisions, _, liveLists := reconcileWithCache(t, 1, 1, claims, claims)
+	assert.Equal(t, map[string]string{"pending": quotav1alpha1.ResourceClaimAllocationStatusDenied}, decisions)
+	assert.Equal(t, 1, liveLists)
+}
+
+// The cache answers the bucket's consumer's claims only: another project's pending claim is not decided here.
+func TestAllowanceBucketDecidesOnlyItsConsumersClaims(t *testing.T) {
+	foreign := testClaim("foreign", 1, "")
+	foreign.Spec.ConsumerRef.Name = "p2"
+	decisions, _, _ := reconcileWithCache(t, 5, 0, []*quotav1alpha1.ResourceClaim{foreign}, nil)
+	assert.Empty(t, decisions)
 }
