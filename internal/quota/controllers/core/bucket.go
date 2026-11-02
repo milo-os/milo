@@ -248,9 +248,9 @@ func (r *AllowanceBucketController) isResourceGrantActive(grant *quotav1alpha1.R
 	return apimeta.IsStatusConditionTrue(grant.Status.Conditions, quotav1alpha1.ResourceGrantActive)
 }
 
-// settleClaims recomputes the bucket's usage from the consumer's claims and decides their pending requests.
-// A cached view decides grants only, each on the claim read live: the live bucket's allocation still counts a deleted
-// claim until a recompute, so a cache that agrees with it can hold that claim and miss a decision made since.
+// settleClaims decides the pending requests of the consumer's claims from live facts, and finds them in the cache. A
+// grant uses the live bucket's allocation, which is never below the use, and the claim as read live; a denial, and a
+// recompute of the allocation, use the live claims. Nothing read from the cache is decided on or written.
 func (r *AllowanceBucketController) settleClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) error {
 	claims, live, err := consumerClaims(ctx, cl, bucket)
 	if err != nil {
@@ -267,11 +267,13 @@ func (r *AllowanceBucketController) settleClaims(ctx context.Context, cl cluster
 	return err
 }
 
-// applyClaims recomputes the bucket's usage from the claims, then decides their pending requests. It reports whether
+// applyClaims recomputes the bucket's usage from live claims, then decides their pending requests. It reports whether
 // it stopped at a denial it may not make from cached claims (live false), which needs the live claims.
 func (r *AllowanceBucketController) applyClaims(ctx context.Context, cl cluster.Cluster, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
-	if err := r.updateUsageFromClaims(ctx, claims, bucket); err != nil {
-		return false, fmt.Errorf("failed to update usage from claims: %w", err)
+	if live {
+		if err := r.updateUsageFromClaims(ctx, claims, bucket); err != nil {
+			return false, fmt.Errorf("failed to update usage from claims: %w", err)
+		}
 	}
 	needsLive, err := r.processPendingClaims(ctx, cl, claims, bucket, live)
 	if err != nil {
@@ -624,11 +626,10 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 	return requests
 }
 
-// consumerClaims returns the consumer's claims from the informer cache when they give the live bucket's
-// allocation, and from the API server only when they do not; it reports whether they were read live. A cache that
-// lags a grant must not under-count (milo#949), but a live LIST of every claim of the consumer on every reconcile
-// costs the API server the plane's whole claim set. Each reservation writes the live bucket's allocation before it
-// grants, so a cache that agrees with it counts every grant, and never less capacity in use than there is.
+// consumerClaims returns the consumer's claims from the informer cache when their granted total equals the live
+// bucket's allocation, and from the API server when it does not; it reports whether they were read live. A different
+// total means the allocation is stale and must be recomputed from the live claims. A live LIST of every claim of the
+// consumer on every reconcile costs the API server the plane's whole claim set (milo#949).
 func consumerClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) (*quotav1alpha1.ResourceClaimList, bool, error) {
 	var cached quotav1alpha1.ResourceClaimList
 	if err := cl.GetClient().List(ctx, &cached, client.MatchingFields{resourceClaimConsumerRefIndex: consumerRefKey(bucket.Spec.ConsumerRef)}); err != nil {
