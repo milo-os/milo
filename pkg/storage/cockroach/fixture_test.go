@@ -137,8 +137,9 @@ func testOptions() Option {
 		o.hub.awaitTimeout = time.Hour
 		o.feedRetry = 50 * time.Millisecond
 		o.hub.tickInterval = 50 * time.Millisecond
-		// Sweeping has tests of its own and stays out of the way of the rest,
-		// so tests sweep only when they mean to.
+		// Admission and sweeping have tests of their own and stay out of the
+		// way of the rest, so tests sweep only when they mean to.
+		o.projectWrites, o.transactions = 1<<16, 1<<16
 		o.sweepInterval = time.Hour
 	}
 }

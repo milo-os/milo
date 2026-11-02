@@ -59,20 +59,33 @@ type writeResult struct {
 	written bool
 }
 
+// writeOutcome is a write's result, or why it failed.
+type writeOutcome struct {
+	result writeResult
+	err    error
+}
+
 // The write path is a stack of layers, each adding one concern, and
 // newCommitter stacks them. Above unbatched the layers handle one write at a
 // time, and below it one transaction's worth.
 
 // newCommitter stacks the write path's layers, which from the top are:
 //
-//  1. unbatched gives each write a batch, and a transaction, of its own.
-//  2. retryingBatches reruns a transaction that aborted on a conflict.
-//  3. observedBatches times each attempt in the operation metrics.
-//  4. attempt runs one transaction.
-func newCommitter(attempt batchFunc) committer {
+//  1. admittedWrites holds a slot under the write's project for the whole
+//     write, so one busy project can't take every transaction.
+//  2. unbatched gives each write a batch, and a transaction, of its own.
+//  3. admittedBatches holds one of the server's slots for each transaction,
+//     which keeps the transactions in flight below the pool's connections.
+//  4. retryingBatches reruns a transaction that aborted on a conflict. It sits
+//     below the server's slots, so a retry reruns the same batch in the slot
+//     it already holds.
+//  5. observedBatches times each attempt in the operation metrics.
+//  6. attempt runs one transaction.
+func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission) committer {
 	var txn batchCommitter = observedBatches{attempt}
 	txn = retryingBatches{txn}
-	return unbatched{txn}
+	txn = admittedBatches{serverSlots, txn}
+	return admittedWrites{projectSlots, unbatched{txn}}
 }
 
 // committer commits one write into a project.

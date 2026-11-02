@@ -23,7 +23,9 @@ import (
 
 func TestOpenRejectsNegativeLimits(t *testing.T) {
 	for name, opt := range map[string]Option{
-		"connections": MaxConns(-1),
+		"connections":     MaxConns(-1),
+		"project cap":     MaxProjectWritesInFlight(-1),
+		"transaction cap": MaxTransactionsInFlight(-1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Open(t.Context(), "postgresql://localhost/milo", opt)

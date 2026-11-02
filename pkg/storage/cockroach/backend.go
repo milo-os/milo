@@ -39,16 +39,19 @@ type Backend struct {
 type Option func(*options)
 
 type options struct {
-	maxConns      int32
-	lagReadiness  time.Duration
-	hub           hubConfig
-	feedRetry     time.Duration
-	sweepInterval time.Duration
-	migrate       bool
+	maxConns                    int32
+	projectWrites, transactions int
+	admissionWait               time.Duration
+	lagReadiness                time.Duration
+	hub                         hubConfig
+	feedRetry                   time.Duration
+	sweepInterval               time.Duration
+	migrate                     bool
 }
 
 func defaultOptions() options {
 	return options{
+		admissionWait: time.Second,
 		hub:           defaultHubConfig(),
 		feedRetry:     time.Second,
 		sweepInterval: time.Second,
@@ -67,6 +70,27 @@ func MigrateOnOpen() Option {
 // MaxConns caps the connection pool. Zero keeps the DSN's setting.
 func MaxConns(n int32) Option {
 	return func(o *options) { o.maxConns = n }
+}
+
+// MaxProjectWritesInFlight caps the writes in flight per project. A write past
+// the cap waits briefly for a slot and then gets 429 Too Many Requests. Zero
+// keeps the default of 8.
+func MaxProjectWritesInFlight(n int) Option {
+	return func(o *options) { o.projectWrites = n }
+}
+
+// MaxTransactionsInFlight caps the write transactions in flight in this
+// process. A write past the cap waits briefly and then gets 429 Too Many
+// Requests. Zero keeps the default of three quarters of the pool's
+// connections.
+func MaxTransactionsInFlight(n int) Option {
+	return func(o *options) { o.transactions = n }
+}
+
+// AdmissionWait sets how long a write past either cap waits for a slot before
+// it gets 429 Too Many Requests. Zero keeps the default of 1s.
+func AdmissionWait(d time.Duration) Option {
+	return func(o *options) { o.admissionWait = cmp.Or(d, o.admissionWait) }
 }
 
 // WatchReplay sets how far back a watch can resume, as a time window and a
@@ -98,12 +122,14 @@ const (
 	connLifetimeJitter = 2 * time.Minute
 )
 
+const defaultProjectWrites = 8
+
 func (o options) validate() error {
-	if o.maxConns < 0 || o.lagReadiness < 0 {
-		return errors.New("cockroach storage: the connection limit and the lag limit cannot be negative")
+	if o.maxConns < 0 || o.projectWrites < 0 || o.transactions < 0 || o.lagReadiness < 0 {
+		return errors.New("cockroach storage: connection and write limits and the lag limit cannot be negative")
 	}
-	if o.hub.replay.window < 0 || o.hub.replay.events < 0 {
-		return errors.New("cockroach storage: the watch replay window and events cannot be negative")
+	if o.admissionWait < 0 || o.hub.replay.window < 0 || o.hub.replay.events < 0 {
+		return errors.New("cockroach storage: the admission wait and the watch replay window and events cannot be negative")
 	}
 	return nil
 }
@@ -157,7 +183,9 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	b.hub = newHub(b.revTS, o.hub)
 	b.feed = &feed{pool: pool, connConfig: cfg.ConnConfig, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
 
-	b.committer = newCommitter(b.tryCommitBatch)
+	b.committer = newCommitter(b.tryCommitBatch,
+		newAdmission("project", cmp.Or(o.projectWrites, defaultProjectWrites), o.admissionWait),
+		newAdmission("server", cmp.Or(o.transactions, int(cfg.MaxConns)*3/4), o.admissionWait))
 
 	// A tombstone outlasts the events that replay its delete, so a feed that
 	// resumes from its cursor still finds it.

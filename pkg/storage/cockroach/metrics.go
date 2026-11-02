@@ -46,6 +46,15 @@ var (
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 	)
+	writeAdmissions = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name: "cockroachstorage_write_admissions_total",
+			Help: "Admissions by limit (project: writes in flight per project; server: transactions in flight per server) " +
+				"and result: admitted at once, waited for a slot, or rejected with 429",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"limit", "result"},
+	)
 	feedRestarts = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "cockroachstorage_watch_feed_restarts_total",
@@ -142,7 +151,7 @@ var (
 )
 
 func init() {
-	legacyregistry.MustRegister(feedLag, delivery, expiredObjects, purgedTombstones, feedRestarts, watchEvents, pendingEvents, recentEvents,
+	legacyregistry.MustRegister(feedLag, delivery, expiredObjects, purgedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
 		recentEventBytes, dbOperations, dbErrors, retries, openWatchers, closedWatchers, bookmarks, feedWaits)
 	legacyregistry.CustomMustRegister(poolMetrics)
 }
