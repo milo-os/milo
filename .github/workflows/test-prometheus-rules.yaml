@@ -19,7 +19,7 @@ jobs:
       PROMETHEUS_VERSION: 3.13.2
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Task
         uses: arduino/setup-task@v2

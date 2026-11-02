@@ -684,6 +684,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				},
 				InternalServiceDiscovery: false, // Use Project resources for user-facing API
 				ProjectRestConfig:        ctrlConfig,
+				PrestartInformers:        []client.Object{&quotav1alpha1.ResourceClaim{}, &quotav1alpha1.ResourceGrant{}, &quotav1alpha1.AllowanceBucket{}},
 			})
 			if err != nil {
 				logger.Error(err, "Error creating Milo provider for multicluster quota")
