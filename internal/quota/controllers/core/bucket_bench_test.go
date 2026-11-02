@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,6 +27,9 @@ const benchClaims = 2159
 // BenchmarkAllowanceBucketReconcile times one bucket reconcile against a real API server whose plane holds
 // benchClaims granted claims, the shape where milo#949's live claim LIST costs the most.
 func BenchmarkAllowanceBucketReconcile(b *testing.B) {
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		b.Skip("KUBEBUILDER_ASSETS is not set; run setup-envtest to provide an envtest API server")
+	}
 	// The reconciler logs each pending claim; with no sink, controller-runtime prints a stack trace after 30 s.
 	ctrl.SetLogger(logr.Discard())
 	ctx, cancel := context.WithCancel(context.Background())
