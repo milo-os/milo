@@ -446,3 +446,30 @@ func TestAllowanceBucketDecidesOnlyItsConsumersClaims(t *testing.T) {
 	decisions, _, _ := reconcileWithCache(t, 5, 0, []*quotav1alpha1.ResourceClaim{foreign}, nil)
 	assert.Empty(t, decisions)
 }
+
+// Nothing read from the cache is written: a cache whose total matches the live bucket's allocation, but from claims
+// of other sizes, leaves the live claim count as it is.
+func TestAllowanceBucketWritesNoClaimCountFromTheCache(t *testing.T) {
+	granted := quotav1alpha1.ResourceClaimAllocationStatusGranted
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 3, Allocated: 2, ClaimCount: 2}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: "example/count", Buckets: []quotav1alpha1.Bucket{{Amount: 3}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	liveLists := 0
+	c := claimTestCluster(t, bucket, grant, []*quotav1alpha1.ResourceClaim{testClaim("a", 1, granted), testClaim("b", 1, granted)}, &liveLists)
+	cacheHolding(&c, testClaim("big", 2, granted))
+	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
+	_, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(bucket), bucket))
+	assert.EqualValues(t, 2, bucket.Status.ClaimCount)
+	assert.Zero(t, liveLists)
+}
+
+// The cache's total tells when the live bucket's allocation is stale: after a delete, a current cache's total is
+// below it, and the allocation is recomputed from the live claims.
+func TestAllowanceBucketRecomputesAStaleAllocationFromALiveRead(t *testing.T) {
+	kept := testClaim("kept", 1, quotav1alpha1.ResourceClaimAllocationStatusGranted)
+	_, bucket, liveLists := reconcileWithCache(t, 3, 2, []*quotav1alpha1.ResourceClaim{kept}, []*quotav1alpha1.ResourceClaim{kept})
+	assert.EqualValues(t, 1, bucket.Status.Allocated)
+	assert.Equal(t, 1, liveLists)
+}
