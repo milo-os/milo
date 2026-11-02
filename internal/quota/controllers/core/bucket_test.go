@@ -473,3 +473,16 @@ func TestAllowanceBucketRecomputesAStaleAllocationFromALiveRead(t *testing.T) {
 	assert.EqualValues(t, 1, bucket.Status.Allocated)
 	assert.Equal(t, 1, liveLists)
 }
+
+// A grant counts its claim at once, as it adds to the allocation: a cache that then agrees with the allocation makes
+// no recompute, so a count left for a recompute would stay behind. A claim counts once, whatever its requests.
+func TestAllowanceBucketCountsAGrantedClaimOnce(t *testing.T) {
+	twice := testClaim("twice", 1, "")
+	twice.Spec.Requests = append(twice.Spec.Requests, twice.Spec.Requests[0])
+	for name, claim := range map[string]*quotav1alpha1.ResourceClaim{"one request": testClaim("once", 1, ""), "two requests of one type": twice} {
+		t.Run(name, func(t *testing.T) {
+			_, bucket, _ := reconcileWithCache(t, 5, 0, []*quotav1alpha1.ResourceClaim{claim}, []*quotav1alpha1.ResourceClaim{claim})
+			assert.EqualValues(t, 1, bucket.Status.ClaimCount)
+		})
+	}
+}
