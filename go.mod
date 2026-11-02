@@ -2,6 +2,8 @@ module go.miloapis.com/milo
 
 go 1.26.0
 
+toolchain go1.27.3
+
 require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/go-logr/logr v1.4.4
