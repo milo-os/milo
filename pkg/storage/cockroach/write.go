@@ -193,6 +193,12 @@ type row struct {
 	value []byte
 }
 
+func scanRow(r pgx.CollectableRow) (row, error) {
+	var out row
+	err := r.Scan(&out.key, &out.rev, &out.value)
+	return out, err
+}
+
 type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row

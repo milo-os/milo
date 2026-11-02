@@ -287,3 +287,18 @@ func (r revisionTimestamps) get(project string, rev int64) (hlc, bool) {
 	}
 	return ts.(hlc), true
 }
+
+// readAt returns a timestamp at which project's state is exactly rev: rev's
+// own commit time, or else the instant before rev+1 committed, since nothing
+// else in the project commits between the two.
+func (r revisionTimestamps) readAt(project string, rev int64) (ts hlc, ok bool) {
+	if ts, ok := r.get(project, rev); ok {
+		return ts, true
+	}
+	ts, ok = r.get(project, rev+1)
+	return ts.prev(), ok
+}
+
+func (r revisionTimestamps) forget(project string, rev int64) {
+	r.c.Delete(revKey{project, rev})
+}

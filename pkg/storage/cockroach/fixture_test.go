@@ -311,9 +311,47 @@ func checkStorageInvariants(s testStore) storagetesting.KeyValidation {
 	}
 }
 
+// increaseRV advances the project's revision by writing a key outside the
+// resource, as etcd's tests do. Every revision belongs to a write, which the
+// hub relies on.
+func increaseRV(s testStore) storagetesting.IncreaseRVFunc {
+	return func(ctx context.Context, t *testing.T) int64 {
+		res, err := s.b.committer.commit(ctx, s.project, createWrite(fmt.Sprintf("/increase-rv/%d", time.Now().UnixNano()), []byte("rv"), 0))
+		require.NoError(t, err)
+		require.True(t, res.written)
+		return res.rev
+	}
+}
+
+// compaction stands in for etcd compaction. It forgets the recent events
+// below rv and the commit times up to rv, and advances the revision as etcd's
+// compaction write does. A revision reads as of the next one's commit time
+// too, so rv stays readable and nothing before it does.
+func compaction(s testStore) storagetesting.Compaction {
+	return func(ctx context.Context, t *testing.T, resourceVersion string) {
+		rv, err := s.versioner.ParseResourceVersion(resourceVersion)
+		require.NoError(t, err)
+		h := s.b.hub
+		_, err = h.waitReleased(ctx, s.project, int64(rv))
+		require.NoError(t, err)
+		h.mu.Lock()
+		ring := &h.projectLocked(s.project).seq.log
+		ring.drop(max(int(int64(rv)-ring.oldest()), 0))
+		h.mu.Unlock()
+		for rev := range int64(rv) + 1 {
+			s.b.revTS.forget(s.project, rev)
+		}
+		increaseRV(s)(ctx, t)
+	}
+}
+
 func parseRV(t *testing.T, rv string) int64 {
 	t.Helper()
 	n, err := strconv.ParseInt(rv, 10, 64)
 	require.NoError(t, err)
 	return n
+}
+
+func newPod(name string) *example.Pod {
+	return &example.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test-ns"}}
 }

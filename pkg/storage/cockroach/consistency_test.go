@@ -1,7 +1,10 @@
 package cockroach
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
+	"math/rand/v2"
 	"slices"
 	"strconv"
 	"sync"
@@ -106,5 +109,98 @@ func TestConcurrentWritesInOneProject(t *testing.T) {
 	}
 	if got, want := len(revs), updaters*updatesEach+creators; got != want {
 		t.Errorf("recorded %d distinct resource versions, want %d", got, want)
+	}
+}
+
+// TestExactListMatchesReplay writes a random mix of creates, updates and
+// deletes from several goroutines, then checks that an exact list at every
+// resource version a write returned equals the state the writes produce when
+// replayed in resource-version order.
+func TestExactListMatchesReplay(t *testing.T) {
+	ctx, s := testSetup(t)
+	type write struct {
+		rv      uint64
+		name    string
+		deleted bool
+		value   string
+	}
+	var mu sync.Mutex
+	var writes []write
+	keys := []string{"a", "b", "c", "d", "e", "f"}
+
+	var wg sync.WaitGroup
+	for w := range 12 {
+		wg.Go(func() {
+			rng := rand.New(rand.NewPCG(uint64(w), 0))
+			for i := range 60 {
+				name := keys[rng.IntN(len(keys))]
+				key := "/pods/ns/" + name
+				value := fmt.Sprintf("w%d-%d", w, i)
+				out := &example.Pod{}
+				var err error
+				deleted := false
+				switch rng.IntN(3) {
+				case 0:
+					err = s.Create(ctx, key, &example.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns",
+						Annotations: map[string]string{"v": value}}}, out, 0)
+				case 1:
+					err = s.GuaranteedUpdate(ctx, key, out, false, nil,
+						func(obj runtime.Object, _ storage.ResponseMeta) (runtime.Object, *uint64, error) {
+							pod := obj.(*example.Pod)
+							pod.Annotations = map[string]string{"v": value}
+							return pod, nil, nil
+						}, nil)
+				default:
+					deleted = true
+					err = s.Delete(ctx, key, out, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{})
+				}
+				if storage.IsExist(err) || storage.IsNotFound(err) {
+					continue
+				}
+				if err != nil {
+					t.Errorf("write: %v", err)
+					return
+				}
+				rv, err := s.versioner.ParseResourceVersion(out.ResourceVersion)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				mu.Lock()
+				writes = append(writes, write{rv: rv, name: name, deleted: deleted, value: out.Annotations["v"]})
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	slices.SortFunc(writes, func(a, b write) int { return cmp.Compare(a.rv, b.rv) })
+
+	state := map[string]string{}
+	for _, w := range writes {
+		if w.deleted {
+			delete(state, w.name)
+		} else {
+			state[w.name] = fmt.Sprintf("%s@%d", w.value, w.rv)
+		}
+		list := &example.PodList{}
+		err := s.GetList(ctx, "/pods/", storage.ListOptions{
+			ResourceVersion:      strconv.FormatUint(w.rv, 10),
+			ResourceVersionMatch: metav1.ResourceVersionMatchExact,
+			Predicate:            storage.Everything,
+			Recursive:            true,
+		}, list)
+		if err != nil {
+			t.Fatalf("exact list at %d: %v", w.rv, err)
+		}
+		got := map[string]string{}
+		for _, p := range list.Items {
+			got[p.Name] = fmt.Sprintf("%s@%s", p.Annotations["v"], p.ResourceVersion)
+		}
+		if !maps.Equal(got, state) {
+			t.Fatalf("exact list at %d = %v, replay = %v", w.rv, got, state)
+		}
+	}
+	if len(writes) < 100 {
+		t.Fatalf("only %d writes succeeded; the test needs more to mean anything", len(writes))
 	}
 }

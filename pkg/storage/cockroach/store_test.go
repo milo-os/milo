@@ -6,8 +6,14 @@ import (
 	storagetesting "k8s.io/apiserver/pkg/storage/testing"
 )
 
-// Conformance with storage.Interface: the upstream tests of creates, gets,
-// updates and deletes that etcd3's store_test.go runs.
+// Conformance with storage.Interface: the upstream storage tests that etcd3's
+// store_test.go runs, apart from the watch tests.
+//
+// The ones etcd3 runs and this store doesn't:
+//   - RunOptionalTestProgressNotify: only the watch cache asks for progress
+//     notifications, and no watch cache sits in front of these stores.
+//   - RunBenchmarkStoreList, RunBenchmarkStoreStats,
+//     RunBenchmarkWriteThroughput: benchmarks, not conformance.
 
 func TestCreate(t *testing.T) {
 	ctx, s := testSetup(t)
@@ -74,6 +80,46 @@ func TestPreconditionalDeleteWithOnlySuggestionPass(t *testing.T) {
 	storagetesting.RunTestPreconditionalDeleteWithOnlySuggestionPass(ctx, t, s)
 }
 
+func TestList(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestList(ctx, t, s, compaction(s), false, nil)
+}
+
+func TestConsistentList(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestConsistentList(ctx, t, s, increaseRV(s), false, true, false)
+}
+
+func TestGetListNonRecursive(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestGetListNonRecursive(ctx, t, increaseRV(s), s)
+}
+
+func TestGetListRecursivePrefix(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestGetListRecursivePrefix(ctx, t, s)
+}
+
+func TestListContinuation(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestListContinuation(ctx, t, s, nil)
+}
+
+func TestListPaginationRareObject(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestListPaginationRareObject(ctx, t, s, nil)
+}
+
+func TestListContinuationWithFilter(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestListContinuationWithFilter(ctx, t, s, nil)
+}
+
+func TestListResourceVersionMatch(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestListResourceVersionMatch(ctx, t, s)
+}
+
 func TestGuaranteedUpdate(t *testing.T) {
 	ctx, s := testSetup(t)
 	storagetesting.RunTestGuaranteedUpdate(ctx, t, s, checkStorageInvariants(s))
@@ -92,4 +138,34 @@ func TestGuaranteedUpdateWithConflict(t *testing.T) {
 func TestGuaranteedUpdateWithSuggestionAndConflict(t *testing.T) {
 	ctx, s := testSetup(t)
 	storagetesting.RunTestGuaranteedUpdateWithSuggestionAndConflict(ctx, t, s)
+}
+
+func TestTransformationFailure(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestTransformationFailure(ctx, t, s)
+}
+
+func TestStats(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestStats(ctx, t, s, s.codec, s.transformer, false)
+}
+
+func TestListPaging(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestListPaging(ctx, t, s)
+}
+
+func TestNamespaceScopedList(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestNamespaceScopedList(ctx, t, s)
+}
+
+func TestListInconsistentContinuation(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestListInconsistentContinuation(ctx, t, s, compaction(s))
+}
+
+func TestCompactRevision(t *testing.T) {
+	ctx, s := testSetup(t)
+	storagetesting.RunTestCompactRevision(ctx, t, s, increaseRV(s), compaction(s))
 }

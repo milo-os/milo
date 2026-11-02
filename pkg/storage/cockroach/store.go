@@ -21,6 +21,7 @@ import (
 type store struct {
 	b              *Backend
 	project        string
+	lister         lister
 	pathPrefix     string
 	resourcePrefix string
 	codec          runtime.Codec
@@ -78,6 +79,7 @@ func newStore(b *Backend, c Config) (*store, error) {
 		transformer:    transformer,
 	}
 	s.alive, s.destroy = context.WithCancel(context.Background())
+	s.lister = newLister(s.readList, b.hub, c.Project)
 	return s, nil
 }
 
@@ -138,14 +140,13 @@ func (s *store) GetCurrentResourceVersion(ctx context.Context) (uint64, error) {
 	return uint64(rev), err
 }
 
-// GetList isn't supported yet.
-func (s *store) GetList(context.Context, string, storage.ListOptions, runtime.Object) error {
-	return errors.New("cockroach storage: lists are not supported yet")
-}
-
-// Stats isn't supported yet.
-func (s *store) Stats(context.Context) (storage.Stats, error) {
-	return storage.Stats{}, errors.New("cockroach storage: stats are not supported yet")
+func (s *store) Stats(ctx context.Context) (storage.Stats, error) {
+	prefix, err := s.prepareKey(s.resourcePrefix, true)
+	if err != nil {
+		return storage.Stats{}, err
+	}
+	count, err := liveRows{q: s.b.pool, project: s.project, end: prefixEnd(prefix)}.count(ctx, prefix)
+	return storage.Stats{ObjectCount: count}, err
 }
 
 // EnableResourceSizeEstimation does nothing, because Stats reports object
@@ -180,4 +181,16 @@ func (s *store) validateMinimumResourceVersion(minimumResourceVersion string, ac
 		return storage.NewTooLargeResourceVersionError(minimumRV, actualRevision, 0)
 	}
 	return nil
+}
+
+// prefixEnd returns the first key after every key that starts with prefix.
+func prefixEnd(prefix string) string {
+	b := []byte(prefix)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] < 0xff {
+			b[i]++
+			return string(b[:i+1])
+		}
+	}
+	return "\xff"
 }
