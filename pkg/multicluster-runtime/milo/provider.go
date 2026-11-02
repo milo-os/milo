@@ -62,6 +62,11 @@ type Options struct {
 	// A timed-out project is torn down and retried by the controller queue.
 	ProjectCacheSyncTimeout time.Duration
 
+	// MaxConcurrentReconciles is how many projects the provider engages at
+	// once. Zero means one; negative values are invalid. With one, each
+	// project's cache start and sync waits for the project before it.
+	MaxConcurrentReconciles int
+
 	// ClusterOptions are the options passed to the cluster constructor.
 	ClusterOptions []cluster.Option
 
@@ -97,6 +102,9 @@ type Options struct {
 func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 	if opts.ProjectCacheSyncTimeout < 0 {
 		return nil, fmt.Errorf("project cache sync timeout must not be negative")
+	}
+	if opts.MaxConcurrentReconciles < 0 {
+		return nil, fmt.Errorf("max concurrent reconciles must not be negative")
 	}
 
 	p := &Provider{
@@ -142,7 +150,7 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 
 	controllerBuilder := builder.ControllerManagedBy(localMgr).
 		For(&project, forOpts...).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: max(1, opts.MaxConcurrentReconciles)}).
 		Named(controllerName)
 
 	if err := controllerBuilder.Complete(p); err != nil {
@@ -437,9 +445,9 @@ func (p *Provider) projectCacheSyncTimeout() time.Duration {
 // The lock is released before the caller connects to the project. Engaging a
 // cluster runs every controller's watch registration, and those controllers'
 // event handlers call Get; holding p.lock across Engage deadlocks a controller
-// whose startup is waiting on those handlers. Project reconciles never run
-// concurrently (MaxConcurrentReconciles is 1), so no other registration can
-// interleave for the same key.
+// whose startup is waiting on those handlers. The controller's workqueue never
+// hands one project to two workers at once, whatever MaxConcurrentReconciles
+// is, so no other registration can interleave for the same key.
 func (p *Provider) planRegistration(
 	log logr.Logger,
 	key string,

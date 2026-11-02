@@ -196,6 +196,8 @@ var (
 	PaymentTermsApplicationEmailMaxAge time.Duration
 
 	QuotaMaxConcurrentReconciles int
+	// QuotaProviderMaxConcurrentReconciles is how many projects the quota system's provider engages at once.
+	QuotaProviderMaxConcurrentReconciles int
 
 	// WaitlistRelatedResourcesNamespace is the namespace that contains the waitlist related resources.
 	WaitlistRelatedResourcesNamespace string
@@ -367,6 +369,7 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&PaymentTermsApplicationEmailNamespace, "payment-terms-application-email-namespace", "milo-system", "The namespace payment terms application Email resources are created in.")
 	fs.DurationVar(&PaymentTermsApplicationEmailMaxAge, "payment-terms-application-email-max-age", 72*time.Hour, "How long after a payment terms application is submitted or decided its email may still be sent, so a first rollout doesn't email people about old applications.")
 	fs.IntVar(&QuotaMaxConcurrentReconciles, "quota-max-concurrent-reconciles", 1, "The number of AllowanceBuckets and the number of ResourceClaims the quota controllers reconcile in parallel.")
+	fs.IntVar(&QuotaProviderMaxConcurrentReconciles, "quota-provider-max-concurrent-reconciles", 1, "The number of projects the quota system's provider engages at once after this controller manager takes the lease.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
 	fs.StringVar(&PlatformInvitationEmailVariableActionUrl, "platform-invitation-email-variable-action-url", "https://cloud.datum.net", "The action url for the platform invitation email.")
 	fs.StringVar(&OrganizationMembershipSelfDeleteRoleName, "organization-membership-self-delete-role-name", "organizationmembership-self-delete", "The name of the role that will be used to grant organization membership self delete actions.")
@@ -685,6 +688,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				InternalServiceDiscovery: false, // Use Project resources for user-facing API
 				ProjectRestConfig:        ctrlConfig,
 				PrestartInformers:        []client.Object{&quotav1alpha1.ResourceClaim{}, &quotav1alpha1.ResourceGrant{}, &quotav1alpha1.AllowanceBucket{}},
+				MaxConcurrentReconciles:  QuotaProviderMaxConcurrentReconciles,
 			})
 			if err != nil {
 				logger.Error(err, "Error creating Milo provider for multicluster quota")
