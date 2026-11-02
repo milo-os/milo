@@ -263,3 +263,54 @@ func TestAllowanceBucketGrantReadIsConsumerScoped(t *testing.T) {
 	assert.EqualValues(t, 7, bucket.Status.Limit)
 	assert.EqualValues(t, 1, bucket.Status.GrantCount)
 }
+
+// claimTestCluster builds a live store holding the bucket, its grant and the claims, and a cache with the consumer
+// index the controller registers. countLive counts the live ResourceClaim LISTs a reconcile makes.
+func claimTestCluster(t *testing.T, bucket *quotav1alpha1.AllowanceBucket, grant *quotav1alpha1.ResourceGrant, claims []*quotav1alpha1.ResourceClaim, countLive *int) fakeCluster {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, quotav1alpha1.AddToScheme(scheme))
+	objects := []client.Object{bucket, grant}
+	for _, c := range claims {
+		objects = append(objects, c)
+	}
+	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&quotav1alpha1.AllowanceBucket{}, &quotav1alpha1.ResourceClaim{})
+	for _, field := range []string{"spec.consumerRef.kind", "spec.consumerRef.name"} {
+		field := field
+		builder = builder.WithIndex(&quotav1alpha1.ResourceGrant{}, field, func(obj client.Object) []string {
+			ref := obj.(*quotav1alpha1.ResourceGrant).Spec.ConsumerRef
+			return []string{map[string]string{"spec.consumerRef.kind": ref.Kind, "spec.consumerRef.name": ref.Name}[field]}
+		}).WithIndex(&quotav1alpha1.ResourceClaim{}, field, func(obj client.Object) []string {
+			ref := obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef
+			return []string{map[string]string{"spec.consumerRef.kind": ref.Kind, "spec.consumerRef.name": ref.Name}[field]}
+		})
+	}
+	store := builder.WithIndex(&quotav1alpha1.ResourceClaim{}, resourceClaimConsumerRefIndex, func(obj client.Object) []string {
+		return []string{consumerRefKey(obj.(*quotav1alpha1.ResourceClaim).Spec.ConsumerRef)}
+	}).Build()
+	live := interceptor.NewClient(store, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*quotav1alpha1.ResourceClaimList); ok {
+				*countLive++
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	return fakeCluster{client: store, reader: live}
+}
+
+// A live LIST of every claim of the consumer on every reconcile costs the API server the plane's whole claim set
+// (milo#949's cost at 2,159 claims). When the cache agrees with the live bucket's allocation, it is current enough.
+func TestAllowanceBucketReadsAgreeingClaimsFromTheCache(t *testing.T) {
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	resourceType := "example/count"
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: resourceType}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 2, Allocated: 1}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: resourceType, Buckets: []quotav1alpha1.Bucket{{Amount: 2}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	granted := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: "first"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: resourceType, Amount: 1}}}, Status: quotav1alpha1.ResourceClaimStatus{Allocations: []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: resourceType, Status: quotav1alpha1.ResourceClaimAllocationStatusGranted, AllocatedAmount: 1, AllocatingBucket: "bucket"}}}}
+	liveLists := 0
+	c := claimTestCluster(t, bucket, grant, []*quotav1alpha1.ResourceClaim{granted}, &liveLists)
+	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
+	_, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	assert.Zero(t, liveLists, "the cache agrees with the live bucket, so no live claim LIST is needed")
+}

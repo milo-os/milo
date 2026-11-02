@@ -25,6 +25,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -99,7 +100,7 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 		return ctrl.Result{}, fmt.Errorf("failed to update limits from grants: %w", err)
 	}
 
-	claims, err := listCurrentConsumerClaims(ctx, cluster.GetAPIReader(), bucket.Spec.ConsumerRef)
+	claims, err := consumerClaims(ctx, cluster, &bucket)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -170,53 +171,49 @@ func (r *AllowanceBucketController) updateLimitsFromGrants(ctx context.Context, 
 // updateUsageFromClaims calculates the total allocated usage from ResourceClaims
 // based on individual request allocations that have been granted.
 func (r *AllowanceBucketController) updateUsageFromClaims(ctx context.Context, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket) error {
+	bucket.Status.Allocated, bucket.Status.ClaimCount = usageOf(claims, bucket)
+	return nil
+}
 
+// usageOf returns the amount the claims' granted allocations take from the bucket, and how many claims hold one.
+func usageOf(claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket) (int64, int32) {
 	var totalAllocated int64
 	var claimCount int32
-
-	for _, claim := range claims.Items {
-		// Track whether this claim has any granted allocations for this bucket
-		// (consumer ref already filtered by field selector)
-		hasGrantedAllocation := false
-
-		// Check allocations for granted requests that match this bucket
-		for _, allocation := range claim.Status.Allocations {
-			if allocation.Status != quotav1alpha1.ResourceClaimAllocationStatusGranted {
-				continue
-			}
-
-			// Check if this allocation matches the bucket
-			if allocation.ResourceType != bucket.Spec.ResourceType {
-				continue
-			}
-
-			// Find the corresponding request from the spec to check dimensions
-			var matchingRequest *quotav1alpha1.ResourceRequest
-			for _, req := range claim.Spec.Requests {
-				if req.ResourceType == allocation.ResourceType {
-					matchingRequest = &req
-					break
-				}
-			}
-			if matchingRequest == nil {
-				continue
-			}
-
-			// Use the allocated amount from the allocation status
-			totalAllocated += allocation.AllocatedAmount
-			hasGrantedAllocation = true
-		}
-
-		// Increment claim count once per claim if it has any granted allocations for this bucket
-		if hasGrantedAllocation {
+	for i := range claims.Items {
+		if amount, ok := grantedAmount(&claims.Items[i], bucket.Spec.ResourceType); ok {
+			totalAllocated += amount
 			claimCount++
 		}
 	}
+	return totalAllocated, claimCount
+}
 
-	bucket.Status.Allocated = totalAllocated
-	bucket.Status.ClaimCount = claimCount
+// grantedAmount returns what one claim's granted allocations of resourceType take, and whether it holds any.
+// An allocation counts only when the claim's spec still requests that resource type.
+func grantedAmount(claim *quotav1alpha1.ResourceClaim, resourceType string) (int64, bool) {
+	var amount int64
+	held := false
+	for _, allocation := range claim.Status.Allocations {
+		if allocation.Status != quotav1alpha1.ResourceClaimAllocationStatusGranted || allocation.ResourceType != resourceType {
+			continue
+		}
+		if !requestsType(claim, resourceType) {
+			continue
+		}
+		amount += allocation.AllocatedAmount
+		held = true
+	}
+	return amount, held
+}
 
-	return nil
+// requestsType reports whether the claim's spec requests resourceType.
+func requestsType(claim *quotav1alpha1.ResourceClaim, resourceType string) bool {
+	for _, req := range claim.Spec.Requests {
+		if req.ResourceType == resourceType {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureBucketFromClaims creates the bucket spec from a referencing claim if found.
@@ -573,6 +570,21 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 	}
 
 	return requests
+}
+
+// consumerClaims returns the consumer's claims from the informer cache when they give the live bucket's
+// allocation, and from the API server only when they do not. A cache that lags a grant must not under-count
+// (milo#949), but a live LIST of every claim of the consumer on every reconcile costs the API server the plane's
+// whole claim set. The bucket was just read live, so a cache that agrees with it is current for this bucket.
+func consumerClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) (*quotav1alpha1.ResourceClaimList, error) {
+	var cached quotav1alpha1.ResourceClaimList
+	if err := cl.GetClient().List(ctx, &cached, client.MatchingFields{resourceClaimConsumerRefIndex: consumerRefKey(bucket.Spec.ConsumerRef)}); err != nil {
+		return nil, fmt.Errorf("failed to list cached ResourceClaims: %w", err)
+	}
+	if allocated, _ := usageOf(&cached, bucket); allocated == bucket.Status.Allocated {
+		return &cached, nil
+	}
+	return listCurrentConsumerClaims(ctx, cl.GetAPIReader(), bucket.Spec.ConsumerRef)
 }
 
 // listCurrentConsumerClaims uses server-supported selectors, not the composite
