@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,22 +51,34 @@ func BenchmarkAllowanceBucketReconcile(b *testing.B) {
 	}
 	bucket := seedBucketPlane(ctx, b, direct)
 	cl := startCachedCluster(ctx, b, cfg, scheme)
-	lists := 0
-	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: countingCluster(cl, &lists)}}
+	reads := &liveReads{}
+	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: countingCluster(cl, reads)}}
 	req := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}}
 	b.Run("at-rest", func(b *testing.B) {
-		lists = 0
+		*reads = liveReads{}
 		for i := 0; i < b.N; i++ {
 			must(b, reconcileErr(r.Reconcile(ctx, req)))
 		}
-		b.ReportMetric(float64(lists)/float64(b.N), "live-claim-LISTs/op")
+		b.ReportMetric(float64(reads.lists)/float64(b.N), "live-claim-LISTs/op")
+		b.ReportMetric(float64(reads.gets)/float64(b.N), "live-claim-GETs/op")
+	})
+	full := seedFullBucket(ctx, b, direct)
+	fullReq := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(full)}}
+	b.Run("deny", func(b *testing.B) {
+		*reads = liveReads{}
+		for i := 0; i < b.N; i++ {
+			denyOne(ctx, b, direct, cl, r, fullReq)
+		}
+		b.ReportMetric(float64(reads.lists)/float64(b.N), "live-claim-LISTs/op")
+		b.ReportMetric(float64(reads.gets)/float64(b.N), "live-claim-GETs/op")
 	})
 	b.Run("burst-100", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			lists = 0
+			*reads = liveReads{}
 			reconciles := burst(ctx, b, direct, r, req)
 			b.ReportMetric(float64(reconciles), "reconciles/burst")
-			b.ReportMetric(float64(lists), "live-claim-LISTs/burst")
+			b.ReportMetric(float64(reads.lists), "live-claim-LISTs/burst")
+			b.ReportMetric(float64(reads.gets), "live-claim-GETs/burst")
 		}
 	})
 }
@@ -108,20 +121,67 @@ func pendingClaims(ctx context.Context, b *testing.B, c client.Client, round int
 	return n
 }
 
-// countingCluster wraps a cluster so that its API reader counts the live ResourceClaim LISTs.
-func countingCluster(cl cluster.Cluster, lists *int) fakeCluster {
-	return fakeCluster{Cluster: cl, client: cl.GetClient(), reader: countingReader{Reader: cl.GetAPIReader(), lists: lists}}
+// fullResourceType has no allowance in the plane's grant, so its bucket's limit is 0 and every request is denied.
+const fullResourceType = "core.miloapis.com/secrets"
+
+// denials names each denied claim apart: a sub-benchmark runs more than once on one API server.
+var denials int
+
+// seedFullBucket creates a bucket of the heavy consumer for a resource type with no allowance.
+func seedFullBucket(ctx context.Context, b *testing.B, c client.Client) *quotav1alpha1.AllowanceBucket {
+	b.Helper()
+	consumer := quotav1alpha1.ConsumerRef{APIGroup: "resourcemanager.miloapis.com", Kind: "Project", Name: "heavy"}
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket-full", Namespace: "default"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: fullResourceType}}
+	must(b, c.Create(ctx, bucket))
+	return bucket
 }
 
-// countingReader counts ResourceClaim LISTs, and passes every read on.
+// denyOne creates one claim over the full bucket's limit and times the reconcile that denies it. As the controller,
+// it reconciles once the cache holds the claim, and it checks that the claim was denied.
+func denyOne(ctx context.Context, b *testing.B, c client.Client, cl cluster.Cluster, r *AllowanceBucketController, req mcreconcile.Request) {
+	b.Helper()
+	b.StopTimer()
+	denials++
+	consumer := quotav1alpha1.ConsumerRef{APIGroup: "resourcemanager.miloapis.com", Kind: "Project", Name: "heavy"}
+	claim := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("deny-%04d", denials), Namespace: "default"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: fullResourceType, Amount: 1}}}}
+	must(b, c.Create(ctx, claim))
+	for cl.GetCache().Get(ctx, client.ObjectKeyFromObject(claim), &quotav1alpha1.ResourceClaim{}) != nil {
+		time.Sleep(time.Millisecond)
+	}
+	b.StartTimer()
+	must(b, reconcileErr(r.Reconcile(ctx, req)))
+	b.StopTimer()
+	must(b, c.Get(ctx, client.ObjectKeyFromObject(claim), claim))
+	if len(claim.Status.Allocations) != 1 || claim.Status.Allocations[0].Status != quotav1alpha1.ResourceClaimAllocationStatusDenied {
+		b.Fatalf("claim %s was not denied: %+v", claim.Name, claim.Status.Allocations)
+	}
+	b.StartTimer()
+}
+
+// liveReads counts the live ResourceClaim reads a reconcile makes.
+type liveReads struct{ lists, gets int }
+
+// countingCluster wraps a cluster so that its API reader counts the live ResourceClaim LISTs and GETs.
+func countingCluster(cl cluster.Cluster, reads *liveReads) fakeCluster {
+	return fakeCluster{Cluster: cl, client: cl.GetClient(), reader: countingReader{Reader: cl.GetAPIReader(), reads: reads}}
+}
+
+// countingReader counts ResourceClaim LISTs and GETs, and passes every read on.
 type countingReader struct {
 	client.Reader
-	lists *int
+	reads *liveReads
+}
+
+func (c countingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*quotav1alpha1.ResourceClaim); ok {
+		c.reads.gets++
+	}
+	return c.Reader.Get(ctx, key, obj, opts...)
 }
 
 func (c countingReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	if _, ok := list.(*quotav1alpha1.ResourceClaimList); ok {
-		*c.lists++
+		c.reads.lists++
 	}
 	return c.Reader.List(ctx, list, opts...)
 }
