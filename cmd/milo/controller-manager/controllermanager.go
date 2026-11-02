@@ -171,6 +171,8 @@ var (
 	ProjectSuspensionWarningExcludedReasons []string
 
 	QuotaMaxConcurrentReconciles int
+	// QuotaProviderMaxConcurrentReconciles is how many projects the quota system's provider engages at once.
+	QuotaProviderMaxConcurrentReconciles int
 
 	// WaitlistRelatedResourcesNamespace is the namespace that contains the waitlist related resources.
 	WaitlistRelatedResourcesNamespace string
@@ -333,6 +335,7 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailNamespace, "project-suspension-deletion-warning-email-namespace", "milo-system", "The namespace suspension deletion warning Email resources are created in, kept as a stable, centralized audit trail.")
 	fs.StringSliceVar(&ProjectSuspensionWarningExcludedReasons, "project-suspension-warning-excluded-reasons", []string{"Fraud", "Abuse"}, "Comma-separated suspension reasons for which countdown deletion warning e-mails are NOT sent (e.g. Fraud,Abuse). Projects suspended for these reasons still auto-delete after the retention window.")
 	fs.IntVar(&QuotaMaxConcurrentReconciles, "quota-max-concurrent-reconciles", 1, "The number of AllowanceBuckets and the number of ResourceClaims the quota controllers reconcile in parallel.")
+	fs.IntVar(&QuotaProviderMaxConcurrentReconciles, "quota-provider-max-concurrent-reconciles", 1, "The number of projects the quota system's provider engages at once after this controller manager takes the lease.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
 	fs.StringVar(&PlatformInvitationEmailVariableActionUrl, "platform-invitation-email-variable-action-url", "https://cloud.datum.net", "The action url for the platform invitation email.")
 	fs.StringVar(&OrganizationMembershipSelfDeleteRoleName, "organization-membership-self-delete-role-name", "organizationmembership-self-delete", "The name of the role that will be used to grant organization membership self delete actions.")
@@ -651,6 +654,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				InternalServiceDiscovery: false, // Use Project resources for user-facing API
 				ProjectRestConfig:        ctrlConfig,
 				PrestartInformers:        []client.Object{&quotav1alpha1.ResourceClaim{}, &quotav1alpha1.ResourceGrant{}, &quotav1alpha1.AllowanceBucket{}},
+				MaxConcurrentReconciles:  QuotaProviderMaxConcurrentReconciles,
 			})
 			if err != nil {
 				logger.Error(err, "Error creating Milo provider for multicluster quota")
