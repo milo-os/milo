@@ -249,31 +249,31 @@ func (r *AllowanceBucketController) isResourceGrantActive(grant *quotav1alpha1.R
 }
 
 // settleClaims recomputes the bucket's usage from the consumer's claims and decides their pending requests.
-// A cached view decides grants only: the live bucket's allocation still counts a deleted claim until a recompute, so a
-// cache that agrees with it can hold that claim, and a denial is final for the create that waits on it.
+// A cached view decides grants only, each on the claim read live: the live bucket's allocation still counts a deleted
+// claim until a recompute, so a cache that agrees with it can hold that claim and miss a decision made since.
 func (r *AllowanceBucketController) settleClaims(ctx context.Context, cl cluster.Cluster, bucket *quotav1alpha1.AllowanceBucket) error {
 	claims, live, err := consumerClaims(ctx, cl, bucket)
 	if err != nil {
 		return err
 	}
-	needsLive, err := r.applyClaims(ctx, cl.GetClient(), claims, bucket, live)
+	needsLive, err := r.applyClaims(ctx, cl, claims, bucket, live)
 	if err != nil || !needsLive {
 		return err
 	}
 	if claims, err = listCurrentConsumerClaims(ctx, cl.GetAPIReader(), bucket.Spec.ConsumerRef); err != nil {
 		return err
 	}
-	_, err = r.applyClaims(ctx, cl.GetClient(), claims, bucket, true)
+	_, err = r.applyClaims(ctx, cl, claims, bucket, true)
 	return err
 }
 
 // applyClaims recomputes the bucket's usage from the claims, then decides their pending requests. It reports whether
-// it stopped at a denial it may not make (mayDeny false), which needs the live claims.
-func (r *AllowanceBucketController) applyClaims(ctx context.Context, clusterClient client.Client, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, mayDeny bool) (bool, error) {
+// it stopped at a denial it may not make from cached claims (live false), which needs the live claims.
+func (r *AllowanceBucketController) applyClaims(ctx context.Context, cl cluster.Cluster, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
 	if err := r.updateUsageFromClaims(ctx, claims, bucket); err != nil {
 		return false, fmt.Errorf("failed to update usage from claims: %w", err)
 	}
-	needsLive, err := r.processPendingClaims(ctx, clusterClient, claims, bucket, mayDeny)
+	needsLive, err := r.processPendingClaims(ctx, cl, claims, bucket, live)
 	if err != nil {
 		return false, fmt.Errorf("failed processing pending grants: %w", err)
 	}
@@ -281,21 +281,43 @@ func (r *AllowanceBucketController) applyClaims(ctx context.Context, clusterClie
 }
 
 // processPendingClaims decides each pending request of this bucket in turn, with intermediate status updates for
-// atomic quota reservation. Without mayDeny it stops at the first request that does not fit and reports it.
-func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, clusterClient client.Client, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, mayDeny bool) (bool, error) {
+// atomic quota reservation. On cached claims (live false) it stops at the first request that does not fit and
+// reports it.
+func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, cl cluster.Cluster, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
 	for i := range claims.Items {
-		claim := &claims.Items[i]
-		for _, request := range r.pendingRequests(ctx, claim, bucket.Spec.ResourceType) {
+		claim, pending, err := r.currentPending(ctx, cl.GetAPIReader(), &claims.Items[i], bucket.Spec.ResourceType, live)
+		if err != nil {
+			return false, err
+		}
+		for _, request := range pending {
 			fits := bucket.Status.Limit-bucket.Status.Allocated >= request.Amount
-			if !fits && !mayDeny {
+			if !fits && !live {
 				return true, nil
 			}
-			if err := r.decideRequest(ctx, clusterClient, claim, request, bucket, fits); err != nil {
+			if err := r.decideRequest(ctx, cl.GetClient(), claim, request, bucket, fits); err != nil {
 				return false, err
 			}
 		}
 	}
 	return false, nil
+}
+
+// currentPending returns the claim and its requests for resourceType that have no decision yet. A claim read from the
+// cache with such a request is read again live: the cache can miss a decision made since, or the claim's deletion and
+// re-creation under the same name. A claim that is gone has none.
+func (r *AllowanceBucketController) currentPending(ctx context.Context, reader client.Reader, claim *quotav1alpha1.ResourceClaim, resourceType string, live bool) (*quotav1alpha1.ResourceClaim, []quotav1alpha1.ResourceRequest, error) {
+	pending := r.pendingRequests(ctx, claim, resourceType)
+	if live || len(pending) == 0 {
+		return claim, pending, nil
+	}
+	var current quotav1alpha1.ResourceClaim
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(claim), &current); err != nil {
+		if apierrors.IsNotFound(err) {
+			return claim, nil, nil
+		}
+		return nil, nil, fmt.Errorf("failed to read ResourceClaim %s: %w", claim.Name, err)
+	}
+	return &current, r.pendingRequests(ctx, &current, resourceType), nil
 }
 
 // pendingRequests returns the claim's requests for resourceType that have no decision yet.
