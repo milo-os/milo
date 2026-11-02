@@ -336,22 +336,27 @@ func (r *AllowanceBucketController) currentPending(ctx context.Context, reader c
 	return &current, r.pendingRequests(ctx, &current, resourceType), nil
 }
 
-// pendingRequests returns the claim's requests for resourceType that have no decision yet.
+// pendingRequests returns the claim's undecided request for resourceType, with the amounts of its requests of that
+// type summed: a claim holds one allocation per type, so they are decided together, and one reservation matches it.
 func (r *AllowanceBucketController) pendingRequests(ctx context.Context, claim *quotav1alpha1.ResourceClaim, resourceType string) []quotav1alpha1.ResourceRequest {
-	var pending []quotav1alpha1.ResourceRequest
-	for _, request := range claim.Spec.Requests {
-		if request.ResourceType != resourceType {
-			continue
-		}
-		if r.isResourceClaimAllocationProcessed(claim, request.ResourceType) {
-			log.FromContext(ctx).V(2).Info("Request allocation already processed, skipping",
-				"claimName", claim.Name,
-				"resourceType", request.ResourceType)
-			continue
-		}
-		pending = append(pending, request)
+	if r.isResourceClaimAllocationProcessed(claim, resourceType) {
+		log.FromContext(ctx).V(2).Info("Request allocation already processed, skipping",
+			"claimName", claim.Name,
+			"resourceType", resourceType)
+		return nil
 	}
-	return pending
+	total := quotav1alpha1.ResourceRequest{ResourceType: resourceType}
+	requested := false
+	for _, request := range claim.Spec.Requests {
+		if request.ResourceType == resourceType {
+			total.Amount += request.Amount
+			requested = true
+		}
+	}
+	if !requested {
+		return nil
+	}
+	return []quotav1alpha1.ResourceRequest{total}
 }
 
 // decideRequest grants a request that fits, reserving its amount on the bucket first, or denies it.
