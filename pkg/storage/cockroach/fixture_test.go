@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/apitesting"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -260,6 +261,7 @@ func testConfig(project string) Config {
 	return Config{
 		Project:        project,
 		ResourcePrefix: "/pods/",
+		GroupResource:  schema.GroupResource{Resource: "pods"},
 		Codec:          testCodec(),
 		Transformer:    storagetesting.NewPrefixTransformer([]byte("test!"), false),
 		NewFunc:        func() runtime.Object { return &example.Pod{} },

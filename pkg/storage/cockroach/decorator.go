@@ -2,10 +2,12 @@ package cockroach
 
 import (
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -32,13 +34,18 @@ func Decorator(b *Backend, projectFor ProjectFunc) generic.StorageDecorator {
 		if err != nil {
 			return nil, nil, err
 		}
+		// Read once per store, as etcd3's storage factory does.
+		unsafeDeletion := utilfeature.DefaultFeatureGate.Enabled(features.AllowUnsafeMalformedObjectDeletion)
 		s, err := newStore(b, Config{
-			Project:        project,
-			PathPrefix:     cfg.Prefix,
-			ResourcePrefix: resourcePrefix,
-			Codec:          cfg.Codec,
-			Transformer:    cfg.Transformer,
-			NewFunc:        newFunc,
+			Project:                            project,
+			PathPrefix:                         cfg.Prefix,
+			ResourcePrefix:                     resourcePrefix,
+			GroupResource:                      cfg.GroupResource,
+			Codec:                              cfg.Codec,
+			Transformer:                        cfg.Transformer,
+			NewFunc:                            newFunc,
+			AllowUnsafeMalformedObjectDeletion: unsafeDeletion,
+			MarkCorrupt:                        unsafeDeletion,
 		})
 		if err != nil {
 			return nil, nil, err

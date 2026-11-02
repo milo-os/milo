@@ -51,8 +51,10 @@ type objState struct {
 	stale bool
 }
 
-// getState reads live into a state.
-func (s *store) getState(ctx context.Context, live *row, key string, v reflect.Value, ignoreNotFound bool) (*objState, error) {
+// getState reads live into a state. With expectCorrupt, for an unsafe delete,
+// the object must fail to transform or decode, and the state then has no
+// object.
+func (s *store) getState(ctx context.Context, live *row, key string, v reflect.Value, ignoreNotFound, expectCorrupt bool) (*objState, error) {
 	state := &objState{meta: &storage.ResponseMeta{}}
 	if u, ok := v.Addr().Interface().(runtime.Unstructured); ok {
 		state.obj = u.NewEmptyInstance()
@@ -72,22 +74,33 @@ func (s *store) getState(ctx context.Context, live *row, key string, v reflect.V
 	state.meta.ResourceVersion = uint64(live.rev)
 	data, stale, err := s.transformer.TransformFromStorage(ctx, live.value, s.authData(key))
 	if err != nil {
-		return nil, storage.NewInternalError(err)
+		if !expectCorrupt {
+			return nil, storage.NewInternalError(err)
+		}
+		state.obj, state.stale = nil, true
+		return state, nil
 	}
 	state.data, state.stale = data, stale
 	if err := s.decoder.Decode(data, state.obj, state.rev); err != nil {
-		return nil, err
+		if !expectCorrupt {
+			return nil, err
+		}
+		state.obj = nil
+		return state, nil
+	}
+	if expectCorrupt {
+		return nil, storage.NewInvalidObjError(key, "unsafe deletion is not allowed because the object is decodable from storage")
 	}
 	return state, nil
 }
 
-func (s *store) getCurrentState(ctx context.Context, key string, v reflect.Value, ignoreNotFound bool) func() (*objState, error) {
+func (s *store) getCurrentState(ctx context.Context, key string, v reflect.Value, ignoreNotFound, expectCorrupt bool) func() (*objState, error) {
 	return func() (*objState, error) {
 		live, _, err := s.readKey(ctx, key)
 		if err != nil {
 			return nil, err
 		}
-		return s.getState(ctx, live, key, v, ignoreNotFound)
+		return s.getState(ctx, live, key, v, ignoreNotFound, expectCorrupt)
 	}
 }
 
@@ -126,11 +139,12 @@ func (s *store) Delete(ctx context.Context, key string, out runtime.Object, prec
 	if err != nil {
 		return fmt.Errorf("unable to convert output object to pointer: %v", err)
 	}
-	getCurrentState := s.getCurrentState(ctx, preparedKey, v, false)
+	expectCorrupt := s.unsafeDeletion && opts.ExpectTransformOrDecodeError
+	getCurrentState := s.getCurrentState(ctx, preparedKey, v, false, expectCorrupt)
 
 	var origState *objState
 	var origStateIsCurrent bool
-	if cachedExistingObject != nil {
+	if cachedExistingObject != nil && !expectCorrupt {
 		origState, err = s.getStateFromObject(cachedExistingObject)
 	} else {
 		origState, err = getCurrentState()
@@ -165,11 +179,14 @@ func (s *store) Delete(ctx context.Context, key string, out runtime.Object, prec
 			return err
 		}
 		if !res.written {
-			if origState, err = s.getState(ctx, res.live, preparedKey, v, false); err != nil {
+			if origState, err = s.getState(ctx, res.live, preparedKey, v, false, expectCorrupt); err != nil {
 				return err
 			}
 			origStateIsCurrent = true
 			continue
+		}
+		if expectCorrupt {
+			return nil
 		}
 		return s.decoder.Decode(origState.data, out, res.rev)
 	}
@@ -185,7 +202,7 @@ func (s *store) GuaranteedUpdate(ctx context.Context, key string, destination ru
 	if err != nil {
 		return fmt.Errorf("unable to convert output object to pointer: %v", err)
 	}
-	getCurrentState := s.getCurrentState(ctx, preparedKey, v, ignoreNotFound)
+	getCurrentState := s.getCurrentState(ctx, preparedKey, v, ignoreNotFound, false)
 
 	var origState *objState
 	var origStateIsCurrent bool
@@ -255,7 +272,7 @@ func (s *store) GuaranteedUpdate(ctx context.Context, key string, destination ru
 			return err
 		}
 		if !res.written {
-			if origState, err = s.getState(ctx, res.live, preparedKey, v, ignoreNotFound); err != nil {
+			if origState, err = s.getState(ctx, res.live, preparedKey, v, ignoreNotFound, false); err != nil {
 				return err
 			}
 			origStateIsCurrent = true

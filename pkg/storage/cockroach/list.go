@@ -282,6 +282,7 @@ func (s *store) collect(ctx context.Context, src rowSource, q listQuery, res *li
 	start, _ := q.keyRange()
 	limit := q.pred.Limit
 	size := q.firstPageSize()
+	errs := listErrors{aggregate: s.unsafeDeletion}
 	for {
 		p, err := src.page(ctx, start, size)
 		if err != nil {
@@ -290,12 +291,15 @@ func (s *store) collect(ctx context.Context, src rowSource, q listQuery, res *li
 		for _, r := range p.rows {
 			if limit > 0 && int64(len(res.items)) >= limit {
 				res.hasMore = true
-				return nil
+				return errs.err(s.groupResource)
 			}
 			res.lastKey = r.key
 			obj, err := s.decodeListItem(ctx, r, q.newItem)
 			if err != nil {
-				return err
+				if errs.add(r.key, err) {
+					return errs.err(s.groupResource)
+				}
+				continue
 			}
 			if matched, err := q.pred.Matches(obj); err == nil && matched {
 				res.items = append(res.items, obj)
@@ -305,11 +309,11 @@ func (s *store) collect(ctx context.Context, src rowSource, q listQuery, res *li
 			res.lastKey = p.scannedTo
 		}
 		if !p.hasMore {
-			return nil
+			return errs.err(s.groupResource)
 		}
 		if limit > 0 && int64(len(res.items)) >= limit {
 			res.hasMore = true
-			return nil
+			return errs.err(s.groupResource)
 		}
 		start = res.lastKey + "\x00"
 		size = min(size*2, maxPageSize)
@@ -319,6 +323,9 @@ func (s *store) collect(ctx context.Context, src rowSource, q listQuery, res *li
 func (s *store) decodeListItem(ctx context.Context, r row, newItemFunc func() runtime.Object) (runtime.Object, error) {
 	data, _, err := s.transformer.TransformFromStorage(ctx, r.value, s.authData(r.key))
 	if err != nil {
+		if s.corrupt(err) {
+			return nil, err
+		}
 		return nil, storage.NewInternalError(fmt.Errorf("unable to transform key %q: %w", r.key, err))
 	}
 	return s.decoder.DecodeListItem(ctx, data, uint64(r.rev), newItemFunc)

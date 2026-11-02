@@ -10,6 +10,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3"
 	"k8s.io/apiserver/pkg/storage/value"
@@ -23,11 +24,13 @@ type store struct {
 	lister         lister
 	pathPrefix     string
 	resourcePrefix string
+	groupResource  schema.GroupResource
 	codec          runtime.Codec
 	versioner      storage.Versioner
 	decoder        etcd3.Decoder
 	newFunc        func() runtime.Object
 	transformer    value.Transformer
+	unsafeDeletion bool
 	// alive ends when the store is destroyed. A store outlives the request
 	// that built it, so it is not derived from one.
 	alive   context.Context
@@ -45,9 +48,17 @@ type Config struct {
 	// transformer's authenticated data, so values stay compatible with etcd's.
 	PathPrefix     string
 	ResourcePrefix string
+	GroupResource  schema.GroupResource
 	Codec          runtime.Codec
 	Transformer    value.Transformer
 	NewFunc        func() runtime.Object
+	// AllowUnsafeMalformedObjectDeletion reports corrupt objects as such and
+	// lets the unsafe delete remove them, as the feature gate of that name
+	// does for etcd3.
+	AllowUnsafeMalformedObjectDeletion bool
+	// MarkCorrupt treats every failure to transform or decode stored data as a
+	// corrupt object, as etcd3's storage factory does with the gate on.
+	MarkCorrupt bool
 }
 
 func newStore(b *Backend, c Config) (*store, error) {
@@ -66,21 +77,30 @@ func newStore(b *Backend, c Config) (*store, error) {
 		transformer = identity.NewEncryptCheckTransformer()
 	}
 	versioner := storage.APIObjectVersioner{}
+	decoder := etcd3.NewDefaultDecoder(c.Codec, versioner)
+	if c.MarkCorrupt {
+		transformer = corruptMarkingTransformer{transformer}
+		decoder = corruptMarkingDecoder{decoder}
+	}
 	s := &store{
 		b:              b,
 		project:        c.Project,
 		pathPrefix:     pathPrefix,
 		resourcePrefix: c.ResourcePrefix,
+		groupResource:  c.GroupResource,
 		codec:          c.Codec,
 		versioner:      versioner,
-		decoder:        etcd3.NewDefaultDecoder(c.Codec, versioner),
+		decoder:        decoder,
 		newFunc:        c.NewFunc,
 		transformer:    transformer,
+		unsafeDeletion: c.AllowUnsafeMalformedObjectDeletion,
 	}
 	s.alive, s.destroy = context.WithCancel(context.Background())
 	s.lister = newLister(s.readList, b.hub, c.Project)
 	return s, nil
 }
+
+func (s *store) corrupt(err error) bool { return s.unsafeDeletion && isCorrupt(err) }
 
 // authData returns the etcd key of key, which is the transformer's
 // authenticated data.
@@ -126,10 +146,16 @@ func (s *store) Get(ctx context.Context, key string, opts storage.GetOptions, ou
 		return storage.NewKeyNotFoundError(preparedKey, 0)
 	}
 	data, _, err := s.transformer.TransformFromStorage(ctx, live.value, s.authData(preparedKey))
-	if err != nil {
-		return storage.NewInternalError(err)
+	if err == nil {
+		err = s.decoder.Decode(data, out, live.rev)
+	} else if !s.corrupt(err) {
+		err = storage.NewInternalError(err)
 	}
-	return s.decoder.Decode(data, out, live.rev)
+	if c, ok := errors.AsType[*corruptObjectError](err); ok && s.unsafeDeletion {
+		// The registry offers the unsafe delete for this error.
+		return storage.NewCorruptObjError(preparedKey, c)
+	}
+	return err
 }
 
 func (s *store) GetCurrentResourceVersion(ctx context.Context) (uint64, error) {

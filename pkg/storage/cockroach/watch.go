@@ -228,6 +228,11 @@ func (w *watcher) transform(e *feedEvent) (watch.Event, error) {
 	if needOld && e.prevValue != nil {
 		// The old object carries the revision of the write that replaced it.
 		if old, err = w.decode(e.key, e.prevValue, e.rev); err != nil {
+			if e.op == watch.Deleted && w.s.corrupt(err) {
+				// An unsafe delete of an object that cannot be read, as etcd3
+				// reports it.
+				return watch.Event{}, corruptDeletedError(err)
+			}
 			return watch.Event{}, err
 		}
 	}
@@ -278,6 +283,9 @@ func (w *watcher) filter(obj runtime.Object) bool {
 func (w *watcher) decode(key string, value []byte, rev int64) (runtime.Object, error) {
 	data, _, err := w.s.transformer.TransformFromStorage(w.ctx, value, w.s.authData(key))
 	if err != nil {
+		if w.s.corrupt(err) {
+			return nil, err
+		}
 		return nil, storage.NewInternalError(err)
 	}
 	obj := w.s.newFunc()
