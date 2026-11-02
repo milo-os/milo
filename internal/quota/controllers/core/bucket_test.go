@@ -299,6 +299,30 @@ func claimTestCluster(t *testing.T, bucket *quotav1alpha1.AllowanceBucket, grant
 	return fakeCluster{client: store, reader: live}
 }
 
+// cacheHolding makes the cluster's cache return these claims, as an informer that lags the store does, and returns
+// the allocation decision each claim gets from a reconcile, by claim name.
+func cacheHolding(c *fakeCluster, claims ...*quotav1alpha1.ResourceClaim) map[string]string {
+	decisions := map[string]string{}
+	c.client = interceptor.NewClient(c.client.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if cached, ok := list.(*quotav1alpha1.ResourceClaimList); ok {
+				cached.Items = nil
+				for _, claim := range claims {
+					cached.Items = append(cached.Items, *claim)
+				}
+				return nil
+			}
+			return cl.List(ctx, list, opts...)
+		},
+		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			claim := obj.(*quotav1alpha1.ResourceClaim)
+			decisions[claim.Name] = claim.Status.Allocations[0].Status
+			return nil
+		},
+	})
+	return decisions
+}
+
 // A live LIST of every claim of the consumer on every reconcile costs the API server the plane's whole claim set
 // (milo#949's cost at 2,159 claims). When the cache agrees with the live bucket's allocation, it is current enough.
 func TestAllowanceBucketReadsAgreeingClaimsFromTheCache(t *testing.T) {
@@ -307,10 +331,43 @@ func TestAllowanceBucketReadsAgreeingClaimsFromTheCache(t *testing.T) {
 	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: resourceType}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 2, Allocated: 1}}
 	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: resourceType, Buckets: []quotav1alpha1.Bucket{{Amount: 2}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
 	granted := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: "first"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: resourceType, Amount: 1}}}, Status: quotav1alpha1.ResourceClaimStatus{Allocations: []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: resourceType, Status: quotav1alpha1.ResourceClaimAllocationStatusGranted, AllocatedAmount: 1, AllocatingBucket: "bucket"}}}}
+	pending := granted.DeepCopy()
+	pending.Name = "second"
+	pending.Status = quotav1alpha1.ResourceClaimStatus{}
 	liveLists := 0
-	c := claimTestCluster(t, bucket, grant, []*quotav1alpha1.ResourceClaim{granted}, &liveLists)
+	c := claimTestCluster(t, bucket, grant, []*quotav1alpha1.ResourceClaim{granted, pending}, &liveLists)
+	decisions := cacheHolding(&c, granted, pending)
 	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
 	_, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
 	require.NoError(t, err)
 	assert.Zero(t, liveLists, "the cache agrees with the live bucket, so no live claim LIST is needed")
+	assert.Equal(t, map[string]string{"second": quotav1alpha1.ResourceClaimAllocationStatusGranted}, decisions)
+	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(bucket), bucket))
+	assert.EqualValues(t, 2, bucket.Status.Allocated)
+}
+
+// The live bucket's allocation drops only when a reconcile recomputes it, so after a claim is deleted it still counts
+// that claim. A cache that still holds the deleted claim then agrees with the live bucket. A pending claim that fits
+// once the deleted claim is gone must be granted, as a live read grants it, and not denied from the cache's view.
+func TestAllowanceBucketDoesNotDenyFromADeletedClaimTheCacheHolds(t *testing.T) {
+	consumer := quotav1alpha1.ConsumerRef{Kind: "Project", Name: "p1"}
+	resourceType := "example/count"
+	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: resourceType}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 2, Allocated: 2}}
+	grant := &quotav1alpha1.ResourceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant"}, Spec: quotav1alpha1.ResourceGrantSpec{ConsumerRef: consumer, Allowances: []quotav1alpha1.Allowance{{ResourceType: resourceType, Buckets: []quotav1alpha1.Bucket{{Amount: 2}}}}}, Status: quotav1alpha1.ResourceGrantStatus{Conditions: []metav1.Condition{{Type: quotav1alpha1.ResourceGrantActive, Status: metav1.ConditionTrue}}}}
+	kept := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: "kept"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: resourceType, Amount: 1}}}, Status: quotav1alpha1.ResourceClaimStatus{Allocations: []quotav1alpha1.ResourceClaimAllocationStatus{{ResourceType: resourceType, Status: quotav1alpha1.ResourceClaimAllocationStatusGranted, AllocatedAmount: 1, AllocatingBucket: "bucket"}}}}
+	deleted := kept.DeepCopy()
+	deleted.Name = "deleted"
+	pending := kept.DeepCopy()
+	pending.Name = "pending"
+	pending.Status = quotav1alpha1.ResourceClaimStatus{}
+	liveLists := 0
+	c := claimTestCluster(t, bucket, grant, []*quotav1alpha1.ResourceClaim{kept, pending}, &liveLists)
+	decisions := cacheHolding(&c, kept, deleted, pending)
+	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
+	_, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"pending": quotav1alpha1.ResourceClaimAllocationStatusGranted}, decisions, "the deleted claim no longer takes capacity")
+	assert.Equal(t, 1, liveLists, "a denial is decided from the live claims")
+	require.NoError(t, c.reader.Get(context.Background(), client.ObjectKeyFromObject(bucket), bucket))
+	assert.EqualValues(t, 2, bucket.Status.Allocated)
 }
