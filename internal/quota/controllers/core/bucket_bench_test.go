@@ -56,26 +56,34 @@ func BenchmarkAllowanceBucketReconcile(b *testing.B) {
 	b.Run("burst-100", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			lists = 0
-			reconciles := burst(ctx, b, direct, r, req, i)
+			reconciles := burst(ctx, b, direct, r, req)
 			b.ReportMetric(float64(reconciles), "reconciles/burst")
 			b.ReportMetric(float64(lists), "live-claim-LISTs/burst")
 		}
 	})
 }
 
-// burst creates 100 pending claims at once, then reconciles the bucket until none is pending; it returns the
-// number of reconciles. The cache lags the controller's own grants here, which is where a fallback can happen.
-func burst(ctx context.Context, b *testing.B, c client.Client, r *AllowanceBucketController, req mcreconcile.Request, round int) int {
+// burstRound names each burst's claims apart: the sub-benchmark runs -count times on one API server.
+var burstRound int
+
+// burst interleaves 100 creates with reconciles, as a create burst drives the controller: each create, then one
+// reconcile. The cache lags the controller's own grants here, which is where the fix may fall back to a live LIST.
+// Then it reconciles until no claim of the burst is pending. It returns the number of reconciles.
+func burst(ctx context.Context, b *testing.B, c client.Client, r *AllowanceBucketController, req mcreconcile.Request) int {
 	b.Helper()
+	round := burstRound
+	burstRound++
 	consumer := quotav1alpha1.ConsumerRef{APIGroup: "resourcemanager.miloapis.com", Kind: "Project", Name: "heavy"}
+	reconciles := 0
 	for j := 0; j < 100; j++ {
 		claim := &quotav1alpha1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("burst-%d-%03d", round, j), Namespace: "default"}, Spec: quotav1alpha1.ResourceClaimSpec{ConsumerRef: consumer, Requests: []quotav1alpha1.ResourceRequest{{ResourceType: "core.miloapis.com/configmaps", Amount: 1}}}}
 		must(b, c.Create(ctx, claim))
-	}
-	reconciles := 0
-	for pending := 100; pending > 0 && reconciles < 1000; reconciles++ {
 		must(b, reconcileErr(r.Reconcile(ctx, req)))
-		pending = pendingClaims(ctx, b, c, round)
+		reconciles++
+	}
+	for pendingClaims(ctx, b, c, round) > 0 && reconciles < 200 {
+		must(b, reconcileErr(r.Reconcile(ctx, req)))
+		reconciles++
 	}
 	return reconciles
 }
