@@ -291,15 +291,29 @@ func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, cl
 		if err != nil {
 			return false, err
 		}
-		for _, request := range pending {
-			fits := bucket.Status.Limit-bucket.Status.Allocated >= request.Amount
-			if !fits && !live {
-				return true, nil
-			}
-			if err := r.decideRequest(ctx, cl.GetClient(), claim, request, bucket, fits); err != nil {
-				return false, err
-			}
+		if needsLive, err := r.decideClaim(ctx, cl.GetClient(), claim, pending, bucket, live); err != nil || needsLive {
+			return needsLive, err
 		}
+	}
+	return false, nil
+}
+
+// decideClaim decides one claim's pending requests, and counts the claim once when one of them is granted: a claim
+// with a pending request held no grant in this bucket, and a recompute from the live claims would count it now.
+func (r *AllowanceBucketController) decideClaim(ctx context.Context, clusterClient client.Client, claim *quotav1alpha1.ResourceClaim, pending []quotav1alpha1.ResourceRequest, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
+	granted := false
+	for _, request := range pending {
+		fits := bucket.Status.Limit-bucket.Status.Allocated >= request.Amount
+		if !fits && !live {
+			return true, nil
+		}
+		if err := r.decideRequest(ctx, clusterClient, claim, request, bucket, fits); err != nil {
+			return false, err
+		}
+		granted = granted || fits
+	}
+	if granted {
+		bucket.Status.ClaimCount++
 	}
 	return false, nil
 }
