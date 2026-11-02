@@ -89,7 +89,7 @@ jobs:
           echo "Go version: $(go version)"
 
       - name: Build Milo container image with caching
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
