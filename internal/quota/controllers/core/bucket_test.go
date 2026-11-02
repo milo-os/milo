@@ -434,9 +434,10 @@ func TestAllowanceBucketReadsAPendingClaimLiveBeforeDecidingIt(t *testing.T) {
 // a live read.
 func TestAllowanceBucketDeniesFromALiveReadWhenTheCacheAgrees(t *testing.T) {
 	claims := []*quotav1alpha1.ResourceClaim{testClaim("kept", 1, quotav1alpha1.ResourceClaimAllocationStatusGranted), testClaim("pending", 1, "")}
-	decisions, _, liveLists := reconcileWithCache(t, 1, 1, claims, claims)
+	decisions, bucket, liveLists := reconcileWithCache(t, 1, 1, claims, claims)
 	assert.Equal(t, map[string]string{"pending": quotav1alpha1.ResourceClaimAllocationStatusDenied}, decisions)
 	assert.Equal(t, 1, liveLists)
+	assert.EqualValues(t, 1, bucket.Status.ClaimCount, "a denied claim is not counted")
 }
 
 // The cache answers the bucket's consumer's claims only: another project's pending claim is not decided here.
