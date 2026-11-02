@@ -12,14 +12,89 @@ import (
 	"k8s.io/component-base/metrics/legacyregistry"
 )
 
-// The storage's metrics. None has a project label, because a series per
-// project would cost more than it tells.
+// The watch hub's metrics. Sinkless changefeeds export none of their own, so
+// these are the only view of the feed. None has a project label, because a
+// series per project would cost more than it tells.
 var (
+	feedLag = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_watch_feed_lag_seconds",
+			Help:           "Time since the watch feed's last resolved timestamp: every write before it has reached the hub",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	delivery = k8smetrics.NewHistogram(
+		&k8smetrics.HistogramOpts{
+			Name: "cockroachstorage_watch_delivery_seconds",
+			Help: "Time from a write's commit to the hub handing it to watchers: the watch delay storage adds. " +
+				"The commit time comes from the database's clock, which CockroachDB keeps within its maximum clock offset of this server's",
+			Buckets:        k8smetrics.ExponentialBuckets(0.001, 2, 14),
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	feedRestarts = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_watch_feed_restarts_total",
+			Help:           "Watch feed restarts, by kind: resume from the cursor, or reset to the current state, which makes open watches relist",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"kind"},
+	)
+	watchEvents = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_watch_events_total",
+			Help:           "Writes the hub released to watchers, in each project's revision order",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	pendingEvents = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_watch_pending_events",
+			Help:           "Object writes the hub holds because an earlier revision of the same project has not arrived",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	recentEvents = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_watch_recent_events",
+			Help:           "Released events the hub keeps for watches that start at an older revision",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	openWatchers = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_watchers",
+			Help:           "Open watches the hub sends events to",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	closedWatchers = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_watchers_closed_total",
+			Help:           "Watches the hub closed, by reason: behind (the watcher fell too far behind) or reset (the feed restarted from the current state)",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"reason"},
+	)
+	bookmarks = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_watch_bookmarks_total",
+			Help:           "Periodic bookmarks sent to watches that allow them",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	recentEventBytes = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_watch_recent_event_bytes",
+			Help:           "Bytes of object values the hub keeps in its recent events, across projects",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
 	// The buckets resolve the low milliseconds, where most operations land.
 	dbOperations = k8smetrics.NewHistogramVec(
 		&k8smetrics.HistogramOpts{
 			Name:           "cockroachstorage_db_operation_seconds",
-			Help:           "Time spent in the database per storage operation, by operation (get, write or revision); a write counts each attempt",
+			Help:           "Time spent in the database per storage operation, by operation (get, list, write or revision); a write counts each attempt",
 			Buckets:        k8smetrics.ExponentialBuckets(0.0005, 2, 14),
 			StabilityLevel: k8smetrics.ALPHA,
 		},
@@ -36,15 +111,25 @@ var (
 	retries = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "cockroachstorage_db_retries_total",
-			Help:           "Transactions run again after the database aborted them, by operation and SQLSTATE",
+			Help:           "Transactions run again after the database aborted them, by operation (write or list) and SQLSTATE",
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 		[]string{"operation", "code"},
 	)
+	feedWaits = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name: "cockroachstorage_watch_feed_waits_total",
+			Help: "Requests that waited for the hub to reach a revision, by request (watch or exact_read) " +
+				"and result (caught_up or timeout)",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"request", "result"},
+	)
 )
 
 func init() {
-	legacyregistry.MustRegister(dbOperations, dbErrors, retries)
+	legacyregistry.MustRegister(feedLag, delivery, feedRestarts, watchEvents, pendingEvents, recentEvents,
+		recentEventBytes, dbOperations, dbErrors, retries, openWatchers, closedWatchers, bookmarks, feedWaits)
 	legacyregistry.CustomMustRegister(poolMetrics)
 }
 

@@ -111,7 +111,7 @@ func TestMain(m *testing.M) {
 	testDBDSN, drop, backendErr = createDatabase(ctx, baseDSN, fmt.Sprintf("milo_storage_test_%d", time.Now().UnixNano()))
 	if backendErr == nil {
 		if backendErr = Migrate(ctx, testDBDSN); backendErr == nil {
-			backend, backendErr = Open(ctx, testDBDSN)
+			backend, backendErr = Open(ctx, testDBDSN, testOptions())
 		}
 	}
 	code := m.Run()
@@ -123,6 +123,17 @@ func TestMain(m *testing.M) {
 	}
 	if code != 0 {
 		os.Exit(code)
+	}
+}
+
+func testOptions() Option {
+	return func(o *options) {
+		// A request for a revision the feed has not delivered waits for it, so
+		// no test depends on how fast the feed is. Tests that kill the feed
+		// wait out its retry.
+		o.hub.awaitTimeout = time.Hour
+		o.feedRetry = 50 * time.Millisecond
+		o.hub.tickInterval = 50 * time.Millisecond
 	}
 }
 
@@ -274,9 +285,11 @@ func testSetup(t *testing.T, changes ...func(*Config)) (context.Context, testSto
 // replica would see it.
 func otherReplica(t *testing.T, s testStore, opts ...Option) testStore {
 	t.Helper()
-	b, err := Open(t.Context(), testDBDSN, opts...)
+	b, err := Open(t.Context(), testDBDSN, append([]Option{testOptions()}, opts...)...)
 	require.NoError(t, err)
 	t.Cleanup(b.Close)
+	// Writes before the feed's baseline would predate everything it knows.
+	require.NoError(t, b.hub.waitReady(t.Context()))
 	return newTestStore(t, b, testConfig(s.project))
 }
 

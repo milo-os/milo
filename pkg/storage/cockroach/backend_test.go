@@ -135,14 +135,14 @@ func TestOpenChecksTheSchemaVersion(t *testing.T) {
 	dsn, drop, err := createDatabase(ctx, baseDSN, fmt.Sprintf("milo_storage_unmigrated_%d", time.Now().UnixNano()))
 	require.NoError(t, err)
 	defer drop()
-	_, err = Open(ctx, dsn)
+	_, err = Open(ctx, dsn, testOptions())
 	require.Error(t, err, "Open succeeded on a database with no schema")
-	b, err := Open(ctx, dsn, MigrateOnOpen())
+	b, err := Open(ctx, dsn, testOptions(), MigrateOnOpen())
 	require.NoError(t, err)
 	_, err = b.pool.Exec(ctx, `INSERT INTO goose_db_version (version_id, is_applied) SELECT max(version_id) + 1, true FROM goose_db_version`)
 	require.NoError(t, err)
 	b.Close()
-	b, err = Open(ctx, dsn)
+	b, err = Open(ctx, dsn, testOptions())
 	require.NoError(t, err, "Open refused a schema ahead of the binary")
 	b.Close()
 }
@@ -158,7 +158,7 @@ func TestConcurrentMigrations(t *testing.T) {
 	errs := make(chan error, 3)
 	for range 3 {
 		go func() {
-			b, err := Open(ctx, dsn, MigrateOnOpen())
+			b, err := Open(ctx, dsn, testOptions(), MigrateOnOpen())
 			if err == nil {
 				b.Close()
 			}
@@ -168,6 +168,28 @@ func TestConcurrentMigrations(t *testing.T) {
 	for range 3 {
 		require.NoError(t, <-errs)
 	}
+}
+
+// Migrate sets up everything the storage assumes of the cluster.
+func TestMigrateSetsUpTheCluster(t *testing.T) {
+	b := testBackend(t)
+	ctx := t.Context()
+	var rangefeeds bool
+	require.NoError(t, b.pool.QueryRow(ctx, `SHOW CLUSTER SETTING kv.rangefeed.enabled`).Scan(&rangefeeds))
+	require.True(t, rangefeeds)
+
+	ttl, err := gcTTL(ctx, b.pool)
+	require.NoError(t, err)
+	// Exact reads at recorded timestamps need their versions, with margin.
+	require.Greater(t, ttl, 2*defaultReplayConfig().window)
+}
+
+// A replay window the GC TTL can't serve is refused at startup, not found
+// later as failing exact reads.
+func TestOpenRefusesReplayWindowPastGCTTL(t *testing.T) {
+	testBackend(t)
+	_, err := Open(t.Context(), testDBDSN, WatchReplay(time.Hour, 0))
+	require.ErrorContains(t, err, "GC TTL")
 }
 
 func TestOpenSetsConnectionLifetime(t *testing.T) {
@@ -180,8 +202,17 @@ func TestOpenSetsConnectionLifetime(t *testing.T) {
 	q := u.Query()
 	q.Set("pool_max_conn_lifetime", "1h")
 	u.RawQuery = q.Encode()
-	own, err := Open(t.Context(), u.String())
+	own, err := Open(t.Context(), u.String(), testOptions())
 	require.NoError(t, err)
 	t.Cleanup(own.Close)
 	require.Equal(t, time.Hour, own.pool.Config().MaxConnLifetime, "the DSN's lifetime wins")
+}
+
+func TestWatchReadyIgnoresLagUnlessAsked(t *testing.T) {
+	b := &Backend{hub: memoryHub(), feed: &feed{}}
+	b.feed.resolved.Store(time.Now().Add(-time.Hour).UnixNano())
+	b.feed.caughtUp.Store(true)
+	require.NoError(t, b.WatchReady())
+	b.lagReadiness = time.Minute
+	require.ErrorContains(t, b.WatchReady(), "behind")
 }

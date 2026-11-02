@@ -279,6 +279,9 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	if len(rows.keys) == 0 {
 		return results, nil
 	}
+	// Commit timestamps come from the feed. Selecting cluster_logical_timestamp()
+	// here would fix the transaction's timestamp, so CockroachDB could no longer
+	// refresh it past concurrent reads and would abort it instead.
 	var commit pgx.Batch
 	commit.Queue(upsertSQL, project, rows.keys, rows.revs, rows.deleted, rows.values, rows.ttls, counter+int64(len(rows.keys)))
 	commit.Queue(`COMMIT`)

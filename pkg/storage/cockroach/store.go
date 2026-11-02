@@ -163,8 +163,10 @@ func (s *store) Watch(context.Context, string, storage.ListOptions) (watch.Inter
 // and nothing caches these stores.
 func (s *store) RequestWatchProgress(context.Context) error { return nil }
 
-// CompactRevision returns 0, since nothing replays past revisions yet.
-func (s *store) CompactRevision() int64 { return 0 }
+// CompactRevision returns the oldest revision the hub can replay for this
+// project.
+// Watches from before it get 410 Gone, as after an etcd compaction.
+func (s *store) CompactRevision() int64 { return s.b.hub.compactRevision(s.project) }
 
 func (s *store) validateMinimumResourceVersion(minimumResourceVersion string, actualRevision uint64) error {
 	if minimumResourceVersion == "" {

@@ -1,36 +1,55 @@
 package cockroach
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"k8s.io/apimachinery/pkg/util/cache"
 )
 
 // initialRevision is a project's revision before its first write. Kubernetes
 // reserves 0 to mean any revision.
 const initialRevision = 1
 
-// A Backend is the database connection that every store in the process
-// shares. It is safe for concurrent use.
+// A Backend is the database connection and the background work that every
+// store in the process shares. It is safe for concurrent use.
 type Backend struct {
-	pool      *pgxpool.Pool
-	committer committer
-	stops     []func()
+	pool         *pgxpool.Pool
+	revTS        revisionTimestamps
+	hub          *hub
+	feed         *feed
+	committer    committer
+	lagReadiness time.Duration
+	stops        []func()
 }
 
 // An Option configures [Open].
 type Option func(*options)
 
 type options struct {
-	maxConns int32
-	migrate  bool
+	maxConns     int32
+	lagReadiness time.Duration
+	hub          hubConfig
+	feedRetry    time.Duration
+	migrate      bool
+}
+
+func defaultOptions() options {
+	return options{
+		hub:       defaultHubConfig(),
+		feedRetry: time.Second,
+	}
 }
 
 // MigrateOnOpen has [Open] apply pending schema migrations first, as [Migrate]
@@ -47,6 +66,27 @@ func MaxConns(n int32) Option {
 	return func(o *options) { o.maxConns = n }
 }
 
+// WatchReplay sets how far back a watch can resume, as a time window and a
+// number of events behind its project's latest revision. A watch from further
+// back gets 410 Gone, and the client lists again. Exact reads at a revision
+// share the window, so it must stay under half the objects table's GC TTL,
+// and Open refuses a longer one. Zero keeps the defaults of 5 minutes and
+// 1024 events.
+func WatchReplay(window time.Duration, events int) Option {
+	return func(o *options) {
+		o.hub.replay.window = cmp.Or(window, o.hub.replay.window)
+		o.hub.replay.events = cmp.Or(events, o.hub.replay.events)
+	}
+}
+
+// WatchLagReadiness makes the API server report itself not ready while
+// watches lag more than d behind writes. Lag usually comes from the cluster,
+// so it tends to make every replica unready at once. Zero, the default,
+// leaves lag to the metrics.
+func WatchLagReadiness(d time.Duration) Option {
+	return func(o *options) { o.lagReadiness = d }
+}
+
 // A pooled connection lives for connLifetime plus up to connLifetimeJitter,
 // unless the DSN sets pool_max_conn_lifetime. Rotating connections spreads
 // them over every node again after a rolling restart.
@@ -56,17 +96,20 @@ const (
 )
 
 func (o options) validate() error {
-	if o.maxConns < 0 {
-		return errors.New("cockroach storage: the connection limit cannot be negative")
+	if o.maxConns < 0 || o.lagReadiness < 0 {
+		return errors.New("cockroach storage: the connection limit and the lag limit cannot be negative")
+	}
+	if o.hub.replay.window < 0 || o.hub.replay.events < 0 {
+		return errors.New("cockroach storage: the watch replay window and events cannot be negative")
 	}
 	return nil
 }
 
-// Open connects to the database at dsn. The schema must be one that [Migrate]
-// set up for this binary's version. The caller closes the Backend with
-// [Backend.Close].
+// Open connects to the database at dsn and starts the background work. The
+// schema must be one that [Migrate] set up for this binary's version. The
+// caller closes the Backend with [Backend.Close].
 func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
-	var o options
+	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -96,11 +139,33 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to cockroachdb: %w", err)
 	}
-	b := &Backend{pool: pool}
+	if err := checkGCWindow(ctx, pool, o.hub.replay.window); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	b := &Backend{
+		pool:         pool,
+		revTS:        revisionTimestamps{c: cache.NewExpiring(), window: o.hub.replay.window},
+		lagReadiness: o.lagReadiness,
+	}
 	b.onClose(pool.Close)
 	poolMetrics.watch(pool)
 	b.onClose(func() { poolMetrics.forget(pool) })
+	b.hub = newHub(b.revTS, o.hub)
+	b.feed = &feed{pool: pool, connConfig: cfg.ConnConfig, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
+
 	b.committer = newCommitter(b.tryCommitBatch)
+
+	// The background work stops first, while the pool is still open.
+	bg, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	var running sync.WaitGroup
+	b.onClose(func() {
+		cancel()
+		running.Wait()
+	})
+	running.Go(func() { b.feed.run(bg) })
+	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.feed.reportLag) })
+	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.hub.tick) })
 	return b, nil
 }
 
@@ -133,7 +198,58 @@ func (b *Backend) Ping(ctx context.Context) error {
 	return b.pool.Ping(ctx)
 }
 
-// Close closes the pool. Stores must not be used after Close.
+// WatchReady returns an error until the watch feed has delivered its first
+// update and watches see current writes. A feed that breaks later leaves the
+// server ready, since every replica usually shares the cause. With
+// [WatchLagReadiness], it also returns one while watches lag further behind
+// than that, which a broken feed soon does.
+func (b *Backend) WatchReady() error {
+	select {
+	case <-b.hub.ready:
+	default:
+		return errors.New("the CockroachDB watch feed has not started")
+	}
+	if !b.feed.caughtUp.Load() {
+		return fmt.Errorf("the CockroachDB watch feed hasn't caught up since it started, and is %s behind", b.feed.lag().Round(time.Second))
+	}
+	if lag := b.feed.lag(); b.lagReadiness > 0 && lag > b.lagReadiness {
+		return fmt.Errorf("the CockroachDB watch feed is %s behind, more than %s", lag.Round(time.Second), b.lagReadiness)
+	}
+	return nil
+}
+
+// checkGCWindow returns an error unless the objects table's GC TTL is over
+// twice window. Exact reads at a revision in the window read past versions,
+// and GC removes those once the TTL runs out.
+func checkGCWindow(ctx context.Context, q querier, window time.Duration) error {
+	ttl, err := gcTTL(ctx, q)
+	if err != nil {
+		return err
+	}
+	if ttl <= 2*window {
+		return fmt.Errorf("cockroach storage: a %s watch replay window needs a GC TTL over %s on the objects table, which has %s", window, 2*window, ttl)
+	}
+	return nil
+}
+
+// gcTTL reads the objects table's GC TTL.
+func gcTTL(ctx context.Context, q querier) (time.Duration, error) {
+	var zone string
+	if err := q.QueryRow(ctx, `SELECT raw_config_sql FROM [SHOW ZONE CONFIGURATION FROM TABLE objects]`).Scan(&zone); err != nil {
+		return 0, fmt.Errorf("read the objects table's GC TTL: %w", err)
+	}
+	match := gcTTLPattern.FindStringSubmatch(zone)
+	if match == nil {
+		return 0, fmt.Errorf("the objects table's zone configuration sets no GC TTL: %s", zone)
+	}
+	seconds, err := strconv.Atoi(match[1])
+	return time.Duration(seconds) * time.Second, err
+}
+
+var gcTTLPattern = regexp.MustCompile(`gc\.ttlseconds = (\d+)`)
+
+// Close stops the background work and closes the pool. Stores must not be
+// used after Close.
 func (b *Backend) Close() {
 	for _, stop := range slices.Backward(b.stops) {
 		stop()
@@ -142,3 +258,32 @@ func (b *Backend) Close() {
 
 // onClose has Close call stop, before the stop functions registered earlier.
 func (b *Backend) onClose(stop func()) { b.stops = append(b.stops, stop) }
+
+// revisionTimestamps maps a project's revisions to their commit timestamps,
+// which exact reads at those revisions need.
+type revisionTimestamps struct {
+	c      *cache.Expiring
+	window time.Duration
+}
+
+type revKey struct {
+	project string
+	rev     int64
+}
+
+// put keeps rev's commit timestamp until it's a window old, however often
+// it's recorded. An exact read at an older timestamp would find its versions
+// gone.
+func (r revisionTimestamps) put(project string, rev int64, ts hlc) {
+	if ttl := r.window - time.Since(ts.time()); ttl > 0 {
+		r.c.Set(revKey{project, rev}, ts, ttl)
+	}
+}
+
+func (r revisionTimestamps) get(project string, rev int64) (hlc, bool) {
+	ts, ok := r.c.Get(revKey{project, rev})
+	if !ok {
+		return hlc{}, false
+	}
+	return ts.(hlc), true
+}
