@@ -50,7 +50,7 @@ func BenchmarkAllowanceBucketReconcile(b *testing.B) {
 		b.Fatal(err)
 	}
 	bucket := seedBucketPlane(ctx, b, direct)
-	cl := startCachedCluster(ctx, b, cfg, scheme)
+	cl := startCachedCluster(ctx, b, cfg, scheme, benchClaims)
 	reads := &liveReads{}
 	r := &AllowanceBucketController{Scheme: scheme, Manager: fakeManager{cluster: countingCluster(cl, reads)}}
 	req := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}}
@@ -212,8 +212,8 @@ func seedBucketPlane(ctx context.Context, b *testing.B, c client.Client) *quotav
 }
 
 // startCachedCluster starts an informer-backed cluster with the claim index the controller registers, and waits
-// for its cache.
-func startCachedCluster(ctx context.Context, b *testing.B, cfg *rest.Config, scheme *runtime.Scheme) cluster.Cluster {
+// until its cache holds wantClaims claims.
+func startCachedCluster(ctx context.Context, b testing.TB, cfg *rest.Config, scheme *runtime.Scheme, wantClaims int) cluster.Cluster {
 	b.Helper()
 	cl, err := cluster.New(cfg, func(o *cluster.Options) { o.Scheme = scheme })
 	must(b, err)
@@ -226,13 +226,13 @@ func startCachedCluster(ctx context.Context, b *testing.B, cfg *rest.Config, sch
 	}
 	var claims quotav1alpha1.ResourceClaimList
 	must(b, cl.GetCache().List(ctx, &claims))
-	if len(claims.Items) != benchClaims {
-		b.Fatalf("the cache holds %d claims, want %d", len(claims.Items), benchClaims)
+	if len(claims.Items) != wantClaims {
+		b.Fatalf("the cache holds %d claims, want %d", len(claims.Items), wantClaims)
 	}
 	return cl
 }
 
-func must(b *testing.B, err error) {
+func must(b testing.TB, err error) {
 	b.Helper()
 	if err != nil {
 		b.Fatal(err)

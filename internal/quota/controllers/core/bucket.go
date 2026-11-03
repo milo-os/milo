@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -106,7 +107,10 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 
 	bucket.Status.Available = max(0, bucket.Status.Limit-bucket.Status.Allocated)
 
-	return r.updateStatusIfChanged(ctx, clusterClient, &bucket, originalStatus)
+	if result, err := r.updateStatusIfChanged(ctx, clusterClient, &bucket, originalStatus); err != nil {
+		return result, err
+	}
+	return ctrl.Result{RequeueAfter: bucketRecheckInterval}, nil
 }
 
 // updateLimitsFromGrants calculates total quota limits from active ResourceGrants.
@@ -282,76 +286,78 @@ func (r *AllowanceBucketController) applyClaims(ctx context.Context, cl cluster.
 	return needsLive, nil
 }
 
-// processPendingClaims decides each pending request of this bucket in turn, with intermediate status updates for
-// atomic quota reservation. On cached claims (live false) it stops at the first request that does not fit and
+// processPendingClaims decides each claim's pending request of this bucket in turn, with intermediate status updates
+// for atomic quota reservation. On cached claims (live false) it stops at the first request that does not fit and
 // reports it.
 func (r *AllowanceBucketController) processPendingClaims(ctx context.Context, cl cluster.Cluster, claims *quotav1alpha1.ResourceClaimList, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
 	for i := range claims.Items {
-		claim, pending, err := r.currentPending(ctx, cl.GetAPIReader(), &claims.Items[i], bucket.Spec.ResourceType, live)
+		claim, request, pending, err := r.currentPending(ctx, cl.GetAPIReader(), &claims.Items[i], bucket.Spec.ResourceType, live)
 		if err != nil {
 			return false, err
 		}
-		if needsLive, err := r.decideClaim(ctx, cl.GetClient(), claim, pending, bucket, live); err != nil || needsLive {
+		if !pending {
+			continue
+		}
+		if needsLive, err := r.decideClaim(ctx, cl.GetClient(), claim, request, bucket, live); err != nil || needsLive {
 			return needsLive, err
 		}
 	}
 	return false, nil
 }
 
-// decideClaim decides one claim's pending requests, and counts the claim once when one of them is granted: a claim
-// with a pending request held no grant in this bucket, and a recompute from the live claims would count it now.
-func (r *AllowanceBucketController) decideClaim(ctx context.Context, clusterClient client.Client, claim *quotav1alpha1.ResourceClaim, pending []quotav1alpha1.ResourceRequest, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
-	granted := false
-	for _, request := range pending {
-		fits := bucket.Status.Limit-bucket.Status.Allocated >= request.Amount
-		if !fits && !live {
-			return true, nil
-		}
-		if err := r.decideRequest(ctx, clusterClient, claim, request, bucket, fits); err != nil {
-			return false, err
-		}
-		granted = granted || fits
+// decideClaim decides a claim's pending request, and counts the claim when it is granted: a claim with a pending
+// request held no grant in this bucket, and a recompute from the live claims would count it now.
+func (r *AllowanceBucketController) decideClaim(ctx context.Context, clusterClient client.Client, claim *quotav1alpha1.ResourceClaim, request quotav1alpha1.ResourceRequest, bucket *quotav1alpha1.AllowanceBucket, live bool) (bool, error) {
+	fits := bucket.Status.Limit-bucket.Status.Allocated >= request.Amount
+	if !fits && !live {
+		return true, nil
 	}
-	if granted {
+	if err := r.decideRequest(ctx, clusterClient, claim, request, bucket, fits); err != nil {
+		return false, err
+	}
+	if fits {
 		bucket.Status.ClaimCount++
 	}
 	return false, nil
 }
 
-// currentPending returns the claim and its requests for resourceType that have no decision yet. A claim read from the
-// cache with such a request is read again live: the cache can miss a decision made since, or the claim's deletion and
-// re-creation under the same name. A claim that is gone has none.
-func (r *AllowanceBucketController) currentPending(ctx context.Context, reader client.Reader, claim *quotav1alpha1.ResourceClaim, resourceType string, live bool) (*quotav1alpha1.ResourceClaim, []quotav1alpha1.ResourceRequest, error) {
-	pending := r.pendingRequests(ctx, claim, resourceType)
-	if live || len(pending) == 0 {
-		return claim, pending, nil
+// currentPending returns the claim and its pending request for resourceType. A claim read from the cache with one is
+// read again live: the cache can miss a decision made since, or the claim's deletion and re-creation under the same
+// name. A claim that is gone has none.
+func (r *AllowanceBucketController) currentPending(ctx context.Context, reader client.Reader, claim *quotav1alpha1.ResourceClaim, resourceType string, live bool) (*quotav1alpha1.ResourceClaim, quotav1alpha1.ResourceRequest, bool, error) {
+	request, pending := r.pendingRequest(ctx, claim, resourceType)
+	if live || !pending {
+		return claim, request, pending, nil
 	}
 	var current quotav1alpha1.ResourceClaim
 	if err := reader.Get(ctx, client.ObjectKeyFromObject(claim), &current); err != nil {
 		if apierrors.IsNotFound(err) {
-			return claim, nil, nil
+			return claim, request, false, nil
 		}
-		return nil, nil, fmt.Errorf("failed to read ResourceClaim %s: %w", claim.Name, err)
+		return nil, request, false, fmt.Errorf("failed to read ResourceClaim %s: %w", claim.Name, err)
 	}
-	return &current, r.pendingRequests(ctx, &current, resourceType), nil
+	request, pending = r.pendingRequest(ctx, &current, resourceType)
+	return &current, request, pending, nil
 }
 
-// pendingRequests returns the claim's requests for resourceType that have no decision yet.
-func (r *AllowanceBucketController) pendingRequests(ctx context.Context, claim *quotav1alpha1.ResourceClaim, resourceType string) []quotav1alpha1.ResourceRequest {
-	var pending []quotav1alpha1.ResourceRequest
-	for _, request := range claim.Spec.Requests {
-		if request.ResourceType != resourceType {
-			continue
-		}
-		if r.isResourceClaimAllocationProcessed(claim, request.ResourceType) {
-			log.FromContext(ctx).V(2).Info("Request allocation already processed, skipping",
-				"claimName", claim.Name,
-				"resourceType", request.ResourceType)
-			continue
-		}
-		pending = append(pending, request)
+// pendingRequest returns the claim's undecided request for resourceType, with the amounts of its requests of that
+// type summed: a claim holds one allocation per type, so they are decided together, and one reservation matches it.
+func (r *AllowanceBucketController) pendingRequest(ctx context.Context, claim *quotav1alpha1.ResourceClaim, resourceType string) (quotav1alpha1.ResourceRequest, bool) {
+	total := quotav1alpha1.ResourceRequest{ResourceType: resourceType}
+	if r.isResourceClaimAllocationProcessed(claim, resourceType) {
+		log.FromContext(ctx).V(2).Info("Request allocation already processed, skipping",
+			"claimName", claim.Name,
+			"resourceType", resourceType)
+		return total, false
 	}
-	return pending
+	requested := false
+	for _, request := range claim.Spec.Requests {
+		if request.ResourceType == resourceType {
+			total.Amount += request.Amount
+			requested = true
+		}
+	}
+	return total, requested
 }
 
 // decideRequest grants a request that fits, reserving its amount on the bucket first, or denies it.
@@ -639,6 +645,12 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 
 	return requests
 }
+
+// bucketRecheckInterval brings every bucket back after its last reconcile. A reservation that no claim holds shows as
+// a cached total below the live allocation once the cache is current, which makes a live recompute; a quiet bucket gets
+// no event to show it. Each recheck costs one bucket GET and one grant LIST of the consumer, and a claim LIST only
+// when the totals differ.
+const bucketRecheckInterval = time.Hour
 
 // consumerClaims returns the consumer's claims from the informer cache when their granted total equals the live
 // bucket's allocation, and from the API server when it does not; it reports whether they were read live. A different
