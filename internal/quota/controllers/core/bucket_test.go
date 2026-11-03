@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -511,7 +512,8 @@ func TestAllowanceBucketDecidesAClaimsRequestsOfOneTypeTogether(t *testing.T) {
 }
 
 // A reservation that no claim holds shows as a cached total below the live allocation once the cache is current, and
-// that makes a live recompute. A quiet bucket gets no event to show it, so every reconcile comes back after an interval.
+// that makes a live recompute. A quiet bucket gets no event to show it, so every reconcile comes back after an interval,
+// spread by up to a tenth so that buckets reconciled together after a restart do not all come back in the same minute.
 func TestAllowanceBucketComesBackAfterTheRecheckInterval(t *testing.T) {
 	claims := []*quotav1alpha1.ResourceClaim{testClaim("kept", 1, quotav1alpha1.ResourceClaimAllocationStatusGranted)}
 	consumer := claims[0].Spec.ConsumerRef
@@ -521,8 +523,14 @@ func TestAllowanceBucketComesBackAfterTheRecheckInterval(t *testing.T) {
 	c := claimTestCluster(t, bucket, grant, claims, &liveLists)
 	cacheHolding(&c, claims...)
 	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
-	result, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
-	require.NoError(t, err)
-	assert.Equal(t, bucketRecheckInterval, result.RequeueAfter)
+	seen := map[time.Duration]bool{}
+	for range 20 {
+		result, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, result.RequeueAfter, bucketRecheckInterval)
+		assert.Less(t, result.RequeueAfter, bucketRecheckInterval+bucketRecheckInterval/10)
+		seen[result.RequeueAfter] = true
+	}
+	assert.Greater(t, len(seen), 1, "20 reconciles came back after one interval: %v", seen)
 	assert.Positive(t, bucketRecheckInterval)
 }
