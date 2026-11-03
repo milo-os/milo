@@ -266,6 +266,9 @@ spec:
                 maxItems: 20
                 minItems: 1
                 type: array
+                x-kubernetes-list-map-keys:
+                - resourceType
+                x-kubernetes-list-type: map
               resourceRef:
                 description: |-
                   ResourceRef identifies the actual Kubernetes resource that triggered this

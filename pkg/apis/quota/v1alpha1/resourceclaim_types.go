@@ -74,6 +74,8 @@ type ResourceClaimSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=20
+	// +listType=map
+	// +listMapKey=resourceType
 	Requests []ResourceRequest `json:"requests"`
 
 	// ResourceRef identifies the actual Kubernetes resource that triggered this
