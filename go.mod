@@ -1,6 +1,6 @@
 module go.miloapis.com/milo
 
-go 1.26.0
+go 1.27.0
 
 toolchain go1.27.3
 
@@ -15,7 +15,7 @@ require (
 	github.com/prometheus/common v0.70.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	go.etcd.io/etcd/client/pkg/v3 v3.7.1
 	go.etcd.io/etcd/client/v3 v3.7.0
 	go.miloapis.com/billing v0.3.10
@@ -38,7 +38,7 @@ require (
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/kube-aggregator v0.37.1
 	k8s.io/kube-controller-manager v0.37.1
-	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad
+	k8s.io/kube-openapi v0.0.0-20261014044854-ca3452a79603
 	k8s.io/kubernetes v1.37.1
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
 	sigs.k8s.io/controller-runtime v0.25.2
@@ -50,7 +50,6 @@ require (
 	cel.dev/expr v0.25.2 // indirect
 	cyphar.com/go-pathrs v0.2.5 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
-	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -70,18 +69,10 @@ require (
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
-	github.com/go-openapi/swag v0.27.1 // indirect
-	github.com/go-openapi/swag/cmdutils v0.27.1 // indirect
 	github.com/go-openapi/swag/conv v0.27.1 // indirect
-	github.com/go-openapi/swag/fileutils v0.27.1 // indirect
 	github.com/go-openapi/swag/jsonutils v0.27.1 // indirect
-	github.com/go-openapi/swag/loading v0.27.1 // indirect
-	github.com/go-openapi/swag/mangling v0.27.1 // indirect
-	github.com/go-openapi/swag/netutils v0.27.1 // indirect
 	github.com/go-openapi/swag/pools v0.27.1 // indirect
-	github.com/go-openapi/swag/stringutils v0.27.1 // indirect
 	github.com/go-openapi/swag/typeutils v0.27.1 // indirect
-	github.com/go-openapi/swag/yamlutils v0.27.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
@@ -113,7 +104,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/net v0.62.0 // indirect
@@ -129,7 +120,6 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/cloud-provider v0.37.1 // indirect
 	k8s.io/cluster-bootstrap v0.37.1 // indirect
 	k8s.io/component-helpers v0.37.1 // indirect
@@ -151,6 +141,7 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
+	sigs.k8s.io/structured-merge-diff/v7 v7.0.0 // indirect
 )
 
 replace (
