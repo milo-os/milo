@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -110,7 +111,7 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 	if result, err := r.updateStatusIfChanged(ctx, clusterClient, &bucket, originalStatus); err != nil {
 		return result, err
 	}
-	return ctrl.Result{RequeueAfter: bucketRecheckInterval}, nil
+	return ctrl.Result{RequeueAfter: wait.Jitter(bucketRecheckInterval, bucketRecheckJitter)}, nil
 }
 
 // updateLimitsFromGrants calculates total quota limits from active ResourceGrants.
@@ -651,6 +652,10 @@ func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, 
 // no event to show it. Each recheck costs one bucket GET and one grant LIST of the consumer, and a claim LIST only
 // when the totals differ.
 const bucketRecheckInterval = time.Hour
+
+// bucketRecheckJitter spreads each recheck over up to a tenth of the interval, so the buckets a restart reconciles
+// together do not all come back in the same minute.
+const bucketRecheckJitter = 0.1
 
 // consumerClaims returns the consumer's claims from the informer cache when their granted total equals the live
 // bucket's allocation, and from the API server when it does not; it reports whether they were read live. A different
