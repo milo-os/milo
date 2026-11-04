@@ -30,7 +30,8 @@ jobs:
     timeout-minutes: 30
     # Milo runs with the DiscoveryContextFilter feature gate off and on, and the
     # gate decides what a project's discovery lists, so the suites run in both
-    # configurations. The discovery-context-filter suite needs the gate on.
+    # configurations. The discovery-context-filter suite needs the gate on. The
+    # cockroachdb environment runs them again on the CockroachDB storage engine.
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +42,10 @@ jobs:
           - environment: discovery-context-filter
             overlay: config/overlays/test-infra-discovery-context-filter/
             selector: requires!=authorization-provider
+          # The same suites with the API server's resources in CockroachDB.
+          - environment: cockroachdb
+            overlay: config/overlays/test-infra-cockroachdb/
+            selector: requires notin (authorization-provider,discovery-context-filter)
 
     steps:
       - name: Checkout code
@@ -227,7 +232,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: debug-logs
+          # One artifact per environment: names must be unique within a run.
+          name: debug-logs-${{ matrix.environment }}
           path: |
             /tmp/kind-logs/
             .milo/kubeconfig

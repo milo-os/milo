@@ -1,0 +1,6 @@
+# The base overlay's etcd, which nothing here uses.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: etcd
+$patch: delete

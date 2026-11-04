@@ -59,6 +59,11 @@ func init() {
 	utilfeature.DefaultMutableFeatureGate.Set("RemoteRequestHeaderUID=true")
 	// Adds a goroutine to every etcd watch, one per project watch cache, and only helps with conversion webhooks.
 	utilfeature.DefaultMutableFeatureGate.Set("ConcurrentWatchObjectDecode=false")
+	// Proxies only with --peer-ca-file, which Milo doesn't set, yet still keeps
+	// peer leases in storage built straight from the etcd options, which
+	// CockroachDB mode can't serve. Upstream locks the gate on some releases
+	// after GA; by then Milo needs a way to supply its own lease storage.
+	utilfeature.DefaultMutableFeatureGate.Set("UnknownVersionInteroperabilityProxy=false")
 }
 
 var (
@@ -102,6 +107,7 @@ const defaultWatchCacheConsistencyCheckPeriod = time.Hour
 // NewCommand creates a *cobra.Command object with default parameters
 func NewCommand() *cobra.Command {
 	s := NewOptions()
+	storage := newStorageOptions()
 	var namedFlagSets cliflag.NamedFlagSets
 
 	cmd := &cobra.Command{
@@ -123,20 +129,27 @@ func NewCommand() *cobra.Command {
 			}
 			cliflag.PrintFlags(fs)
 			s.SystemNamespaces = []string{metav1.NamespaceSystem, metav1.NamespaceDefault, SystemNamespace}
+			if err := storage.validate(); err != nil {
+				return err
+			}
+			if storage.engine == storageEngineCockroachDB {
+				// Nothing reads etcd when CockroachDB holds every resource.
+				s.Etcd.SkipHealthEndpoints = true
+			}
 
 			completedOptions, err := s.Complete(cmd.Context(), []string{}, []net.IP{})
 			if err != nil {
 				return err
 			}
 
-			if errs := completedOptions.Validate(); len(errs) != 0 {
+			if errs := storage.withoutEtcdServersError(completedOptions.Validate()); len(errs) != 0 {
 				return utilerrors.NewAggregate(errs)
 			}
 
 			utilfeature.DefaultMutableFeatureGate.AddMetrics()
 
 			ctx := genericapiserver.SetupSignalContext()
-			return Run(ctx, completedOptions)
+			return run(ctx, completedOptions, storage)
 		},
 		Args: func(cmd *cobra.Command, args []string) error {
 			for _, arg := range args {
@@ -177,6 +190,8 @@ func NewCommand() *cobra.Command {
 		"Private key for the client certificate used to prove the identity of the aggregator or kube-apiserver "+
 			"when it must call out during a request. This includes proxying requests to a user "+
 			"api-server and calling out to webhook admission plugins.")
+
+	storage.addFlags(namedFlagSets.FlagSet("storage"))
 
 	verflag.AddFlags(namedFlagSets.FlagSet("global"))
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name(), logs.SkipLoggingConfigurationFlags())
@@ -275,8 +290,8 @@ func applyStorageFlags() error {
 	return nil
 }
 
-// Run runs the specified APIServer
-func Run(ctx context.Context, opts options.CompletedOptions) error {
+// run runs the API server, keeping its resources where storageConfig says.
+func run(ctx context.Context, opts options.CompletedOptions, storageConfig storageOptions) error {
 	klog.Infof("Version: %+v", version.Get())
 
 	klog.InfoS("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
@@ -285,9 +300,27 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 		return err
 	}
 
+	storage, closeStorage, storageCheck, err := storageConfig.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeStorage()
+
 	config, err := NewConfig(opts)
 	if err != nil {
 		return err
+	}
+	if storage != nil {
+		config.Storage = storage
+		// APIServices are the aggregator's own kind and every project shares
+		// them, so no project child is ever built and the drain goes unused.
+		config.Aggregator.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecorator(
+			config.Aggregator.GenericConfig.RESTOptionsGetter, config.ProjectStates,
+			2*config.Aggregator.GenericConfig.RequestTimeout, projectstorage.WithStorage(storage))
+		// The aggregator heads the server chain and answers /readyz. Its config
+		// is a copy taken in NewConfig, so a check added to the control plane's
+		// config now would never be served.
+		config.Aggregator.GenericConfig.AddReadyzChecks(storageCheck)
 	}
 
 	config.ExtraConfig.SessionsProvider.URL = sessionsProviderURL
@@ -356,12 +389,12 @@ func childDrain(config CompletedConfig) time.Duration {
 }
 
 // makeExtensionsProjectAware wraps both of apiextensions' RESTOptions getters with project-aware storage.
-func makeExtensionsProjectAware(config CompletedConfig, bootstrapper *projectstorage.NamespaceBootstrapper) {
+func makeExtensionsProjectAware(config CompletedConfig, bootstrapper *projectstorage.NamespaceBootstrapper, opts ...projectstorage.Option) {
 	ext := config.APIExtensions
 	ext.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config))
+		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), opts...)
 	ext.ExtraConfig.CRDRESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config))
+		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), opts...)
 }
 
 // CreateServerChain creates the apiservers connected via delegation
@@ -369,7 +402,12 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 
 	bootstrapper := projectstorage.NewNamespaceBootstrapper(config.ControlPlane.Generic.LoopbackClientConfig, projectNamespaceBootstrapTimeout)
-	makeExtensionsProjectAware(config, bootstrapper)
+
+	var storageOpts []projectstorage.Option
+	if config.Storage != nil {
+		storageOpts = append(storageOpts, projectstorage.WithStorage(config.Storage))
+	}
+	makeExtensionsProjectAware(config, bootstrapper, storageOpts...)
 
 	apiExtensionsServer, err := config.APIExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
@@ -416,7 +454,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 
 	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
 	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config)))
+		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config), storageOpts...))
 	}
 
 	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {

@@ -8,6 +8,7 @@ import (
 
 	apiserver "go.miloapis.com/milo/cmd/milo/apiserver"
 	controller "go.miloapis.com/milo/cmd/milo/controller-manager"
+	storage "go.miloapis.com/milo/cmd/milo/storage"
 	version "go.miloapis.com/milo/cmd/milo/version"
 )
 
@@ -19,6 +20,7 @@ func main() {
 
 	rootCmd.AddCommand(controller.NewCommand())
 	rootCmd.AddCommand(apiserver.NewCommand())
+	rootCmd.AddCommand(storage.NewCommand())
 	rootCmd.AddCommand(version.NewCommand())
 
 	code := cli.Run(rootCmd)

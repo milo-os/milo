@@ -1,0 +1,9 @@
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --storage-engine=cockroachdb
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --cockroachdb-migrate-on-start
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --cockroachdb-dsn=postgresql://root@cockroachdb-public.milo-system.svc.cluster.local:26257/milo?sslmode=verify-full&sslrootcert=/etc/cockroachdb/certs/ca.crt&sslcert=/etc/cockroachdb/certs/tls.crt&sslkey=/etc/cockroachdb/certs/tls.key
