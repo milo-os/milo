@@ -49,6 +49,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&PlatformAccessApprovalList{},
 		&PlatformAccessRejection{},
 		&PlatformAccessRejectionList{},
+		&WorkloadIdentityIssuer{},
+		&WorkloadIdentityIssuerList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

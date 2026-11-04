@@ -36,6 +36,8 @@ Resource Types:
 
 - [User](#user)
 
+- [WorkloadIdentityIssuer](#workloadidentityissuer)
+
 
 
 
@@ -3682,6 +3684,368 @@ States:
 
 ### User.status.conditions[index]
 <sup><sup>[↩ Parent](#userstatus)</sup></sup>
+
+
+
+Condition contains details for one aspect of the current state of this API Resource.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>lastTransitionTime</b></td>
+        <td>string</td>
+        <td>
+          lastTransitionTime is the last time the condition transitioned from one status to another.
+This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>message</b></td>
+        <td>string</td>
+        <td>
+          message is a human readable message indicating details about the transition.
+This may be an empty string.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>reason</b></td>
+        <td>string</td>
+        <td>
+          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+Producers of specific condition types may define expected values and meanings for this field,
+and whether the values are considered a guaranteed API.
+The value should be a CamelCase string.
+This field may not be empty.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>status</b></td>
+        <td>enum</td>
+        <td>
+          status of the condition, one of True, False, Unknown.<br/>
+          <br/>
+            <i>Enum</i>: True, False, Unknown<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          type of condition in CamelCase or in foo.example.com/CamelCase.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>observedGeneration</b></td>
+        <td>integer</td>
+        <td>
+          observedGeneration represents the .metadata.generation that the condition was set based upon.
+For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+with respect to the current state of the instance.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+            <i>Minimum</i>: 0<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+## WorkloadIdentityIssuer
+<sup><sup>[↩ Parent](#iammiloapiscomv1alpha1 )</sup></sup>
+
+
+
+
+
+
+WorkloadIdentityIssuer registers, in one project, an issuer whose tokens workloads may present. A
+controller verifies the issuer's signing keys and publishes the usable ones in status; consumers read
+status only.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+      <td><b>apiVersion</b></td>
+      <td>string</td>
+      <td>iam.miloapis.com/v1alpha1</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b>kind</b></td>
+      <td>string</td>
+      <td>WorkloadIdentityIssuer</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">metadata</a></b></td>
+      <td>object</td>
+      <td>Refer to the Kubernetes API documentation for the fields of the `metadata` field.</td>
+      <td>true</td>
+      </tr><tr>
+        <td><b><a href="#workloadidentityissuerspec">spec</a></b></td>
+        <td>object</td>
+        <td>
+          WorkloadIdentityIssuerSpec registers an OpenID Connect issuer.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#workloadidentityissuerstatus">status</a></b></td>
+        <td>object</td>
+        <td>
+          WorkloadIdentityIssuerStatus is what consumers read.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### WorkloadIdentityIssuer.spec
+<sup><sup>[↩ Parent](#workloadidentityissuer)</sup></sup>
+
+
+
+WorkloadIdentityIssuerSpec registers an OpenID Connect issuer.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#workloadidentityissuerspecoidc">oidc</a></b></td>
+        <td>object</td>
+        <td>
+          OIDC is the OpenID Connect issuer and where its signing keys come from.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>disabled</b></td>
+        <td>boolean</td>
+        <td>
+          Disabled stops every consumer from accepting tokens from this issuer.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>maxTokenLifetime</b></td>
+        <td>string</td>
+        <td>
+          MaxTokenLifetime bounds the lifetime consumers accept for tokens from this issuer, measured as exp
+minus iat. When unset it is one hour. At least one second, since consumers apply it in whole seconds,
+and at most 24 hours.<br/>
+          <br/>
+            <i>Validations</i>:<li>duration(self) >= duration('1s') && duration(self) <= duration('24h'): maxTokenLifetime must be at least 1s and at most 24h</li>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>requiredClaims</b></td>
+        <td>map[string]string</td>
+        <td>
+          RequiredClaims are claims a token must carry with exactly these string values.<br/>
+          <br/>
+            <i>Validations</i>:<li>self.all(k, size(k) >= 1 && size(k) <= 128): claim names must be 1 to 128 characters</li><li>self.all(k, !(k in ['iss', 'aud', 'exp', 'nbf', 'iat', 'jti'])): iss, aud, exp, nbf, iat and jti are checked by other fields and cannot be required here</li>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### WorkloadIdentityIssuer.spec.oidc
+<sup><sup>[↩ Parent](#workloadidentityissuerspec)</sup></sup>
+
+
+
+OIDC is the OpenID Connect issuer and where its signing keys come from.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>issuerUri</b></td>
+        <td>string</td>
+        <td>
+          IssuerURI is the issuer's identifier, compared exactly with a token's iss claim. It must start with
+"https://" in lower case, use port 443, name a DNS host rather than an IP address, and carry no query,
+fragment or user information.<br/>
+          <br/>
+            <i>Validations</i>:<li>self == oldSelf: issuerUri cannot be changed</li><li>self.startsWith('https://') && isURL(self) && url(self).getScheme() == 'https' && url(self).getPort() in ['', '443'] && size(url(self).getQuery()) == 0 && !self.contains('#') && !self.contains('@') && !self.startsWith('https://[') && !self.matches('^https://[0-9.]+([:/?].*)?$'): issuerUri must start with https:// in lower case, use port 443 and a DNS hostname rather than an IP address, and carry no query, fragment or user information</li>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#workloadidentityissuerspecoidcjwks">jwks</a></b></td>
+        <td>object</td>
+        <td>
+          JWKS says where the issuer's signing keys come from.<br/>
+          <br/>
+            <i>Validations</i>:<li>self.source == 'ExplicitURL' ? (has(self.explicitUrl) && !has(self.inline)) : (self.source == 'Inline' ? (has(self.inline) && !has(self.explicitUrl)) : (!has(self.explicitUrl) && !has(self.inline))): explicitUrl is set only for ExplicitURL, and inline only for Inline</li>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### WorkloadIdentityIssuer.spec.oidc.jwks
+<sup><sup>[↩ Parent](#workloadidentityissuerspecoidc)</sup></sup>
+
+
+
+JWKS says where the issuer's signing keys come from.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>explicitUrl</b></td>
+        <td>string</td>
+        <td>
+          ExplicitURL is the key set's URL, under the same rules as issuerUri except that it may carry a query.<br/>
+          <br/>
+            <i>Validations</i>:<li>self.startsWith('https://') && isURL(self) && url(self).getScheme() == 'https' && url(self).getPort() in ['', '443'] && !self.contains('#') && !self.contains('@') && !self.startsWith('https://[') && !self.matches('^https://[0-9.]+([:/?].*)?$'): explicitUrl must start with https:// in lower case, use port 443 and a DNS hostname rather than an IP address, and carry no fragment or user information</li>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>inline</b></td>
+        <td>string</td>
+        <td>
+          Inline is a JSON Web Key Set document (RFC 7517), for issuers the control plane cannot reach. It holds
+public keys only.<br/>
+          <br/>
+            <i>Validations</i>:<li>!self.matches('"(d|p|q|dp|dq|qi|oth|k)"[[:space:]]*:'): inline must hold public keys only: remove the private key members (d, p, q, dp, dq, qi, oth, k) and rotate the key</li>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>source</b></td>
+        <td>enum</td>
+        <td>
+          Source is Discovery (the issuer's discovery document names the key set), ExplicitURL, or Inline.<br/>
+          <br/>
+            <i>Enum</i>: Discovery, ExplicitURL, Inline<br/>
+            <i>Default</i>: Discovery<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### WorkloadIdentityIssuer.status
+<sup><sup>[↩ Parent](#workloadidentityissuer)</sup></sup>
+
+
+
+WorkloadIdentityIssuerStatus is what consumers read.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#workloadidentityissuerstatusconditionsindex">conditions</a></b></td>
+        <td>[]object</td>
+        <td>
+          Conditions: Ready, DomainVerified and Disabled.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>issuer</b></td>
+        <td>string</td>
+        <td>
+          Issuer is the exact iss value tokens carry: spec.oidc.issuerUri.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>keySet</b></td>
+        <td>string</td>
+        <td>
+          KeySet is the verified JSON Web Key Set: only the keys a token verifier can use, Ed25519 (EdDSA),
+P-256 (ES256) and RSA of at least 2048 bits (RS256), with use "sig" or none and alg matching the key,
+each with a kid unique in the set, and each with its public members only.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>keySetGeneration</b></td>
+        <td>integer</td>
+        <td>
+          KeySetGeneration increases each time KeySet changes.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>lastFetchTime</b></td>
+        <td>string</td>
+        <td>
+          LastFetchTime is when the key set in KeySet was last obtained and verified: for an inline key set,
+when KeySet last changed.<br/>
+          <br/>
+            <i>Format</i>: date-time<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>maxTokenLifetime</b></td>
+        <td>string</td>
+        <td>
+          MaxTokenLifetime is the lifetime bound in effect: spec.maxTokenLifetime, or one hour when that is
+unset.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>observedGeneration</b></td>
+        <td>integer</td>
+        <td>
+          ObservedGeneration is the spec generation this status describes.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>requiredClaims</b></td>
+        <td>map[string]string</td>
+        <td>
+          RequiredClaims is spec.requiredClaims as of ObservedGeneration: the claims a token must carry with
+exactly these string values.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### WorkloadIdentityIssuer.status.conditions[index]
+<sup><sup>[↩ Parent](#workloadidentityissuerstatus)</sup></sup>
 
 
 
