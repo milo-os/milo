@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
+	"go.miloapis.com/milo/internal/emaildomain"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 )
@@ -23,7 +24,7 @@ import (
 var organizationlog = logf.Log.WithName("organization-resource")
 
 // SetupWebhooksWithManager sets up all resourcemanager.miloapis.com webhooks
-func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, organizationOwnerRoleName string, organizationOwnerRoleNamespace string) error {
+func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace string, organizationOwnerRoleName string, organizationOwnerRoleNamespace string, assignableRolesNamespace string) error {
 	organizationlog.Info("Setting up resourcemanager.miloapis.com organization webhooks")
 
 	return ctrl.NewWebhookManagedBy(mgr, &resourcemanagerv1alpha1.Organization{}).
@@ -32,6 +33,9 @@ func SetupOrganizationWebhooksWithManager(mgr ctrl.Manager, systemNamespace stri
 			systemNamespace:    systemNamespace,
 			ownerRoleName:      organizationOwnerRoleName,
 			ownerRoleNamespace: organizationOwnerRoleNamespace,
+
+			assignableRolesNamespace: assignableRolesNamespace,
+			emailDomains:             emaildomain.NewVerifier(mgr.GetClient(), mgr.GetConfig()),
 		}).
 		WithDefaulter(&OrganizationMutator{}).
 		Complete()
@@ -88,12 +92,20 @@ type OrganizationValidator struct {
 	systemNamespace    string
 	ownerRoleName      string
 	ownerRoleNamespace string
+
+	assignableRolesNamespace string
+	emailDomains             *emaildomain.Verifier
 }
 
 func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
 	organizationlog.Info("Validating Organization", "name", org.Name)
 
 	errs := validateOrganizationSpec(&org.Spec, field.NewPath("spec"))
+	emailDomainErrs, err := v.validateEmailDomainJoining(ctx, nil, org)
+	if err != nil {
+		return nil, err
+	}
+	errs = append(errs, emailDomainErrs...)
 	if len(org.Name) > 50 {
 		errs = append(errs, field.Invalid(
 			field.NewPath("metadata", "name"),
@@ -181,6 +193,11 @@ func (v *OrganizationValidator) ValidateCreate(ctx context.Context, org *resourc
 
 func (v *OrganizationValidator) ValidateUpdate(ctx context.Context, oldObj, newOrg *resourcemanagerv1alpha1.Organization) (admission.Warnings, error) {
 	errs := validateOrganizationUpdate(oldObj, newOrg)
+	emailDomainErrs, err := v.validateEmailDomainJoining(ctx, oldObj, newOrg)
+	if err != nil {
+		return nil, err
+	}
+	errs = append(errs, emailDomainErrs...)
 
 	// Validate organization name length
 	if len(newOrg.Name) > 50 {

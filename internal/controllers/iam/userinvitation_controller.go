@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"go.miloapis.com/milo/internal/emaildomain"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -264,7 +265,10 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Send an email to the invitee user to accept the invitation
 	// It is possible that the invitee User is not created yet, so we send the email anyway.
-	if err := r.createInvitationEmail(ctx, ui.DeepCopy()); err != nil {
+	// Email domain offers are shown in the app instead, since nobody sent them.
+	if isEmailDomainOffer(ui) {
+		log.Info("Email domain offer, skipping invitation email", "userInvitation", ui.GetName())
+	} else if err := r.createInvitationEmail(ctx, ui.DeepCopy()); err != nil {
 		log.Error(err, "Failed to send invitation email to user", "userInvitation", ui.GetName())
 		return ctrl.Result{}, fmt.Errorf("failed to send invitation email to user: %w", err)
 	}
@@ -706,7 +710,8 @@ func (r *UserInvitationController) createInvitationEmail(ctx context.Context, ui
 }
 
 // memberJoinedViaInvitation is the JoinMethod variable sent in member joined
-// emails when the new member accepted a UserInvitation.
+// emails when the new member accepted a UserInvitation an owner sent. An email
+// domain offer sends emaildomain.JoinMethodEmailDomain instead.
 const memberJoinedViaInvitation = "Invitation"
 
 // createMemberJoinedEmails emails every owner of the invitation's organization,
@@ -755,13 +760,30 @@ func (r *UserInvitationController) createMemberJoinedEmails(ctx context.Context,
 		memberDisplayName = user.Spec.Email
 	}
 
-	variables := []notificationv1alpha1.EmailVariable{
+	joinMethod := memberJoinedViaInvitation
+	if isEmailDomainOffer(ui) {
+		joinMethod = emaildomain.JoinMethodEmailDomain
+	}
+
+	// The Email webhook rejects a variable the template doesn't declare, so
+	// send only declared ones. A template that predates EmailDomain still works.
+	declared := make(map[string]bool, len(template.Spec.Variables))
+	for _, v := range template.Spec.Variables {
+		declared[v.Name] = true
+	}
+	var variables []notificationv1alpha1.EmailVariable
+	for _, v := range []notificationv1alpha1.EmailVariable{
 		{Name: "OrganizationName", Value: ui.Spec.OrganizationRef.Name},
 		{Name: "OrganizationDisplayName", Value: organizationDisplayName},
 		{Name: "MemberDisplayName", Value: memberDisplayName},
 		{Name: "MemberEmail", Value: user.Spec.Email},
-		{Name: "JoinMethod", Value: memberJoinedViaInvitation},
+		{Name: "JoinMethod", Value: joinMethod},
 		{Name: "InviterDisplayName", Value: inviterDisplayName},
+		{Name: "EmailDomain", Value: ui.Labels[emaildomain.EmailDomainLabel]},
+	} {
+		if declared[v.Name] {
+			variables = append(variables, v)
+		}
 	}
 
 	for _, owner := range owners {
@@ -859,6 +881,11 @@ func (r *UserInvitationController) getInviteeUser(ctx context.Context, email str
 
 // getReferencedInviterUserInfo gets the display name and email address of the user who invited the user in the invitation.
 func (r *UserInvitationController) getReferencedInviterUserInfo(ctx context.Context, inviterUserRef iamv1alpha1.UserReference) (string, string, error) {
+	// An email domain offer has no inviter.
+	if inviterUserRef.Name == "" {
+		return "", "", nil
+	}
+
 	user := &iamv1alpha1.User{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: inviterUserRef.Name}, user); err != nil {
 		return "", "", fmt.Errorf("failed to get inviterUser: %w", err)
@@ -899,6 +926,12 @@ func getDeterministicRoleName(role *iamv1alpha1.RoleReference, ui iamv1alpha1.Us
 }
 
 // isUserInvitationAccepted returns true if the UserInvitation is accepted
+// isEmailDomainOffer reports whether the email domain joining controller
+// created ui.
+func isEmailDomainOffer(ui *iamv1alpha1.UserInvitation) bool {
+	return ui.Labels[emaildomain.JoinMethodLabel] == emaildomain.JoinMethodEmailDomain
+}
+
 func isUserInvitationAccepted(ui *iamv1alpha1.UserInvitation) bool {
 	return ui.Spec.State == iamv1alpha1.UserInvitationStateAccepted
 }

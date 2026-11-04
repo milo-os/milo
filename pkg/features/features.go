@@ -92,6 +92,15 @@ const (
 	// alpha: v0.1.0
 	MemberJoinedEmails featuregate.Feature = "MemberJoinedEmails"
 
+	// EmailDomainJoining lets organization owners offer membership to everyone
+	// at an email domain that a Domain in one of the organization's projects
+	// verifies (Organization spec.emailDomainJoining). Offers are
+	// UserInvitations, and accepting one requires a verified email address.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	EmailDomainJoining featuregate.Feature = "EmailDomainJoining"
+
 	// ProjectSuspension enables project suspension and lifecycle controls.
 	//
 	// owner: @datum-cloud/platform
@@ -143,6 +152,10 @@ func init() {
 // Features are listed in alphabetical order.
 var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	DiscoveryContextFilter: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	EmailDomainJoining: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},

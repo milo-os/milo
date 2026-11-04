@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlfinalizer "sigs.k8s.io/controller-runtime/pkg/finalizer"
 
+	"go.miloapis.com/milo/internal/emaildomain"
 	"go.miloapis.com/milo/pkg/features"
 )
 
@@ -1119,6 +1120,19 @@ func TestUserInvitationController_Reconcile_PolicyBindingsGCOnDeletion(t *testin
 	}
 }
 
+// memberJoinedTemplate returns the "member-joined" template declaring the
+// named variables, none of them required.
+func memberJoinedTemplate(variables ...string) *notificationv1alpha1.EmailTemplate {
+	template := &notificationv1alpha1.EmailTemplate{ObjectMeta: metav1.ObjectMeta{Name: "member-joined"}}
+	for _, name := range variables {
+		template.Spec.Variables = append(template.Spec.Variables, notificationv1alpha1.TemplateVariable{
+			Name: name,
+			Type: notificationv1alpha1.EmailTemplateVariableTypeString,
+		})
+	}
+	return template
+}
+
 // memberJoinedTestFixture builds an organization with two owners, a viewer, and
 // an invitee who has just joined with the owner role.
 func memberJoinedTestFixture() (invitee *iamv1alpha1.User, ui *iamv1alpha1.UserInvitation, objs []client.Object) {
@@ -1157,7 +1171,7 @@ func memberJoinedTestFixture() (invitee *iamv1alpha1.User, ui *iamv1alpha1.UserI
 	objs = []client.Object{
 		invitee, org,
 		&iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "owner-a"}, Spec: iamv1alpha1.UserSpec{Email: "a@example.com", GivenName: "Alice", FamilyName: "Owner"}},
-		&notificationv1alpha1.EmailTemplate{ObjectMeta: metav1.ObjectMeta{Name: "member-joined"}},
+		memberJoinedTemplate("OrganizationName", "OrganizationDisplayName", "MemberDisplayName", "MemberEmail", "JoinMethod", "InviterDisplayName"),
 		membership("owner-a", ownerRole),
 		membership("owner-b", resourcemanagerv1alpha1.RoleReference{Name: "org-viewer", Namespace: "milo-system"}, ownerRole),
 		membership("viewer", resourcemanagerv1alpha1.RoleReference{Name: "org-viewer", Namespace: "milo-system"}),
@@ -1300,6 +1314,64 @@ func TestUserInvitationController_createMemberJoinedEmails_Skipped(t *testing.T)
 			}
 			if len(emailList.Items) != 0 {
 				t.Errorf("expected no emails, got %d", len(emailList.Items))
+			}
+		})
+	}
+}
+
+// TestUserInvitationController_createMemberJoinedEmails_EmailDomainOffer
+// verifies that an accepted email domain offer reports its join method and
+// domain, and that a template which doesn't declare EmailDomain still gets an
+// email without it.
+func TestUserInvitationController_createMemberJoinedEmails_EmailDomainOffer(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.MemberJoinedEmails, true)
+	for _, tc := range []struct {
+		name            string
+		declared        []string
+		wantEmailDomain bool
+	}{
+		{name: "template declares EmailDomain", declared: []string{"JoinMethod", "EmailDomain"}, wantEmailDomain: true},
+		{name: "template predates EmailDomain", declared: []string{"JoinMethod"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.TODO()
+			invitee, ui, objs := memberJoinedTestFixture()
+			ui.Labels = map[string]string{
+				emaildomain.JoinMethodLabel:  emaildomain.JoinMethodEmailDomain,
+				emaildomain.EmailDomainLabel: "example.com",
+			}
+			ui.Spec.InvitedBy = iamv1alpha1.UserReference{}
+			for i, obj := range objs {
+				if _, ok := obj.(*notificationv1alpha1.EmailTemplate); ok {
+					objs[i] = memberJoinedTemplate(tc.declared...)
+				}
+			}
+			c := fake.NewClientBuilder().WithScheme(getTestScheme()).WithObjects(objs...).Build()
+			uic := newMemberJoinedTestController(c)
+
+			if err := uic.createMemberJoinedEmails(ctx, invitee, ui); err != nil {
+				t.Fatalf("createMemberJoinedEmails error: %v", err)
+			}
+
+			var emailList notificationv1alpha1.EmailList
+			if err := c.List(ctx, &emailList); err != nil {
+				t.Fatalf("list emails: %v", err)
+			}
+			if len(emailList.Items) != 2 {
+				t.Fatalf("expected 2 emails, got %d", len(emailList.Items))
+			}
+			vars := map[string]string{}
+			for _, v := range emailList.Items[0].Spec.Variables {
+				vars[v.Name] = v.Value
+			}
+			if len(vars) != len(tc.declared) {
+				t.Errorf("variables = %v, want only %v", vars, tc.declared)
+			}
+			if vars["JoinMethod"] != emaildomain.JoinMethodEmailDomain {
+				t.Errorf("JoinMethod = %q, want %q", vars["JoinMethod"], emaildomain.JoinMethodEmailDomain)
+			}
+			if got, ok := vars["EmailDomain"]; ok != tc.wantEmailDomain || (ok && got != "example.com") {
+				t.Errorf("EmailDomain = %q (present %v), want present %v", got, ok, tc.wantEmailDomain)
 			}
 		})
 	}
