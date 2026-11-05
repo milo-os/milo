@@ -51,37 +51,34 @@ func (r *GroupMembershipController) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	userName := groupMembership.Spec.UserRef.Name
-	if userName == "" {
+
+	email, err := r.resolveUserEmail(ctx, userName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	current, hasAnnotation := groupMembership.Annotations[iamv1alpha1.UserEmailAnnotation]
+	if email == "" && !hasAnnotation {
+		return ctrl.Result{}, nil
+	}
+	if email != "" && current == email {
 		return ctrl.Result{}, nil
 	}
 
-	// Mirror the webhook's decorate-never-reject behaviour: a missing User or a
-	// User without an email leaves the membership untouched rather than failing
-	// the reconcile, so a half-populated User cannot wedge the controller.
-	var user iamv1alpha1.User
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: userName}, &user); err != nil {
-		if errors.IsNotFound(err) {
-			log.Info("referenced user not found; leaving group membership email annotation untouched",
-				"groupMembership", groupMembership.Name, "user", userName)
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to get user %q: %w", userName, err)
-	}
-
-	if user.Spec.Email == "" {
-		return ctrl.Result{}, nil
-	}
-
-	if groupMembership.Annotations[iamv1alpha1.UserEmailAnnotation] == user.Spec.Email {
-		return ctrl.Result{}, nil
+	// The annotation is client-writable, so an email that cannot be resolved
+	// clears it rather than leaving a client-supplied value in the activity feed.
+	// A JSON merge patch removes a key whose value is null.
+	var annotationValue any
+	if email != "" {
+		annotationValue = email
 	}
 
 	// Patch only the annotation. A full update would send the whole object back
 	// and lose races against any other writer touching the membership.
 	patch, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]string{
-				iamv1alpha1.UserEmailAnnotation: user.Spec.Email,
+			"annotations": map[string]any{
+				iamv1alpha1.UserEmailAnnotation: annotationValue,
 			},
 		},
 	})
@@ -96,10 +93,29 @@ func (r *GroupMembershipController) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("failed to patch group membership email annotation: %w", err)
 	}
 
-	log.Info("refreshed member email on group membership",
-		"groupMembership", groupMembership.Name, "user", userName)
+	log.Info("synced member email annotation on group membership",
+		"groupMembership", groupMembership.Name, "user", userName, "cleared", email == "")
 
 	return ctrl.Result{}, nil
+}
+
+// resolveUserEmail returns the email of the named User, or "" when the name is
+// empty, the User does not exist, or the User has no email. A missing User is
+// not an error, so a dangling reference cannot wedge the controller.
+func (r *GroupMembershipController) resolveUserEmail(ctx context.Context, userName string) (string, error) {
+	if userName == "" {
+		return "", nil
+	}
+
+	var user iamv1alpha1.User
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: userName}, &user); err != nil {
+		if errors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get user %q: %w", userName, err)
+	}
+
+	return user.Spec.Email, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

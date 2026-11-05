@@ -148,9 +148,13 @@ func (v *GroupMembershipValidator) ValidateDelete(ctx context.Context, obj *iamv
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
 
 // GroupMembershipMutator decorates a GroupMembership with the email of the
-// User it references. It never rejects the object: a missing User leaves the
-// membership untouched, and the webhook is registered with failurePolicy
-// Ignore so an outage cannot block adding a member to a group.
+// User it references. It never rejects the object for a missing User, and the
+// webhook is registered with failurePolicy Ignore so an outage cannot block
+// adding a member to a group.
+//
+// The annotation is client-writable, so the webhook owns it outright: when the
+// email cannot be resolved it removes any value the client sent rather than
+// letting a made-up address reach the activity feed.
 type GroupMembershipMutator struct {
 	client client.Client
 }
@@ -160,19 +164,27 @@ func (m *GroupMembershipMutator) Default(ctx context.Context, gm *iamv1alpha1.Gr
 
 	userName := gm.Spec.UserRef.Name
 	if userName == "" {
+		delete(gm.Annotations, iamv1alpha1.UserEmailAnnotation)
 		return nil
 	}
 
 	user := &iamv1alpha1.User{}
 	if err := m.client.Get(ctx, client.ObjectKey{Name: userName}, user); err != nil {
+		// failurePolicy Ignore only covers an unreachable webhook. An error
+		// returned from here would reject the create, so a failed lookup
+		// admits the membership without an email instead. The controller
+		// stamps it on its next reconcile.
 		if errors.IsNotFound(err) {
-			log.Info("referenced user not found; leaving group membership without email annotation", "user", userName)
-			return nil
+			log.Info("referenced user not found; removing any email annotation from group membership", "user", userName)
+		} else {
+			log.Error(err, "failed to get referenced user; admitting group membership without email annotation", "user", userName)
 		}
-		return errors.NewInternalError(fmt.Errorf("failed to get User %q: %w", userName, err))
+		delete(gm.Annotations, iamv1alpha1.UserEmailAnnotation)
+		return nil
 	}
 
 	if user.Spec.Email == "" {
+		delete(gm.Annotations, iamv1alpha1.UserEmailAnnotation)
 		return nil
 	}
 

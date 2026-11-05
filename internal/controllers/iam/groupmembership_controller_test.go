@@ -119,6 +119,38 @@ func TestGroupMembershipControllerIgnoresMissingUser(t *testing.T) {
 	}
 }
 
+func TestGroupMembershipControllerRemovesEmailAnnotationWhenUserMissing(t *testing.T) {
+	r, c := newGroupMembershipController(groupMembershipTestMembership(map[string]string{
+		iamv1alpha1.UserEmailAnnotation: "spoofed@example.com",
+		"example.com/keep-me":           "yes",
+	}))
+
+	reconcileGroupMembership(t, r)
+
+	gm := getGroupMembership(t, c)
+	if got, ok := gm.Annotations[iamv1alpha1.UserEmailAnnotation]; ok {
+		t.Fatalf("expected email annotation to be removed when the referenced user is missing, got %q", got)
+	}
+	if got := gm.Annotations["example.com/keep-me"]; got != "yes" {
+		t.Fatalf("expected unrelated annotations to survive the patch, got %q", got)
+	}
+}
+
+func TestGroupMembershipControllerRemovesEmailAnnotationWhenUserHasNoEmail(t *testing.T) {
+	r, c := newGroupMembershipController(
+		groupMembershipTestUser("member-user", ""),
+		groupMembershipTestMembership(map[string]string{
+			iamv1alpha1.UserEmailAnnotation: "spoofed@example.com",
+		}),
+	)
+
+	reconcileGroupMembership(t, r)
+
+	if got, ok := getGroupMembership(t, c).Annotations[iamv1alpha1.UserEmailAnnotation]; ok {
+		t.Fatalf("expected email annotation to be removed when the user has no email, got %q", got)
+	}
+}
+
 func TestGroupMembershipControllerSkipsWriteWhenEmailMatches(t *testing.T) {
 	r, c := newGroupMembershipController(
 		groupMembershipTestUser("member-user", "member@example.com"),

@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func newGroupMembership(name, namespace, user, group, groupNamespace string) *iamv1alpha1.GroupMembership {
@@ -208,8 +209,8 @@ func newAnnotatedGroupMembership(annotations map[string]string) *iamv1alpha1.Gro
 }
 
 // TestGroupMembershipMutator_Default verifies the member's email is stamped
-// as an annotation when the referenced User exists, and that the object is
-// left untouched when it does not.
+// as an annotation when the referenced User exists, and that any
+// client-supplied value is removed when the email cannot be resolved.
 func TestGroupMembershipMutator_Default(t *testing.T) {
 	memberUser := &iamv1alpha1.User{
 		ObjectMeta: metav1.ObjectMeta{Name: "member-user"},
@@ -252,6 +253,18 @@ func TestGroupMembershipMutator_Default(t *testing.T) {
 			preObjects:          []client.Object{noEmailUser},
 			expectedAnnotations: nil,
 		},
+		"client-supplied email removed when user is missing": {
+			annotations: map[string]string{
+				iamv1alpha1.UserEmailAnnotation: "spoofed@example.com",
+				"example.com/keep":              "yes",
+			},
+			expectedAnnotations: map[string]string{"example.com/keep": "yes"},
+		},
+		"client-supplied email removed when user has no email": {
+			preObjects:          []client.Object{noEmailUser},
+			annotations:         map[string]string{iamv1alpha1.UserEmailAnnotation: "spoofed@example.com"},
+			expectedAnnotations: map[string]string{},
+		},
 	}
 
 	for name, tc := range tests {
@@ -266,4 +279,28 @@ func TestGroupMembershipMutator_Default(t *testing.T) {
 			assert.Equal(t, "member-user", gm.Spec.UserRef.Name)
 		})
 	}
+}
+
+// TestGroupMembershipMutator_Default_UserLookupFails verifies a failed User
+// lookup still admits the membership. The webhook only decorates, so it must
+// not turn an API error into a rejected create, and it must not let a
+// client-supplied email through either.
+func TestGroupMembershipMutator_Default_UserLookupFails(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(runtimeScheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				return assert.AnError
+			},
+		}).
+		Build()
+	mutator := &GroupMembershipMutator{client: fakeClient}
+
+	gm := newAnnotatedGroupMembership(map[string]string{
+		iamv1alpha1.UserEmailAnnotation: "spoofed@example.com",
+		"example.com/keep":              "yes",
+	})
+	require.NoError(t, mutator.Default(context.Background(), gm))
+
+	assert.Equal(t, map[string]string{"example.com/keep": "yes"}, gm.Annotations)
 }
