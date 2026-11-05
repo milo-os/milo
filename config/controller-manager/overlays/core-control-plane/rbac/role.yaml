@@ -96,6 +96,7 @@ rules:
   resources:
   - groups
   - policybindings
+  - userinvitations
   verbs:
   - create
   - delete
@@ -143,10 +144,8 @@ rules:
 - apiGroups:
   - iam.miloapis.com
   resources:
-  - userinvitations
-  - users
+  - userpreferences
   verbs:
-  - delete
   - get
   - list
   - patch
@@ -155,8 +154,9 @@ rules:
 - apiGroups:
   - iam.miloapis.com
   resources:
-  - userpreferences
+  - users
   verbs:
+  - delete
   - get
   - list
   - patch

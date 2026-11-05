@@ -27,3 +27,6 @@ spec:
   - name: InviterDisplayName
     required: false
     type: string
+  - name: EmailDomain
+    required: false
+    type: string
