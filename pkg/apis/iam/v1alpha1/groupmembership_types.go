@@ -4,6 +4,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// UserEmailAnnotation carries the current email address of the User
+	// referenced by spec.userRef. Consumers that only see the GroupMembership
+	// -- the activity log, for example -- can then show the member's email
+	// instead of the opaque User name.
+	//
+	// Two components maintain it: the GroupMembership admission webhook stamps
+	// it on create and update so it is present on the create audit event, which
+	// carries no status, and the GroupMembership controller keeps it in sync
+	// whenever the referenced User changes their email address.
+	//
+	// Example:
+	//
+	//   metadata:
+	//     annotations:
+	//       iam.miloapis.com/user-email: member@example.com
+	UserEmailAnnotation = "iam.miloapis.com/user-email"
+)
+
 // GroupMembershipSpec defines the desired state of GroupMembership
 type GroupMembershipSpec struct {
 	// UserRef is a reference to the User that is a member of the Group.

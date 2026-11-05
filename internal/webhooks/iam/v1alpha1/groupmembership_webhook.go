@@ -43,6 +43,9 @@ func SetupGroupMembershipWebhooksWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewWebhookManagedBy(mgr, &iamv1alpha1.GroupMembership{}).
+		WithDefaulter(&GroupMembershipMutator{
+			client: mgr.GetClient(),
+		}).
 		WithValidator(&GroupMembershipValidator{
 			client: mgr.GetClient(),
 		}).
@@ -138,4 +141,58 @@ func (v *GroupMembershipValidator) ValidateUpdate(ctx context.Context, oldMember
 
 func (v *GroupMembershipValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.GroupMembership) (admission.Warnings, error) {
 	return nil, nil
+}
+
+// +kubebuilder:webhook:path=/mutate-iam-miloapis-com-v1alpha1-groupmembership,mutating=true,failurePolicy=ignore,sideEffects=None,groups=iam.miloapis.com,resources=groupmemberships,verbs=create;update,versions=v1alpha1,name=mgroupmembership.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
+
+// +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
+
+// GroupMembershipMutator decorates a GroupMembership with the email of the
+// User it references. It never rejects the object for a missing User, and the
+// webhook is registered with failurePolicy Ignore so an outage cannot block
+// adding a member to a group.
+//
+// The annotation is client-writable, so the webhook owns it outright: when the
+// email cannot be resolved it removes any value the client sent rather than
+// letting a made-up address reach the activity feed.
+type GroupMembershipMutator struct {
+	client client.Client
+}
+
+func (m *GroupMembershipMutator) Default(ctx context.Context, gm *iamv1alpha1.GroupMembership) error {
+	log := logf.FromContext(ctx).WithValues("groupmembership", gm.GetName(), "namespace", gm.GetNamespace())
+
+	userName := gm.Spec.UserRef.Name
+	if userName == "" {
+		delete(gm.Annotations, iamv1alpha1.UserEmailAnnotation)
+		return nil
+	}
+
+	user := &iamv1alpha1.User{}
+	if err := m.client.Get(ctx, client.ObjectKey{Name: userName}, user); err != nil {
+		// failurePolicy Ignore only covers an unreachable webhook. An error
+		// returned from here would reject the create, so a failed lookup
+		// admits the membership without an email instead. The controller
+		// stamps it on its next reconcile.
+		if errors.IsNotFound(err) {
+			log.Info("referenced user not found; removing any email annotation from group membership", "user", userName)
+		} else {
+			log.Error(err, "failed to get referenced user; admitting group membership without email annotation", "user", userName)
+		}
+		delete(gm.Annotations, iamv1alpha1.UserEmailAnnotation)
+		return nil
+	}
+
+	if user.Spec.Email == "" {
+		delete(gm.Annotations, iamv1alpha1.UserEmailAnnotation)
+		return nil
+	}
+
+	if gm.Annotations == nil {
+		gm.Annotations = map[string]string{}
+	}
+	gm.Annotations[iamv1alpha1.UserEmailAnnotation] = user.Spec.Email
+	log.Info("stamped member email on group membership", "user", userName)
+
+	return nil
 }
