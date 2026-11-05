@@ -1,0 +1,48 @@
+# A single-node CockroachDB for test environments, managed by the operator.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cockroachdb
+spec:
+  interval: 10m
+  dependsOn:
+    - name: cockroachdb-operator
+  chart:
+    spec:
+      chart: cockroachdb-chart
+      version: "26.3.2"
+      sourceRef:
+        kind: HelmRepository
+        name: cockroachdb
+      interval: 5m
+  values:
+    # TLS stays on with the chart's self-signer, as in a real cluster. The
+    # chart only runs postInitSQL with TLS on.
+    cockroachdb:
+      crdbCluster:
+        postInitSQL:
+          inline:
+            - CREATE DATABASE IF NOT EXISTS milo
+        regions:
+          - code: local
+            nodes: 1
+            # Kubernetes does not let a value here follow the overlay's namespace.
+            namespace: milo-system
+        dataStore:
+          volumeClaimTemplate:
+            spec:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 2Gi
+        podTemplate:
+          spec:
+            containers:
+              - name: cockroachdb
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 1Gi
+                  limits:
+                    memory: 2Gi
