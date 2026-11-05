@@ -15,10 +15,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlfinalizer "sigs.k8s.io/controller-runtime/pkg/finalizer"
+
+	"go.miloapis.com/milo/pkg/features"
 )
 
 // getTestScheme returns a runtime.Scheme with all Milo APIs registered.
@@ -1112,5 +1116,191 @@ func TestUserInvitationController_Reconcile_PolicyBindingsGCOnDeletion(t *testin
 		} else if !apierr.IsNotFound(err) {
 			t.Fatalf("unexpected error checking PolicyBinding %s: %v", pbName, err)
 		}
+	}
+}
+
+// memberJoinedTestFixture builds an organization with two owners, a viewer, and
+// an invitee who has just joined with the owner role.
+func memberJoinedTestFixture() (invitee *iamv1alpha1.User, ui *iamv1alpha1.UserInvitation, objs []client.Object) {
+	const orgNamespace = "organization-test-org"
+	ownerRole := resourcemanagerv1alpha1.RoleReference{Name: "org-owner", Namespace: "milo-system"}
+
+	invitee = &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{Name: "invitee", UID: types.UID("u-invitee")},
+		Spec:       iamv1alpha1.UserSpec{Email: "invitee@example.com", GivenName: "Jane", FamilyName: "Doe"},
+	}
+	org := &resourcemanagerv1alpha1.Organization{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-org", Annotations: map[string]string{"kubernetes.io/display-name": "Test Org"}},
+	}
+	membership := func(user string, roles ...resourcemanagerv1alpha1.RoleReference) *resourcemanagerv1alpha1.OrganizationMembership {
+		return &resourcemanagerv1alpha1.OrganizationMembership{
+			ObjectMeta: metav1.ObjectMeta{Name: "member-" + user, Namespace: orgNamespace},
+			Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
+				OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: org.Name},
+				UserRef:         resourcemanagerv1alpha1.MemberReference{Name: user},
+				Roles:           roles,
+			},
+		}
+	}
+
+	ui = &iamv1alpha1.UserInvitation{
+		ObjectMeta: metav1.ObjectMeta{Name: "inv", Namespace: orgNamespace, UID: types.UID("ui-uid")},
+		Spec: iamv1alpha1.UserInvitationSpec{
+			Email:           invitee.Spec.Email,
+			InvitedBy:       iamv1alpha1.UserReference{Name: "owner-a"},
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: org.Name},
+			Roles:           []iamv1alpha1.RoleReference{{Name: ownerRole.Name, Namespace: ownerRole.Namespace}},
+			State:           iamv1alpha1.UserInvitationStateAccepted,
+		},
+	}
+
+	objs = []client.Object{
+		invitee, org,
+		&iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "owner-a"}, Spec: iamv1alpha1.UserSpec{Email: "a@example.com", GivenName: "Alice", FamilyName: "Owner"}},
+		&notificationv1alpha1.EmailTemplate{ObjectMeta: metav1.ObjectMeta{Name: "member-joined"}},
+		membership("owner-a", ownerRole),
+		membership("owner-b", resourcemanagerv1alpha1.RoleReference{Name: "org-viewer", Namespace: "milo-system"}, ownerRole),
+		membership("viewer", resourcemanagerv1alpha1.RoleReference{Name: "org-viewer", Namespace: "milo-system"}),
+		membership(invitee.Name, ownerRole),
+	}
+	return invitee, ui, objs
+}
+
+func newMemberJoinedTestController(c client.Client) *UserInvitationController {
+	return &UserInvitationController{
+		Client:                         c,
+		MemberJoinedEmailTemplateName:  "member-joined",
+		OrganizationOwnerRoleName:      "org-owner",
+		OrganizationOwnerRoleNamespace: "milo-system",
+	}
+}
+
+// TestUserInvitationController_createMemberJoinedEmails verifies that every
+// owner except the new member gets one member joined email.
+func TestUserInvitationController_createMemberJoinedEmails(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.MemberJoinedEmails, true)
+	ctx := context.TODO()
+	invitee, ui, objs := memberJoinedTestFixture()
+	ui.Status.InviterUser.DisplayName = "Alice Owner"
+	c := fake.NewClientBuilder().WithScheme(getTestScheme()).WithObjects(objs...).Build()
+	uic := newMemberJoinedTestController(c)
+
+	if err := uic.createMemberJoinedEmails(ctx, invitee, ui); err != nil {
+		t.Fatalf("createMemberJoinedEmails error: %v", err)
+	}
+	// Idempotency: a retried reconcile must not fail or duplicate emails.
+	if err := uic.createMemberJoinedEmails(ctx, invitee, ui); err != nil {
+		t.Fatalf("idempotent createMemberJoinedEmails error: %v", err)
+	}
+
+	var emailList notificationv1alpha1.EmailList
+	if err := c.List(ctx, &emailList); err != nil {
+		t.Fatalf("list emails: %v", err)
+	}
+	recipients := map[string]bool{}
+	for _, email := range emailList.Items {
+		recipients[email.Spec.Recipient.UserRef.Name] = true
+		if email.Namespace != ui.Namespace {
+			t.Errorf("email %s in namespace %s, want %s", email.Name, email.Namespace, ui.Namespace)
+		}
+		if email.Spec.TemplateRef.Name != "member-joined" {
+			t.Errorf("unexpected TemplateRef.Name, got %s", email.Spec.TemplateRef.Name)
+		}
+	}
+	if len(emailList.Items) != 2 || !recipients["owner-a"] || !recipients["owner-b"] {
+		t.Fatalf("expected one email each for owner-a and owner-b, got recipients %v from %d emails", recipients, len(emailList.Items))
+	}
+
+	vars := map[string]string{}
+	for _, v := range emailList.Items[0].Spec.Variables {
+		vars[v.Name] = v.Value
+	}
+	want := map[string]string{
+		"OrganizationName":        "test-org",
+		"OrganizationDisplayName": "Test Org",
+		"MemberDisplayName":       "Jane Doe",
+		"MemberEmail":             "invitee@example.com",
+		"JoinMethod":              memberJoinedViaInvitation,
+		"InviterDisplayName":      "Alice Owner",
+	}
+	for name, value := range want {
+		if vars[name] != value {
+			t.Errorf("variable %s = %q, want %q", name, vars[name], value)
+		}
+	}
+}
+
+// TestUserInvitationController_createMemberJoinedEmails_InviterFallback verifies
+// that the inviter's name comes from the inviter User when the status lacks it,
+// and that a deleted inviter does not block the emails.
+func TestUserInvitationController_createMemberJoinedEmails_InviterFallback(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.MemberJoinedEmails, true)
+	for _, tc := range []struct {
+		name    string
+		inviter string
+		want    string
+	}{
+		{name: "inviter exists", inviter: "owner-a", want: "Alice Owner"},
+		{name: "inviter deleted", inviter: "gone", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.TODO()
+			invitee, ui, objs := memberJoinedTestFixture()
+			ui.Spec.InvitedBy.Name = tc.inviter
+			c := fake.NewClientBuilder().WithScheme(getTestScheme()).WithObjects(objs...).Build()
+
+			if err := newMemberJoinedTestController(c).createMemberJoinedEmails(ctx, invitee, ui); err != nil {
+				t.Fatalf("createMemberJoinedEmails error: %v", err)
+			}
+
+			var emailList notificationv1alpha1.EmailList
+			if err := c.List(ctx, &emailList); err != nil {
+				t.Fatalf("list emails: %v", err)
+			}
+			if len(emailList.Items) == 0 {
+				t.Fatal("expected member joined emails")
+			}
+			for _, v := range emailList.Items[0].Spec.Variables {
+				if v.Name == "InviterDisplayName" && v.Value != tc.want {
+					t.Errorf("InviterDisplayName = %q, want %q", v.Value, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestUserInvitationController_createMemberJoinedEmails_Skipped verifies that
+// no emails are sent, and no error returned, when the feature gate is off or
+// the template is not configured or not installed.
+func TestUserInvitationController_createMemberJoinedEmails_Skipped(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		gateEnabled  bool
+		templateName string
+	}{
+		{name: "feature gate disabled", gateEnabled: false, templateName: "member-joined"},
+		{name: "template not configured", gateEnabled: true, templateName: ""},
+		{name: "template not installed", gateEnabled: true, templateName: "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.MemberJoinedEmails, tc.gateEnabled)
+			ctx := context.TODO()
+			invitee, ui, objs := memberJoinedTestFixture()
+			c := fake.NewClientBuilder().WithScheme(getTestScheme()).WithObjects(objs...).Build()
+			uic := newMemberJoinedTestController(c)
+			uic.MemberJoinedEmailTemplateName = tc.templateName
+
+			if err := uic.createMemberJoinedEmails(ctx, invitee, ui); err != nil {
+				t.Fatalf("createMemberJoinedEmails error: %v", err)
+			}
+
+			var emailList notificationv1alpha1.EmailList
+			if err := c.List(ctx, &emailList); err != nil {
+				t.Fatalf("list emails: %v", err)
+			}
+			if len(emailList.Items) != 0 {
+				t.Errorf("expected no emails, got %d", len(emailList.Items))
+			}
+		})
 	}
 }

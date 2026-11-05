@@ -83,6 +83,15 @@ const (
 	// alpha: v0.1.0
 	UnifiedOrganizations featuregate.Feature = "UnifiedOrganizations"
 
+	// MemberJoinedEmails emails every organization owner when someone joins
+	// the organization by accepting a UserInvitation. The controller manager's
+	// --organization-member-joined-email-template must also name an installed
+	// EmailTemplate.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	MemberJoinedEmails featuregate.Feature = "MemberJoinedEmails"
+
 	// ProjectSuspension enables project suspension and lifecycle controls.
 	//
 	// owner: @datum-cloud/platform
@@ -146,6 +155,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		PreRelease: featuregate.Alpha,
 	},
 	GarbageCollectorServedTypes: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	MemberJoinedEmails: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},

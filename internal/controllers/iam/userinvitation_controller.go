@@ -8,9 +8,11 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/features"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,7 +43,14 @@ type UserInvitationController struct {
 	GetInvitationRoleName           string
 	AcceptInvitationRoleName        string
 	UserInvitationEmailTemplateName string
-	uiRelatedRoles                  []iamv1alpha1.RoleReference
+	// MemberJoinedEmailTemplateName is the template used to tell organization
+	// owners that someone joined. Leave empty to send no member joined emails.
+	MemberJoinedEmailTemplateName string
+	// OrganizationOwnerRoleName and OrganizationOwnerRoleNamespace identify the
+	// role whose holders receive member joined emails.
+	OrganizationOwnerRoleName      string
+	OrganizationOwnerRoleNamespace string
+	uiRelatedRoles                 []iamv1alpha1.RoleReference
 }
 
 type userInvitationFinalizer struct {
@@ -176,6 +185,14 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 		if err := r.createOrganizationMembership(ctx, user, ui); err != nil {
 			log.Error(err, "Failed to create OrganizationMembership for userInvitation")
 			return ctrl.Result{}, fmt.Errorf("failed to create OrganizationMembership for userInvitation: %w", err)
+		}
+
+		// Tell the organization owners before deleting the invitation, which
+		// holds the inviter details the email needs. A failure here retries the
+		// whole branch; membership and email creation are both idempotent.
+		if err := r.createMemberJoinedEmails(ctx, user, ui); err != nil {
+			log.Error(err, "Failed to send member joined emails for userInvitation")
+			return ctrl.Result{}, fmt.Errorf("failed to send member joined emails for userInvitation: %w", err)
 		}
 
 		// Delete the UserInvitation now that it has been fully processed and accepted.
@@ -686,6 +703,128 @@ func (r *UserInvitationController) createInvitationEmail(ctx context.Context, ui
 	log.Info("Email resource created", "email", emailName)
 
 	return nil
+}
+
+// memberJoinedViaInvitation is the JoinMethod variable sent in member joined
+// emails when the new member accepted a UserInvitation.
+const memberJoinedViaInvitation = "Invitation"
+
+// createMemberJoinedEmails emails every owner of the invitation's organization,
+// other than the new member, that the invitee has joined.
+// This is an idempotent operation.
+func (r *UserInvitationController) createMemberJoinedEmails(ctx context.Context, user *iamv1alpha1.User, ui *iamv1alpha1.UserInvitation) error {
+	log := logf.FromContext(ctx).WithName("userinvitation-create-member-joined-emails")
+
+	if !utilfeature.DefaultFeatureGate.Enabled(features.MemberJoinedEmails) || r.MemberJoinedEmailTemplateName == "" {
+		return nil
+	}
+
+	// The template ships separately from Milo. Skip the emails rather than
+	// leave the accepted invitation retrying until the template is installed.
+	template := &notificationv1alpha1.EmailTemplate{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: r.MemberJoinedEmailTemplateName}, template); err != nil {
+		if errors.IsNotFound(err) {
+			log.Info("Member joined email template not found, skipping member joined emails", "template", r.MemberJoinedEmailTemplateName)
+			return nil
+		}
+		return fmt.Errorf("failed to get member joined email template: %w", err)
+	}
+
+	owners, err := r.getOrganizationOwnerUserNames(ctx, ui.Spec.OrganizationRef.Name)
+	if err != nil {
+		return err
+	}
+
+	organizationDisplayName, err := r.getReferencedOrganizationDisplayName(ctx, ui.Spec.OrganizationRef)
+	if err != nil {
+		return fmt.Errorf("failed to get Organization Display Name: %w", err)
+	}
+
+	// The status normally holds the inviter's display name already. Fall back
+	// to the inviter User, which may since have been deleted.
+	inviterDisplayName := ui.Status.InviterUser.DisplayName
+	if inviterDisplayName == "" && ui.Spec.InvitedBy.Name != "" {
+		inviterDisplayName, _, err = r.getReferencedInviterUserInfo(ctx, ui.Spec.InvitedBy)
+		if err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to get Inviter Display Name: %w", err)
+		}
+	}
+
+	memberDisplayName := strings.TrimSpace(user.Spec.GivenName + " " + user.Spec.FamilyName)
+	if memberDisplayName == "" {
+		memberDisplayName = user.Spec.Email
+	}
+
+	variables := []notificationv1alpha1.EmailVariable{
+		{Name: "OrganizationName", Value: ui.Spec.OrganizationRef.Name},
+		{Name: "OrganizationDisplayName", Value: organizationDisplayName},
+		{Name: "MemberDisplayName", Value: memberDisplayName},
+		{Name: "MemberEmail", Value: user.Spec.Email},
+		{Name: "JoinMethod", Value: memberJoinedViaInvitation},
+		{Name: "InviterDisplayName", Value: inviterDisplayName},
+	}
+
+	for _, owner := range owners {
+		if owner == user.Name {
+			continue
+		}
+
+		email := &notificationv1alpha1.Email{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      getDeterministicResourceName("member-joined-"+owner, *ui),
+				Namespace: ui.GetNamespace(),
+			},
+			Spec: notificationv1alpha1.EmailSpec{
+				TemplateRef: notificationv1alpha1.TemplateReference{
+					Name: r.MemberJoinedEmailTemplateName,
+				},
+				Recipient: notificationv1alpha1.EmailRecipient{
+					UserRef: notificationv1alpha1.EmailUserReference{Name: owner},
+				},
+				Variables: variables,
+				Priority:  notificationv1alpha1.EmailPriorityNormal,
+			},
+		}
+
+		if err := r.Client.Create(ctx, email); err != nil {
+			if errors.IsAlreadyExists(err) {
+				continue
+			}
+			return fmt.Errorf("failed to create member joined Email for owner %q: %w", owner, err)
+		}
+		log.Info("Member joined email created", "email", email.GetName(), "owner", owner)
+	}
+
+	return nil
+}
+
+// getOrganizationOwnerUserNames returns the names of the Users whose
+// membership in the organization grants the organization owner role.
+func (r *UserInvitationController) getOrganizationOwnerUserNames(ctx context.Context, organizationName string) ([]string, error) {
+	var memberships resourcemanagerv1alpha1.OrganizationMembershipList
+	if err := r.Client.List(ctx, &memberships, client.InNamespace(fmt.Sprintf("organization-%s", organizationName))); err != nil {
+		return nil, fmt.Errorf("failed to list OrganizationMemberships: %w", err)
+	}
+
+	var owners []string
+	for _, membership := range memberships.Items {
+		if membership.GetDeletionTimestamp() != nil {
+			continue
+		}
+		for _, role := range membership.Spec.Roles {
+			// An empty role namespace means the membership's own namespace.
+			roleNamespace := role.Namespace
+			if roleNamespace == "" {
+				roleNamespace = membership.GetNamespace()
+			}
+			if role.Name == r.OrganizationOwnerRoleName && roleNamespace == r.OrganizationOwnerRoleNamespace {
+				owners = append(owners, membership.Spec.UserRef.Name)
+				break
+			}
+		}
+	}
+
+	return owners, nil
 }
 
 func (r *UserInvitationController) getUsersByEmail(ctx context.Context, email string) (*iamv1alpha1.UserList, error) {
