@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -239,6 +240,9 @@ func (r *AllowanceBucketController) ensureBucketFromClaims(ctx context.Context, 
 					},
 				}
 				if err := clusterClient.Create(ctx, bucket); err != nil && !apierrors.IsAlreadyExists(err) {
+					if namespaceGoing(err) {
+						return nil
+					}
 					return fmt.Errorf("failed to create AllowanceBucket %s: %w", bucketKey.Name, err)
 				}
 				return nil
@@ -246,6 +250,13 @@ func (r *AllowanceBucketController) ensureBucketFromClaims(ctx context.Context, 
 		}
 	}
 	return nil
+}
+
+// namespaceGoing reports a create refused because its namespace is being
+// deleted or already gone. The bucket's consumer goes with the namespace, so
+// there is nothing left to create.
+func namespaceGoing(err error) bool {
+	return apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) || apierrors.IsNotFound(err)
 }
 
 // isResourceGrantActive checks if a ResourceGrant has an Active condition with status True.
@@ -472,6 +483,9 @@ func (r *AllowanceBucketController) updateStatusIfChanged(ctx context.Context, c
 	bucket.Status.LastReconciliation = ptr.To(metav1.Now())
 
 	if err := clusterClient.Status().Update(ctx, bucket); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to update AllowanceBucket status: %w", err)
 	}
 
