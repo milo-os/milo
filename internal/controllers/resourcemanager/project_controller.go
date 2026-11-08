@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
@@ -42,6 +43,10 @@ const (
 	// cleanupPollInterval before backing off. A project that has not drained by
 	// then is waiting on something that is not going to finish in a moment.
 	cleanupFastPollWindow = time.Minute
+
+	// cleanupConflictRequeue is how soon a project whose cleanup status kept
+	// losing to other writers is reconciled again.
+	cleanupConflictRequeue = time.Second
 
 	// cleanupSlowPollInterval is how often a project that has not drained
 	// within cleanupFastPollWindow is checked.
@@ -124,10 +129,8 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 						Message:            "Project resources have been deleted",
 						ObservedGeneration: project.Generation,
 					}
-					if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupDone) {
-						if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
-							return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
-						}
+					if stop, result, err := r.writeCleanupCondition(ctx, &project, cleanupDone, "update cleanup status"); stop {
+						return result, err
 					}
 
 					// The control plane is only reclaimed once nothing is left
@@ -178,10 +181,8 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					Message:            cleanup.Message(),
 					ObservedGeneration: project.Generation,
 				}
-				if apimeta.SetStatusCondition(&project.Status.Conditions, awaiting) {
-					if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
-						return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
-					}
+				if stop, result, err := r.writeCleanupCondition(ctx, &project, awaiting, "update cleanup status"); stop {
+					return result, err
 				}
 
 				if waiting <= cleanupFastPollWindow {
@@ -208,10 +209,8 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Message:            "Issuing delete commands for project resources",
 				ObservedGeneration: project.Generation,
 			}
-			if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupStarted) {
-				if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
-					return ctrl.Result{}, fmt.Errorf("update cleanup status: %w", err)
-				}
+			if stop, result, err := r.writeCleanupCondition(ctx, &project, cleanupStarted, "update cleanup status"); stop {
+				return result, err
 			}
 
 			if err := r.Purger.StartPurge(ctx, projCfg, project.Name, projectpurge.Options{
@@ -231,10 +230,8 @@ func (r *ProjectController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Message:            "Waiting for project resources to be removed",
 				ObservedGeneration: project.Generation,
 			}
-			if apimeta.SetStatusCondition(&project.Status.Conditions, cleanupAwaiting) {
-				if err := r.ControlPlaneClient.Status().Update(ctx, &project); err != nil {
-					return ctrl.Result{}, fmt.Errorf("update awaiting status: %w", err)
-				}
+			if stop, result, err := r.writeCleanupCondition(ctx, &project, cleanupAwaiting, "update awaiting status"); stop {
+				return result, err
 			}
 
 			return ctrl.Result{RequeueAfter: cleanupPollInterval}, nil
@@ -531,7 +528,7 @@ func (r *ProjectController) SetupWithManager(mgr ctrl.Manager, infraCluster clus
 	r.InfraClient = infraCluster.GetClient()
 	r.ControlPlaneClient = mgr.GetClient()
 	r.BaseConfig = mgr.GetConfig()
-	r.Purger = projectpurge.New()
+	r.Purger = projectpurge.New(r.BaseConfig)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
@@ -555,4 +552,34 @@ func (r *ProjectController) SetupWithManager(mgr ctrl.Manager, infraCluster clus
 		)).
 		Named("project").
 		Complete(r)
+}
+
+// writeCleanupCondition records cond on the project's status. Other
+// controllers remove their finalizers from a deleting project at the same
+// time, so a write that loses the race reads the project again and retries
+// instead of failing the reconcile and repeating the purge.
+func (r *ProjectController) writeCleanupCondition(ctx context.Context, project *resourcemanagerv1alpha.Project, cond metav1.Condition, what string) (stop bool, result ctrl.Result, err error) {
+	key := client.ObjectKeyFromObject(project)
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if !apimeta.SetStatusCondition(&project.Status.Conditions, cond) {
+			return nil
+		}
+		err := r.ControlPlaneClient.Status().Update(ctx, project)
+		if apierrors.IsConflict(err) {
+			if getErr := r.ControlPlaneClient.Get(ctx, key, project); getErr != nil {
+				return getErr
+			}
+		}
+		return err
+	})
+	switch {
+	case err == nil:
+		return false, ctrl.Result{}, nil
+	case apierrors.IsNotFound(err):
+		return true, ctrl.Result{}, nil
+	case apierrors.IsConflict(err):
+		return true, ctrl.Result{RequeueAfter: cleanupConflictRequeue}, nil
+	default:
+		return true, ctrl.Result{}, fmt.Errorf("%s: %w", what, err)
+	}
 }

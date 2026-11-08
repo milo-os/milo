@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/pkg/request"
 
 	"go.opentelemetry.io/otel"
@@ -61,6 +62,20 @@ type Lifecycle struct {
 	// Tenant-aware live GETs
 	loopbackCfg   *rest.Config // injected
 	clientsByProj sync.Map     // map[string]*kubernetes.Clientset
+
+	// projects is the API server's shared view of Projects, injected by
+	// Milo's admission initializer.
+	projects projectDeletions
+}
+
+// projectDeletions is the part of projectstate.Cache this plugin uses.
+type projectDeletions interface {
+	ForceLiveLookup(name string)
+}
+
+// SetProjectStates receives the API server's shared view of Projects.
+func (l *Lifecycle) SetProjectStates(states *projectstate.Cache) {
+	l.projects = states
 }
 
 var (
@@ -100,6 +115,8 @@ func (l *Lifecycle) Admit(ctx context.Context, a admission.Attributes, _ admissi
 		span.SetStatus(codes.Error, "delete forbidden for immortal namespace")
 		return apierrors.NewForbidden(a.GetResource().GroupResource(), a.GetName(), err)
 	}
+
+	l.noteProjectDelete(a)
 
 	// Always allow non-namespaced resources (except Namespace itself)
 	if len(a.GetNamespace()) == 0 &&
@@ -258,6 +275,15 @@ func (l *Lifecycle) Admit(ctx context.Context, a admission.Attributes, _ admissi
 	}
 }
 
+// noteProjectDelete puts a Project's name on the shared view's force-live
+// list when its DELETE is admitted, as Admit does for a Namespace: until the
+// reflector shows the deletion, the view reads that name from storage.
+func (l *Lifecycle) noteProjectDelete(a admission.Attributes) {
+	if a.GetOperation() == admission.Delete && a.GetResource().GroupResource() == projectstate.ProjectGVR.GroupResource() {
+		l.projects.ForceLiveLookup(a.GetName())
+	}
+}
+
 func (l *Lifecycle) enforceCreateNotInTerminating(ctx context.Context, a admission.Attributes, ns *v1.Namespace) error {
 	_, span := l.startSpan(ctx, "namespace.lifecycle.enforceCreateNotInTerminating",
 		trace.WithAttributes(
@@ -339,6 +365,9 @@ func (l *Lifecycle) ValidateInitialization() error {
 	}
 	if l.namespaceLister == nil {
 		return fmt.Errorf("missing namespace informer factory")
+	}
+	if l.projects == nil {
+		return fmt.Errorf("missing project states")
 	}
 	return nil
 }

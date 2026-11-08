@@ -5,7 +5,10 @@ metadata:
 spec:
   rules:
     - group: notes.miloapis.com
-      resources: ["notes", "clusternotes"]
+      resources: ["notes"]
+      contexts: ["Platform", "Project"]
+    - group: notes.miloapis.com
+      resources: ["clusternotes"]
       contexts: ["Platform"]
     - group: crm.miloapis.com
       resources: ["notes"]

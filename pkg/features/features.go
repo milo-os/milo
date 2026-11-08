@@ -83,11 +83,47 @@ const (
 	// alpha: v0.1.0
 	UnifiedOrganizations featuregate.Feature = "UnifiedOrganizations"
 
+	// MemberJoinedEmails emails every organization owner when someone joins
+	// the organization by accepting a UserInvitation. The controller manager's
+	// --organization-member-joined-email-template must also name an installed
+	// EmailTemplate.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	MemberJoinedEmails featuregate.Feature = "MemberJoinedEmails"
+
+	// EmailDomainJoining lets organization owners offer membership to everyone
+	// at an email domain that a Domain in one of the organization's projects
+	// verifies (Organization spec.emailDomainJoining). Offers are
+	// UserInvitations, and accepting one requires a verified email address.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.1.0
+	EmailDomainJoining featuregate.Feature = "EmailDomainJoining"
+
 	// ProjectSuspension enables project suspension and lifecycle controls.
 	//
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0
 	ProjectSuspension featuregate.Feature = "ProjectSuspension"
+
+	// GarbageCollectorServedTypes makes the garbage collector watch in each
+	// project only the types that project serves, as Milo's discovery-context
+	// registry declares them (milo#834).
+	//
+	// Like EmailVerifiedGate, it selects between two behaviours. Disabled, every
+	// project watches the root's types, and the collector counts what narrowing
+	// would drop: garbagecollector_unserved_objects,
+	// garbagecollector_unserved_owned_objects and
+	// garbagecollector_unserved_owners_with_dependents. Enabled, it narrows, and
+	// holds a dependent whose owner's kind the project does not serve.
+	//
+	// Enable it in an estate only when all three gauges read 0 for every type:
+	// an object they count would lose its collection.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.36.14
+	GarbageCollectorServedTypes featuregate.Feature = "GarbageCollectorServedTypes"
 
 	// EmailVerifiedGate makes EmailVerificationEnforcement deny, rather than
 	// only observe.
@@ -119,11 +155,23 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
+	EmailDomainJoining: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
 	EmailVerifiedGate: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
 	EventsProxy: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	GarbageCollectorServedTypes: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	MemberJoinedEmails: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},

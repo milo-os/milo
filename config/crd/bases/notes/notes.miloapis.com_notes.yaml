@@ -4,7 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
-    discovery.miloapis.com/parent-contexts: Platform
+    discovery.miloapis.com/parent-contexts: Platform,Project
   name: notes.notes.miloapis.com
 spec:
   group: notes.miloapis.com

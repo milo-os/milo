@@ -761,6 +761,19 @@ Email and name are required for onboarding to complete.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#organizationspecemaildomainjoining">emailDomainJoining</a></b></td>
+        <td>object</td>
+        <td>
+          EmailDomainJoining offers membership to everyone whose email address is
+at one of the listed domains, without an invitation from an owner. Each
+domain must be verified by a Domain in one of the organization's
+projects. The EmailDomainsVerified condition reports which domains are
+in use.
+
+Requires the EmailDomainJoining feature gate.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>type</b></td>
         <td>enum</td>
         <td>
@@ -882,6 +895,84 @@ Address is the optional postal address for the organization.
         <td>string</td>
         <td>
           Region is the state, province, or county.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Organization.spec.emailDomainJoining
+<sup><sup>[↩ Parent](#organizationspec)</sup></sup>
+
+
+
+EmailDomainJoining offers membership to everyone whose email address is
+at one of the listed domains, without an invitation from an owner. Each
+domain must be verified by a Domain in one of the organization's
+projects. The EmailDomainsVerified condition reports which domains are
+in use.
+
+Requires the EmailDomainJoining feature gate.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>domains</b></td>
+        <td>[]string</td>
+        <td>
+          Domains are the email domains to offer membership to, such as
+"example.com". An address matches only its exact domain, so
+"example.com" does not match "eu.example.com". A Domain in one of the
+organization's projects must verify each domain or a parent of it.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#organizationspecemaildomainjoiningrolesindex">roles</a></b></td>
+        <td>[]object</td>
+        <td>
+          Roles are granted to people who join through a domain offer.<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### Organization.spec.emailDomainJoining.roles[index]
+<sup><sup>[↩ Parent](#organizationspecemaildomainjoining)</sup></sup>
+
+
+
+RoleReference defines a reference to a Role resource for organization membership.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name of the referenced Role.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>namespace</b></td>
+        <td>string</td>
+        <td>
+          Namespace of the referenced Role.
+If not specified, it defaults to the organization membership's namespace.<br/>
         </td>
         <td>false</td>
       </tr></tbody>

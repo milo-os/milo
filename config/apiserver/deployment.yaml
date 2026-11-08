@@ -214,8 +214,10 @@ spec:
                 containerName: milo-apiserver
                 resource: limits.memory
                 divisor: "1"
+        # kube-apiserver's liveness values from kubeadm: a busy API server
+        # answers slowly, and a kill starts it again with empty caches.
         livenessProbe:
-          failureThreshold: 3
+          failureThreshold: 8
           httpGet:
             path: /livez
             port: https

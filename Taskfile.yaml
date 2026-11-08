@@ -13,6 +13,12 @@ vars:
   MILO_IMAGE_NAME: "ghcr.io/milo-os/milo"
   MILO_IMAGE_TAG: "dev"
   TEST_INFRA_CLUSTER_NAME: "test-infra"
+  # The overlay dev:deploy applies. test-infra-discovery-context-filter is the
+  # same environment with the DiscoveryContextFilter feature gate on.
+  TEST_INFRA_OVERLAY: "config/overlays/test-infra/"
+  # The Chainsaw label selector test:end-to-end runs. The default leaves out the
+  # suites that need another environment.
+  E2E_SELECTOR: "requires notin (authorization-provider,discovery-context-filter)"
   # Test infra repository configuration - can be overridden with environment variable
   TEST_INFRA_REPO_REF: 'v0.5.0'
 
@@ -99,7 +105,7 @@ tasks:
         echo "🚀 Deploying complete Milo control plane to test-infra cluster..."
 
         echo "📋 Deploying Milo control plane with etcd storage backend..."
-        task test-infra:kubectl -- apply -k config/overlays/test-infra/
+        task test-infra:kubectl -- apply -k {{.TEST_INFRA_OVERLAY}}
 
         echo "⏳ Waiting for etcd Helm release to be ready..."
         task test-infra:kubectl -- wait --for=condition=Ready helmrelease/etcd -n milo-system --timeout=300s
@@ -140,6 +146,7 @@ tasks:
         echo "📨 Installing the user-invitation role and email template in Milo API server..."
         task kubectl -- apply -n milo-system -f config/roles/organization-viewer.yaml
         task kubectl -- apply -f config/overlays/test-infra/resources/userinvitation-emailtemplate.yaml
+        task kubectl -- apply -f config/overlays/test-infra/resources/organization-member-joined-emailtemplate.yaml
 
         echo "⏳ Waiting for controller manager to be ready..."
         task test-infra:kubectl -- wait --for=condition=Ready pod -l app.kubernetes.io/name=milo-controller-manager -n milo-system --timeout=120s
@@ -299,7 +306,7 @@ tasks:
         fi
 
         echo "Test paths: $TEST_PATHS"
-        KUBECONFIG=.milo/kubeconfig "{{.TOOL_DIR}}/chainsaw" test $TEST_PATHS --selector "requires!=authorization-provider"
+        KUBECONFIG=.milo/kubeconfig "{{.TOOL_DIR}}/chainsaw" test $TEST_PATHS --selector "{{.E2E_SELECTOR}}"
     silent: true
 
   test:unit:

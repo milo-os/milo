@@ -16,7 +16,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 )
 
 type Sink interface {
@@ -49,6 +48,9 @@ func (p *Provider) cfgForProject(id string) *rest.Config {
 	return c
 }
 
+// Run watches Projects and keeps the sink engaged with them until ctx ends. The
+// informer's handlers only queue a Project's name; one worker engages and
+// removes from what the informer's store holds (engagements).
 func (p *Provider) Run(ctx context.Context) error {
 	lw := &cache.ListWatch{
 		ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
@@ -60,22 +62,13 @@ func (p *Provider) Run(ctx context.Context) error {
 	}
 	inf := cache.NewSharedIndexInformer(lw, &unstructured.Unstructured{}, 0, nil)
 
-	inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(o interface{}) {
-			id := o.(*unstructured.Unstructured).GetName()
-			err := p.sink.AddProject(ctx, id, p.cfgForProject(id))
-			if err != nil {
-				// Log the error but continue processing other projects
-				klog.Errorf("Failed to add project %q: %v", id, err)
-			}
-		},
-		DeleteFunc: func(o interface{}) {
-			id := o.(*unstructured.Unstructured).GetName()
-			p.sink.RemoveProject(id)
-		},
-	})
+	e := newEngagements(ctx, p, inf.GetStore())
+	if _, err := inf.AddEventHandler(e.handlers()); err != nil {
+		return err
+	}
 
 	go inf.Run(ctx.Done())
+	go e.run()
 	<-ctx.Done()
 	return nil
 }

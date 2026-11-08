@@ -1,6 +1,9 @@
 package projectstorage
 
 import (
+	"time"
+
+	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -13,8 +16,11 @@ import (
 )
 
 // ProjectAwareDecorator builds per-project storage isolation using etcd prefix separation.
-// When bootstrapper is non-nil, it ensures the milo-system namespace exists in project control planes.
-func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, bootstrapper *NamespaceBootstrapper) generic.StorageDecorator {
+// Every request into a project's control plane looks its Project up in projects, and a child whose
+// Project leaves the view is destroyed after drain. When bootstrapper is non-nil, it ensures the
+// milo-system namespace exists in project control planes.
+func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, projects ProjectLookup,
+	bootstrapper *NamespaceBootstrapper, drain time.Duration) generic.StorageDecorator {
 	if gr.Group == "" && gr.Resource == "namespaces" {
 		bootstrapper = nil
 	}
@@ -38,7 +44,9 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 		mux := &projectMux{
 			inner:        inner,
 			cfg:          *cfg, // copy
+			projects:     projects,
 			bootstrapper: bootstrapper,
+			refusalLog:   rate.NewLimiter(rate.Every(refusalLogInterval), 1),
 			args: decoratorArgs{
 				resourceGroup:  gr.Group,    // "" means core
 				resourceKind:   gr.Resource, // plural
@@ -55,7 +63,9 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 				"": {s: defS, destroy: defDestroy},
 			},
 			versioner: defS.Versioner(),
+			drain:     drain,
 		}
+		mux.removeListener = projects.AddListener(mux)
 		return mux, mux.destroyAll, nil
 	}
 }

@@ -2,6 +2,7 @@ package milo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sync"
@@ -39,10 +40,38 @@ var _ multicluster.Provider = &Provider{}
 var projectGVK = resourcemanagerv1alpha1.GroupVersion.WithKind("Project")
 var projectControlPlaneGVK = infrastructurev1alpha1.GroupVersion.WithKind("ProjectControlPlane")
 
+// DefaultProjectCacheSyncTimeout bounds the time one unavailable project can
+// occupy the provider's serial discovery worker while syncing its cache.
+const DefaultProjectCacheSyncTimeout = 30 * time.Second
+
+// projectGonePoll is how often a registration waiting for its project's cache
+// reads the Project again, so a wait for a Project that was deleted or
+// re-created under its name ends within one poll, not at the timeout. Today a
+// deleted project's control plane answers with empty lists, so such a wait
+// usually ends by itself; once Milo refuses a deleted project's plane, its
+// cache would never sync.
+const projectGonePoll = time.Second
+
+// errProjectGone ends a registration whose Project went while its cache synced.
+var errProjectGone = errors.New("the project went while its cache synced")
+
 // Options are the options for the Datum cluster Provider.
 type Options struct {
+	// ProjectCacheSyncTimeout bounds cache synchronization during engagement.
+	// Zero uses DefaultProjectCacheSyncTimeout; negative values are invalid.
+	// A timed-out project is torn down and retried by the controller queue.
+	ProjectCacheSyncTimeout time.Duration
+
+	// MaxConcurrentReconciles is how many projects the provider engages at
+	// once. Zero means one; negative values are invalid. With one, each
+	// project's cache start and sync waits for the project before it.
+	MaxConcurrentReconciles int
+
 	// ClusterOptions are the options passed to the cluster constructor.
 	ClusterOptions []cluster.Option
+
+	// PrestartInformers are created before a project's cache starts, so they sync together.
+	PrestartInformers []client.Object
 
 	// InternalServiceDiscovery will result in the provider to look for
 	// ProjectControlPlane resources in the local manager's cluster, and establish
@@ -71,6 +100,13 @@ type Options struct {
 
 // New creates a new Datum cluster Provider.
 func New(localMgr manager.Manager, opts Options) (*Provider, error) {
+	if opts.ProjectCacheSyncTimeout < 0 {
+		return nil, fmt.Errorf("project cache sync timeout must not be negative")
+	}
+	if opts.MaxConcurrentReconciles < 0 {
+		return nil, fmt.Errorf("max concurrent reconciles must not be negative")
+	}
+
 	p := &Provider{
 		opts:              opts,
 		log:               log.Log.WithName("datum-cluster-provider"),
@@ -114,7 +150,7 @@ func New(localMgr manager.Manager, opts Options) (*Provider, error) {
 
 	controllerBuilder := builder.ControllerManagedBy(localMgr).
 		For(&project, forOpts...).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: max(1, opts.MaxConcurrentReconciles)}).
 		Named(controllerName)
 
 	if err := controllerBuilder.Complete(p); err != nil {
@@ -272,11 +308,9 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 		log.Error(err, "Failed to create cluster object", "key", key, "endpoint", cfg.Host)
 		return ctrl.Result{}, fmt.Errorf("failed to create cluster: %w", err)
 	}
-	for _, idx := range indexers {
-		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
-			log.Error(err, "Failed to setup cache index field", "key", key, "field", idx.field)
-			return ctrl.Result{}, fmt.Errorf("failed to index field %q: %w", idx.field, err)
-		}
+	if err := p.prepareCache(ctx, cl, indexers); err != nil {
+		log.Error(err, "Failed to prepare cluster cache", "key", key)
+		return ctrl.Result{}, err
 	}
 
 	log.Info("Starting cluster cache", "key", key)
@@ -291,10 +325,9 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 
 	log.Info("Waiting for cluster cache to sync", "key", key)
 
-	if !cl.GetCache().WaitForCacheSync(ctx) {
+	if err := p.syncProjectCache(ctx, key, cl, &project); err != nil {
 		cancel()
-		log.Error(nil, "Cluster cache sync failed", "key", key)
-		return ctrl.Result{}, fmt.Errorf("failed to sync cache")
+		return ctrl.Result{}, syncFailed(log, key, err)
 	}
 
 	log.Info("Cluster cache synced successfully", "key", key)
@@ -318,6 +351,92 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 	return ctrl.Result{}, nil
 }
 
+// prepareCache adds the indexers and creates the PrestartInformers before the
+// project's cache starts, so its informers sync together. An informer created
+// after the start would wait for its own sync inside Engage, one after another.
+func (p *Provider) prepareCache(ctx context.Context, cl cluster.Cluster, indexers []index) error {
+	for _, idx := range indexers {
+		if err := cl.GetCache().IndexField(ctx, idx.object, idx.field, idx.extractValue); err != nil {
+			return fmt.Errorf("failed to index field %q: %w", idx.field, err)
+		}
+	}
+	for _, obj := range p.opts.PrestartInformers {
+		if _, err := cl.GetCache().GetInformer(ctx, obj); err != nil {
+			return fmt.Errorf("failed to create informer: %w", err)
+		}
+	}
+	return nil
+}
+
+// syncProjectCache waits for a project cluster's cache to sync, within the
+// project cache sync timeout, so one unavailable project cannot hold the
+// provider's serial worker. It returns errProjectGone within projectGonePoll
+// once the Project is deleted or another Project takes its name.
+func (p *Provider) syncProjectCache(ctx context.Context, key string, cl cluster.Cluster, project *unstructured.Unstructured) error {
+	syncTimeout := p.projectCacheSyncTimeout()
+	syncCtx, cancelSync := context.WithTimeout(ctx, syncTimeout)
+	defer cancelSync()
+	gone := make(chan struct{})
+	go p.cancelWhenGone(syncCtx, project, gone, cancelSync)
+	if cl.GetCache().WaitForCacheSync(syncCtx) {
+		return nil
+	}
+	select {
+	case <-gone:
+		return errProjectGone
+	default:
+		return fmt.Errorf("failed to sync project %q cache within %s", key, syncTimeout)
+	}
+}
+
+// cancelWhenGone reads the Project every projectGonePoll while ctx lasts. Once
+// the Project is deleted or carries another UID, it closes gone, then cancels.
+func (p *Provider) cancelWhenGone(ctx context.Context, project *unstructured.Unstructured, gone chan<- struct{}, cancel context.CancelFunc) {
+	ticker := time.NewTicker(projectGonePoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if p.projectGone(ctx, project) {
+				close(gone)
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+// projectGone reports whether the local cache no longer has the Project, or
+// has another Project under its name.
+func (p *Provider) projectGone(ctx context.Context, project *unstructured.Unstructured) bool {
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(project.GroupVersionKind())
+	err := p.client.Get(ctx, client.ObjectKeyFromObject(project), current)
+	return apierrors.IsNotFound(err) || (err == nil && current.GetUID() != project.GetUID())
+}
+
+// syncFailed logs why a project's cache did not sync and returns the error to
+// requeue with: none when the Project went, whose removal reconciles on its own.
+func syncFailed(log logr.Logger, key string, err error) error {
+	if errors.Is(err, errProjectGone) {
+		log.Info("Project went while its cluster cache synced; not registering", "key", key)
+		return nil
+	}
+	log.Error(err, "Cluster cache sync failed", "key", key)
+	return err
+}
+
+// projectCacheSyncTimeout returns the bound on a project's cache sync: the
+// option, or DefaultProjectCacheSyncTimeout when it is zero.
+func (p *Provider) projectCacheSyncTimeout() time.Duration {
+	if p.opts.ProjectCacheSyncTimeout == 0 {
+		return DefaultProjectCacheSyncTimeout
+	}
+	return p.opts.ProjectCacheSyncTimeout
+}
+
 // planRegistration decides, under p.lock, what Reconcile does with a fetched
 // project. When register is false Reconcile returns result and err as-is.
 // When register is true the caller owns building and engaging the cluster,
@@ -326,9 +445,9 @@ func (p *Provider) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result
 // The lock is released before the caller connects to the project. Engaging a
 // cluster runs every controller's watch registration, and those controllers'
 // event handlers call Get; holding p.lock across Engage deadlocks a controller
-// whose startup is waiting on those handlers. Project reconciles never run
-// concurrently (MaxConcurrentReconciles is 1), so no other registration can
-// interleave for the same key.
+// whose startup is waiting on those handlers. The controller's workqueue never
+// hands one project to two workers at once, whatever MaxConcurrentReconciles
+// is, so no other registration can interleave for the same key.
 func (p *Provider) planRegistration(
 	log logr.Logger,
 	key string,

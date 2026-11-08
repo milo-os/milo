@@ -2,6 +2,8 @@ apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
   name: discovery-context-filter
+  labels:
+    requires: discovery-context-filter
 spec:
   description: |
     End-to-end test for parent-context-aware API discovery.

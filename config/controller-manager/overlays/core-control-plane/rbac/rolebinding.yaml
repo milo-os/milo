@@ -6,7 +6,7 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: milo-controller-manager
+# No namespace: kustomize sets the namespace of the ServiceAccount in the same build.
 subjects:
   - kind: ServiceAccount
     name: milo-controller-manager
-    namespace: milo-system

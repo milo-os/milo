@@ -110,3 +110,18 @@ opts := milo.Options{
     // InternalServiceDiscovery: false, // Use Project mode (default)
 }
 ```
+
+## Project cache sync
+
+`Options.ProjectCacheSyncTimeout` bounds the initial per-project cache sync.
+Zero selects the 30-second default; negative values are rejected. A timeout
+cancels that unpublished project's cache, returns an error for rate-limited queue
+retry, and frees the serial worker to process another project.
+
+While a project's cache syncs, the provider reads the Project again every
+second. When the Project is deleted, or re-created under its name with another
+UID, the wait ends within that second and its cache is cancelled. Nothing is
+engaged, and the removal or the new Project is reconciled on its own. Today a
+deleted project's control plane answers with empty lists, so such a wait
+usually ends by itself; once Milo refuses a deleted project's plane, its cache
+would never sync, and without this the wait would last until the timeout.

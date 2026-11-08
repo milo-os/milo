@@ -50,8 +50,9 @@ spec:
         timeout: 30s
         for:
           jsonPath:
+            # The binding's target, the UserPreference, is its owner; the User owns the UserPreference.
             path: '{.metadata.ownerReferences[0].name}'
-            value: test-gc-user
+            value: userpreference-test-gc-user
 
   - name: delete-user
     description: Delete the User resource and verify associated resources are garbage collected

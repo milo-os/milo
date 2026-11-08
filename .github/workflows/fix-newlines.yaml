@@ -8,19 +8,23 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)) }}
+
 jobs:
   fix-newlines:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get changed files
         id: changed-files
-        uses: tj-actions/changed-files@v46
+        uses: tj-actions/changed-files@v47
         with:
           files: |
             **/*
@@ -67,20 +71,30 @@ jobs:
 
       - name: Commit changes
         if: steps.fix.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref }}
+          SCRIPT_REF: ${{ github.event.pull_request.base.sha }}
+          FIXED_COUNT: ${{ steps.fix.outputs.fixed_count }}
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .
-          git commit -m "chore: add missing newlines at end of files
-
-          🤖 Automatically added newlines to ${{ steps.fix.outputs.fixed_count }} file(s)
-
-          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-          git push
+          SIGN_COMMIT="$RUNNER_TEMP/sign-commit"
+          err=$(gh api -H "Accept: application/vnd.github.raw+json" "repos/${GITHUB_REPOSITORY}/contents/scripts/sign-commit?ref=${SCRIPT_REF}" 2>&1 >"$SIGN_COMMIT") || {
+            if [[ $err == *"HTTP 404"* ]]; then
+              echo "::notice::The base branch has no scripts/sign-commit yet, so the newline fix was not committed."
+              exit 0
+            fi
+            echo "$err" >&2
+            exit 1
+          }
+          chmod +x "$SIGN_COMMIT"
+          EXPECTED_HEAD=$(git rev-parse HEAD)
+          export EXPECTED_HEAD
+          MESSAGE=$(printf 'chore: add missing newlines at end of files\n\nAutomatically added newlines to %s file(s)' "$FIXED_COUNT")
+          git diff -z --name-only | env -u BASE_SHA "$SIGN_COMMIT" -z "$BRANCH" "$MESSAGE"
 
       - name: Comment on PR
         if: steps.fix.outputs.has_changes == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             github.rest.issues.createComment({

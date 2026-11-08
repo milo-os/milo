@@ -18,6 +18,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+	"go.miloapis.com/milo/pkg/quota"
 )
 
 // DefaultStalePendingClaimAge is the age after which a Pending auto-created
@@ -25,7 +26,7 @@ import (
 // well above the admission plugin's watch timeout (30s by default) so that
 // normal in-flight admission requests are never disturbed, while any claim
 // that outlives a failed admission path is reliably cleaned up.
-const DefaultStalePendingClaimAge = 5 * time.Minute
+const DefaultStalePendingClaimAge = quota.DefaultStalePendingClaimAge
 
 // DeniedAutoClaimCleanupController automatically deletes ResourceClaims that
 // were created by the admission plugin and are no longer useful:

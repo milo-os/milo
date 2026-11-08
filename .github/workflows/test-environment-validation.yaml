@@ -18,17 +18,36 @@ env:
   MILO_IMAGE_NAME: ghcr.io/milo-os/milo
   MILO_IMAGE_TAG: dev
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)) }}
+
 jobs:
   test-environment-validation:
+    # The default environment keeps the check's existing name.
+    name: ${{ matrix.environment == 'test-infra' && 'test-environment-validation' || format('test-environment-validation ({0})', matrix.environment) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Milo runs with the DiscoveryContextFilter feature gate off and on, and the
+    # gate decides what a project's discovery lists, so the suites run in both
+    # configurations. The discovery-context-filter suite needs the gate on.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: test-infra
+            overlay: config/overlays/test-infra/
+            selector: requires notin (authorization-provider,discovery-context-filter)
+          - environment: discovery-context-filter
+            overlay: config/overlays/test-infra-discovery-context-filter/
+            selector: requires!=authorization-provider
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -44,14 +63,14 @@ jobs:
           task --list
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           buildkitd-config-inline: |
             [worker.oci]
               max-parallelism = 4
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: 'v1.37.1'
 
@@ -70,7 +89,7 @@ jobs:
           echo "Go version: $(go version)"
 
       - name: Build Milo container image with caching
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -96,7 +115,7 @@ jobs:
           task dev:load
 
           # Deploy Milo control plane (dependencies already satisfied)
-          task dev:deploy
+          task dev:deploy TEST_INFRA_OVERLAY="${{ matrix.overlay }}"
 
       - name: Wait for networking path to be ready
         run: |
@@ -167,10 +186,10 @@ jobs:
           # Determine which tests to run based on input
           if [ -n "${{ github.event.inputs.test_suite }}" ]; then
             echo "Running specified test suite: ${{ github.event.inputs.test_suite }}"
-            task test:end-to-end -- ${{ github.event.inputs.test_suite }}
+            task test:end-to-end E2E_SELECTOR="${{ matrix.selector }}" -- ${{ github.event.inputs.test_suite }}
           else
             echo "Running all end-to-end tests..."
-            task test:end-to-end
+            task test:end-to-end E2E_SELECTOR="${{ matrix.selector }}"
           fi
 
       - name: Collect debug information on failure
@@ -206,7 +225,7 @@ jobs:
 
       - name: Upload debug artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: debug-logs
           path: |

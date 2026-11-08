@@ -27,13 +27,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 						"request-verb": "{{requestInfo.verb}}",
 					},
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -55,13 +55,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 						"resource":   "Auto created for team A",
 					},
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -82,13 +82,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 						"note": "Created for onboarding",
 					},
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -109,13 +109,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 						"note": "Template driven generateName",
 					},
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -132,13 +132,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 				Metadata: quotav1alpha1.ObjectMetaTemplate{
 					GenerateName: "invalid",
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -156,13 +156,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 					Name:         "test-claim",
 					GenerateName: "test-claim-",
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -179,13 +179,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 				Metadata: quotav1alpha1.ObjectMetaTemplate{
 					Name: "{{invalid..syntax}}",
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -202,13 +202,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 				Metadata: quotav1alpha1.ObjectMetaTemplate{
 					Name: "{{invalid + '.variable'}}",
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -233,13 +233,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 						"combined-info": "{{user.name + ':' + requestInfo.verb + ':' + trigger.metadata.name}}",
 					},
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,
@@ -262,13 +262,13 @@ func TestValidateClaimTemplate(t *testing.T) {
 						"verb":        "action-{{requestInfo.verb}}",
 					},
 				},
-				Spec: quotav1alpha1.ResourceClaimSpec{
+				Spec: quotav1alpha1.ResourceClaimTemplateSpec{
 					ConsumerRef: quotav1alpha1.ConsumerRef{
 						APIGroup: "resourcemanager.miloapis.com",
 						Kind:     "Organization",
 						Name:     "test-org",
 					},
-					Requests: []quotav1alpha1.ResourceRequest{
+					Requests: []quotav1alpha1.ResourceRequestTemplate{
 						{
 							ResourceType: "test.example.com/projects",
 							Amount:       1,

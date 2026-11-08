@@ -238,3 +238,14 @@ func (m *concurrentUIDToNode) Delete(uid types.UID) {
 	defer m.uidToNodeLock.Unlock()
 	delete(m.uidToNode, uid)
 }
+
+// nodes returns the graph's nodes at this moment, so a walk does not hold the lock the graph builder writes under.
+func (m *concurrentUIDToNode) nodes() []*node {
+	m.uidToNodeLock.RLock()
+	defer m.uidToNodeLock.RUnlock()
+	out := make([]*node, 0, len(m.uidToNode))
+	for _, n := range m.uidToNode {
+		out = append(out, n)
+	}
+	return out
+}

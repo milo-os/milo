@@ -349,6 +349,24 @@ func (gb *GraphBuilder) startMonitors(logger klog.Logger) {
 	logger.V(4).Info("started new monitors", "new", started, "current", len(monitors))
 }
 
+// watchesExactly reports whether the builder's monitors are the given resources, less the ignored ones, which
+// syncMonitors never watches.
+func (gb *GraphBuilder) watchesExactly(resources map[schema.GroupVersionResource]struct{}) bool {
+	gb.monitorLock.RLock()
+	defer gb.monitorLock.RUnlock()
+	want := 0
+	for resource := range resources {
+		if _, ignored := gb.ignoredResources[resource.GroupResource()]; ignored {
+			continue
+		}
+		if _, ok := gb.monitors[resource]; !ok {
+			return false
+		}
+		want++
+	}
+	return want == len(gb.monitors)
+}
+
 // IsResourceSynced returns true if a monitor exists for the given resource and has synced
 func (gb *GraphBuilder) IsResourceSynced(resource schema.GroupVersionResource) bool {
 	gb.monitorLock.Lock()
@@ -383,14 +401,21 @@ func (gb *GraphBuilder) IsSynced(logger klog.Logger) bool {
 // closed. Any running monitors will be stopped before Run returns.
 func (gb *GraphBuilder) Run(ctx context.Context) {
 	logger := klog.FromContext(ctx)
-	logger.Info("Running", "component", "GraphBuilder")
-	defer logger.Info("Stopping", "component", "GraphBuilder")
 
-	// Set up the stop channel.
+	// Set up the stop channel. A builder runs once: the collector's Run and AddProject can both start it, and a second
+	// graph-change processor would break processGraphChanges' single writer (milo#834, F7).
 	gb.monitorLock.Lock()
+	if gb.running {
+		gb.monitorLock.Unlock()
+		logger.V(2).Info("GraphBuilder is already running", "project", gb.project)
+		return
+	}
 	gb.stopCh = ctx.Done()
 	gb.running = true
 	gb.monitorLock.Unlock()
+
+	logger.Info("Running", "component", "GraphBuilder")
+	defer logger.Info("Stopping", "component", "GraphBuilder")
 
 	// Start monitors and begin change processing until the stop channel is
 	// closed.
@@ -411,6 +436,7 @@ func (gb *GraphBuilder) Run(ctx context.Context) {
 
 	// reset monitors so that the graph builder can be safely re-run/synced.
 	gb.monitors = nil
+	gb.running = false
 	logger.Info("stopped monitors", "stopped", stopped, "total", len(monitors))
 }
 

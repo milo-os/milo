@@ -40,8 +40,8 @@ type policyEntry struct {
 //     that build on Milo). Watched live via an informer.
 //
 //  3. Static registrations — for built-in/aggregated APIs (e.g. core/v1,
-//     identity.miloapis.com sessions) that aren't backed by CRDs. Registered
-//     once at apiserver startup with RegisterStatic.
+//     identity.miloapis.com sessions) that aren't backed by CRDs. Milo's own
+//     are listed in builtinContexts, and NewRegistry registers them.
 //
 // Resources with no registration in any source are treated as visible in all
 // contexts, so existing CRDs and external CRDs that haven't adopted the marker
@@ -56,9 +56,31 @@ type Registry struct {
 	hasPolicyInit   bool
 }
 
-// NewRegistry creates an empty registry. Call RegisterStatic for any built-in
-// APIs, then Run with an informer factory to populate the CRD-derived map.
+// builtinContexts are the parent contexts of the types Milo serves with no CRD
+// behind them, so no annotation can declare them: the types of its aggregated
+// identity server. They are the lowest-precedence input, so a policy or a CRD
+// annotation for the same type overrides them.
+var builtinContexts = map[schema.GroupResource][]ParentContext{
+	{Group: "identity.miloapis.com", Resource: "sessions"}:                 {ContextUser},
+	{Group: "identity.miloapis.com", Resource: "useridentities"}:           {ContextUser},
+	{Group: "identity.miloapis.com", Resource: "passkeys"}:                 {ContextUser},
+	{Group: "identity.miloapis.com", Resource: "passkeyregistrationlinks"}: {ContextUser},
+}
+
+// NewRegistry creates a registry that holds the contexts of Milo's built-in
+// types. Every process that asks which types a context serves builds its
+// registry here, so they all start from the same declarations. Run and
+// RunPolicyInformer then add the CRD annotations and the policies.
 func NewRegistry() *Registry {
+	r := newRegistry()
+	for gr, contexts := range builtinContexts {
+		r.RegisterStatic(gr, contexts...)
+	}
+	return r
+}
+
+// newRegistry creates a registry with no declarations.
+func newRegistry() *Registry {
 	return &Registry{
 		policy: map[schema.GroupResource]policyEntry{},
 		crd:    map[schema.GroupResource][]ParentContext{},
@@ -82,32 +104,37 @@ func (r *Registry) RegisterStatic(gr schema.GroupResource, contexts ...ParentCon
 // in, or nil if it should be visible everywhere. Precedence: policy exact
 // match → policy wildcard match → crd → static.
 func (r *Registry) AllowedContexts(gr schema.GroupResource) []ParentContext {
+	contexts, _ := r.declaration(gr)
+	return contexts
+}
+
+// declaration returns AllowedContexts' answer and the group and resource of
+// the declaration that gives it: gr itself, or the patterns of the wildcard
+// rule that matched gr. A metric label taken from it is bounded by the
+// declarations, never by the names requests carry.
+func (r *Registry) declaration(gr schema.GroupResource) ([]ParentContext, schema.GroupResource) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	if entry, ok := r.policy[gr]; ok {
-		return entry.contexts
+		return entry.contexts, gr
 	}
 
-	if match := r.matchWildcard(gr); match != nil {
-		return match
+	if rule := r.matchWildcard(gr); rule != nil {
+		return rule.contexts, schema.GroupResource{Group: rule.groupPattern, Resource: rule.resourcePattern}
 	}
 
 	if v, ok := r.crd[gr]; ok {
-		return v
+		return v, gr
 	}
 
-	if v, ok := r.static[gr]; ok {
-		return v
-	}
-
-	return nil
+	return r.static[gr], gr
 }
 
 // matchWildcard scans policyWildcards for a rule that covers gr. When multiple
 // rules match, the one from the alphabetically first policy name wins.
 // Must be called with r.mu held (at least RLock).
-func (r *Registry) matchWildcard(gr schema.GroupResource) []ParentContext {
+func (r *Registry) matchWildcard(gr schema.GroupResource) *wildcardRule {
 	var best *wildcardRule
 	for i := range r.policyWildcards {
 		rule := &r.policyWildcards[i]
@@ -121,10 +148,7 @@ func (r *Registry) matchWildcard(gr schema.GroupResource) []ParentContext {
 			best = rule
 		}
 	}
-	if best == nil {
-		return nil
-	}
-	return best.contexts
+	return best
 }
 
 // IsVisible is a convenience wrapper combining AllowedContexts + Matches.
@@ -147,7 +171,7 @@ func (r *Registry) HasSynced() bool {
 func (r *Registry) Run(ctx context.Context, factory apiextensionsinformers.SharedInformerFactory) error {
 	informer := factory.Apiextensions().V1().CustomResourceDefinitions().Informer()
 
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	handler, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { r.upsertFromObj(obj) },
 		UpdateFunc: func(_, obj any) { r.upsertFromObj(obj) },
 		DeleteFunc: func(obj any) { r.deleteFromObj(obj) },
@@ -156,7 +180,9 @@ func (r *Registry) Run(ctx context.Context, factory apiextensionsinformers.Share
 		return fmt.Errorf("registering CRD event handler: %w", err)
 	}
 
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+	// The handler's sync, not the informer's: the API server's informer has synced before this runs, and the handler
+	// applies the CRDs it listed after that.
+	if !cache.WaitForCacheSync(ctx.Done(), handler.HasSynced) {
 		return fmt.Errorf("CRD informer cache failed to sync")
 	}
 

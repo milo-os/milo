@@ -38,6 +38,9 @@ type CELEngine interface {
 
 	// EvaluateTemplateExpression evaluates a template expression with context variables (trigger, user, requestInfo).
 	EvaluateTemplateExpression(expression string, variables map[string]interface{}) (string, error)
+
+	// EvaluateBoolExpression evaluates a boolean expression with context variables (trigger, user, requestInfo).
+	EvaluateBoolExpression(expression string, variables map[string]interface{}) (bool, error)
 }
 
 // celEngine implements CELEngine with program caching for performance.
@@ -130,18 +133,19 @@ func (e *celEngine) EvaluateTemplateExpression(expression string, variables map[
 
 // evaluateCondition evaluates a single condition expression.
 func (e *celEngine) evaluateCondition(expression string, objData map[string]interface{}) (bool, error) {
-	// Get or create cached program
+	return e.EvaluateBoolExpression(expression, map[string]interface{}{
+		"trigger": objData,
+	})
+}
+
+// EvaluateBoolExpression evaluates an expression that must return a boolean.
+func (e *celEngine) EvaluateBoolExpression(expression string, variables map[string]interface{}) (bool, error) {
 	program, err := e.getOrCompileProgram(expression)
 	if err != nil {
 		return false, err
 	}
 
-	// Evaluate with the resource object
-	vars := map[string]interface{}{
-		"trigger": objData,
-	}
-
-	result, details, err := program.Eval(vars)
+	result, details, err := program.Eval(variables)
 	if err != nil {
 		// Check if this was a cost limit error and include cost information in error
 		if details != nil && details.ActualCost() != nil {

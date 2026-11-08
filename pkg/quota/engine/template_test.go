@@ -26,6 +26,10 @@ func (m *mockCELEngine) EvaluateConditions(conditions []quotav1alpha1.ConditionE
 	return true, nil
 }
 
+func (m *mockCELEngine) EvaluateBoolExpression(expression string, variables map[string]interface{}) (bool, error) {
+	return true, nil
+}
+
 func (m *mockCELEngine) EvaluateTemplateExpression(expression string, variables map[string]interface{}) (string, error) {
 	// Simple mock that evaluates expressions based on variables
 	switch expression {
@@ -156,8 +160,8 @@ func TestRenderClaim(t *testing.T) {
 					Metadata: quotav1alpha1.ObjectMetaTemplate{
 						Name: "{{trigger.metadata.name}}-claim",
 					},
-					Spec: quotav1alpha1.ResourceClaimSpec{
-						Requests: []quotav1alpha1.ResourceRequest{
+					Spec: quotav1alpha1.ResourceClaimTemplateSpec{
+						Requests: []quotav1alpha1.ResourceRequestTemplate{
 							{
 								ResourceType: "{{trigger.metadata.name}}-type",
 								Amount:       10,
@@ -249,8 +253,8 @@ func TestRenderClaimWithUserContext(t *testing.T) {
 							"trigger-name": "{{trigger.metadata.name}}",
 						},
 					},
-					Spec: quotav1alpha1.ResourceClaimSpec{
-						Requests: []quotav1alpha1.ResourceRequest{
+					Spec: quotav1alpha1.ResourceClaimTemplateSpec{
+						Requests: []quotav1alpha1.ResourceRequestTemplate{
 							{
 								ResourceType: "{{trigger.metadata.name}}-type",
 								Amount:       5,

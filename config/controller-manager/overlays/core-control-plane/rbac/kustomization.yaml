@@ -2,3 +2,4 @@ resources:
   - role.yaml
   - rolebinding.yaml
   - service-account.yaml
+  - leader-pod.yaml

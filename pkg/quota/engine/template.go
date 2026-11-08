@@ -16,6 +16,8 @@ import (
 // TemplateEngine handles ResourceClaim and ResourceGrant generation from policy templates.
 type TemplateEngine interface {
 	// RenderClaim renders a complete ResourceClaim from a ClaimCreationPolicy.
+	// Requests whose condition evaluates to false are omitted, so the returned
+	// claim has no requests when none of them apply to the trigger.
 	RenderClaim(policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext) (*quotav1alpha1.ResourceClaim, error)
 
 	// RenderGrant renders a complete ResourceGrant from a GrantCreationPolicy.
@@ -69,6 +71,22 @@ func NewTemplateEngine(celEngine CELEngine, logger logr.Logger) TemplateEngine {
 	}
 }
 
+// RequestConditionError reports that a claim template request's condition
+// could not be evaluated against the trigger.
+type RequestConditionError struct {
+	Index        int
+	ResourceType string
+	Err          error
+}
+
+func (e *RequestConditionError) Error() string {
+	return fmt.Sprintf("failed to evaluate condition of request %d (resourceType %q): %v", e.Index, e.ResourceType, e.Err)
+}
+
+func (e *RequestConditionError) Unwrap() error {
+	return e.Err
+}
+
 // renderResourceClaimSpec renders a ResourceClaimTemplate into a ResourceClaimSpec.
 func (e *templateEngine) renderResourceClaimSpec(template quotav1alpha1.ResourceClaimTemplate, evalContext *EvaluationContext) (*quotav1alpha1.ResourceClaimSpec, error) {
 	// Build full context variables for ClaimCreationPolicy templates
@@ -76,7 +94,17 @@ func (e *templateEngine) renderResourceClaimSpec(template quotav1alpha1.Resource
 
 	// Process resource requests using CEL expressions
 	var resourceRequests []quotav1alpha1.ResourceRequest
-	for _, requestTemplate := range template.Spec.Requests {
+	for i, requestTemplate := range template.Spec.Requests {
+		if requestTemplate.Condition != "" {
+			include, err := e.celEngine.EvaluateBoolExpression(requestTemplate.Condition, variables)
+			if err != nil {
+				return nil, &RequestConditionError{Index: i, ResourceType: requestTemplate.ResourceType, Err: err}
+			}
+			if !include {
+				continue
+			}
+		}
+
 		// Render ResourceType using CEL template
 		resourceType, err := e.renderCELTemplate(requestTemplate.ResourceType, variables)
 		if err != nil {

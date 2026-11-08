@@ -98,7 +98,7 @@ func SetupQuotaControllers(mgr mcmanager.Manager, dynamicClient dynamic.Interfac
 
 	// 5. ClaimCreationPolicy controller (policy validation - core cluster only)
 	logger.V(1).Info("Setting up ClaimCreationPolicy controller (core cluster only)")
-	claimCreationPolicyValidator := validation.NewClaimCreationPolicyValidator(sharedResourceTypeValidator)
+	claimCreationPolicyValidator := validation.NewClaimCreationPolicyValidator(celValidator, sharedResourceTypeValidator)
 	if err := (&policy.ClaimCreationPolicyReconciler{
 		Scheme:          standardMgr.GetScheme(),
 		Manager:         mgr,

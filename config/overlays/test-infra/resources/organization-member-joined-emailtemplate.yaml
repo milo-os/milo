@@ -1,0 +1,32 @@
+# The email template the controller manager tells organization owners someone joined with (its
+# --organization-member-joined-email-template default). Applied to the Milo API server by 'task dev:setup'.
+apiVersion: notification.miloapis.com/v1alpha1
+kind: EmailTemplate
+metadata:
+  name: emailtemplates.notification.miloapis.com-organizationmemberjoinedemailtemplate
+spec:
+  subject: "Someone joined your organization"
+  textBody: "{{.MemberDisplayName}} ({{.MemberEmail}}) joined {{.OrganizationDisplayName}}."
+  htmlBody: "<p>{{.MemberDisplayName}} ({{.MemberEmail}}) joined {{.OrganizationDisplayName}}.</p>"
+  variables:
+  - name: OrganizationName
+    required: false
+    type: string
+  - name: OrganizationDisplayName
+    required: true
+    type: string
+  - name: MemberDisplayName
+    required: true
+    type: string
+  - name: MemberEmail
+    required: true
+    type: string
+  - name: JoinMethod
+    required: false
+    type: string
+  - name: InviterDisplayName
+    required: false
+    type: string
+  - name: EmailDomain
+    required: false
+    type: string

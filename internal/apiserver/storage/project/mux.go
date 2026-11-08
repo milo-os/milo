@@ -7,11 +7,15 @@ import (
 	"sync"
 	"time"
 
+	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/pkg/request"
 
+	"golang.org/x/time/rate"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	generic "k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/storage"
 	storagebackend "k8s.io/apiserver/pkg/storage/storagebackend"
@@ -20,6 +24,7 @@ import (
 	k8slegacy "k8s.io/component-base/metrics/legacyregistry"
 
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 )
 
 // -------------------- metrics --------------------
@@ -64,6 +69,34 @@ var (
 		[]string{"result"},
 	)
 
+	unknownProjectWritesRefused = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name:           "projectstorage_unknown_project_writes_refused_total",
+			Help:           "Writes refused because their Project could not be found (NotFound) or read (InternalError)",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"resource_group", "resource_kind", "reason"},
+	)
+
+	unknownProjectReadsRefused = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name:           "projectstorage_unknown_project_reads_refused_total",
+			Help:           "Reads and deletes refused because their Project could not be found (NotFound) or read (InternalError)",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"resource_group", "resource_kind", "reason"},
+	)
+
+	childRemovals = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Name: "projectstorage_child_removals_total",
+			Help: "Child storages removed because their Project left the API server's view, by resource type; " +
+				"each is destroyed once in-flight requests drain",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"resource_group", "resource_kind"},
+	)
+
 	reinitErrors = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "projectstorage_reinitializing_errors_total",
@@ -75,7 +108,8 @@ var (
 )
 
 func init() {
-	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration, reinitErrors)
+	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration,
+		unknownProjectWritesRefused, unknownProjectReadsRefused, childRemovals, reinitErrors)
 }
 
 func isReinitErr(err error) bool {
@@ -206,6 +240,20 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 
 // -------------------- mux --------------------
 
+// refusalLogInterval bounds the refusal log line to one per kind in that time; the counter carries the
+// volume. A writer that retries a refused write in a loop would otherwise log at its own rate.
+const refusalLogInterval = 10 * time.Second
+
+// ProjectLookup tells the storage about Projects: Lookup says which Project a
+// name refers to now, reading storage when the view cannot answer; Project
+// says whether the view holds a name; AddListener reports Projects that leave
+// the view.
+type ProjectLookup interface {
+	Lookup(ctx context.Context, name string) (projectstate.Project, error)
+	Project(name string) (projectstate.Project, bool)
+	AddListener(projectstate.Listener) (remove func())
+}
+
 // projectMux implements storage.Interface and routes to a per-project child.
 type projectMux struct {
 	mu        sync.RWMutex
@@ -215,7 +263,14 @@ type projectMux struct {
 	inner        generic.StorageDecorator
 	cfg          storagebackend.ConfigForResource
 	args         decoratorArgs
+	projects     ProjectLookup
 	bootstrapper *NamespaceBootstrapper
+	refusalLog   *rate.Limiter
+
+	// drain is how long a removed child serves the requests that picked it
+	// before its storage stops; removeListener stops the view's reports.
+	drain          time.Duration
+	removeListener func()
 }
 
 func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
@@ -278,6 +333,9 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 }
 
 func (m *projectMux) destroyAll() {
+	if m.removeListener != nil {
+		m.removeListener()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for k, c := range m.children {
@@ -288,16 +346,123 @@ func (m *projectMux) destroyAll() {
 	}
 }
 
-func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
-	if proj, ok := request.ProjectID(ctx); ok && proj != "" {
-		s, err := m.childForProject(proj)
-		if err != nil {
-			return nil, err
-		}
-		m.bootstrapper.Ensure(ctx, proj)
-		return s, nil
+// ProjectGone removes the named Project's child, so the next request into the
+// gone Project builds none, and retires it.
+func (m *projectMux) ProjectGone(name string) {
+	if name == "" {
+		return
 	}
-	return m.childForProject("")
+	m.mu.Lock()
+	c, ok := m.children[name]
+	delete(m.children, name)
+	m.mu.Unlock()
+	if ok {
+		m.retire(c)
+	}
+}
+
+// ViewResynced removes and retires the child of every name the view does not
+// hold: a Project created and deleted inside one watch gap, or removed after a
+// lookup found it and before its child was built.
+func (m *projectMux) ViewResynced() {
+	m.mu.Lock()
+	var gone []*child
+	for name, c := range m.children {
+		if _, ok := m.projects.Project(name); !ok && name != "" {
+			gone = append(gone, c)
+			delete(m.children, name)
+		}
+	}
+	m.mu.Unlock()
+	for _, c := range gone {
+		m.retire(c)
+	}
+}
+
+// retire destroys a removed child after drain. A request that picked the child
+// before its removal ends within the server's request timeout, and a watch on
+// it ends when its cacher stops.
+func (m *projectMux) retire(c *child) {
+	childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Inc()
+	if c.destroy != nil {
+		time.AfterFunc(m.drain, c.destroy)
+	}
+}
+
+func (m *projectMux) pick(ctx context.Context) (storage.Interface, error) {
+	project, ok := request.ProjectID(ctx)
+	if !ok || project == "" {
+		return m.childForProject("")
+	}
+	if err := m.admit(ctx, project); err != nil {
+		return nil, err
+	}
+	return m.childForProject(project)
+}
+
+// admit looks up the Project a request into its plane names, whatever its
+// verb. A request into a Project that storage does not hold, or that cannot be
+// read, is refused and builds no child: a child keeps a watch cache until its
+// Project leaves the view, so a read into a missing Project would keep one
+// forever. A live Project is bootstrapped where this kind bootstraps; a
+// deleting one is not, and its children serve the purge until it is gone.
+//
+// Upstream's NamespaceLifecycle refuses only a create into a missing
+// namespace and lets an update through (k8s.io/apiserver v0.37.1,
+// pkg/admission/plugin/namespace/lifecycle/admission.go lines 105-109,
+// kubernetes/kubernetes#140661). The request's verb cannot tell an update
+// that creates (an apply patch, or a kind that allows create on update) from
+// one that changes, so an update and a patch are refused too. That strands no
+// namespaced object: the Project's finalizer holds until the purge has
+// emptied every namespace and every cluster-scoped object that carries a
+// finalizer is gone. A cluster-scoped object whose delete was refused can
+// outlive its Project, so an update to one of them in a gone Project is
+// refused, and counted with reason NotFound.
+func (m *projectMux) admit(ctx context.Context, project string) error {
+	p, err := m.projects.Lookup(ctx, project)
+	if err != nil {
+		return m.refuse(ctx, project, err)
+	}
+	if !p.Deleting {
+		m.bootstrapper.Ensure(ctx, project, p.UID)
+	}
+	return nil
+}
+
+// refuse returns err for a request into project's plane, counted as a write or
+// a read, and logged at most once per refusalLogInterval for this kind.
+func (m *projectMux) refuse(ctx context.Context, project string, err error) error {
+	reason := "InternalError"
+	if apierrors.IsNotFound(err) {
+		reason = "NotFound"
+	}
+	refused := unknownProjectReadsRefused
+	if _, writes := projectstate.WriteVerb(ctx); writes {
+		refused = unknownProjectWritesRefused
+	}
+	refused.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, reason).Inc()
+	if m.refusalLog.Allow() {
+		klog.InfoS("Refused a request into a project control plane whose Project cannot be found",
+			"project", project, "group", m.args.resourceGroup, "resource", m.args.resourceKind,
+			"verb", requestVerb(ctx), "user", requestUser(ctx), "reason", reason)
+	}
+	return err
+}
+
+// requestVerb names the request's verb, or "" when the context carries none.
+func requestVerb(ctx context.Context) string {
+	if info, ok := genericapirequest.RequestInfoFrom(ctx); ok {
+		return info.Verb
+	}
+	return ""
+}
+
+// requestUser names the request's user, or "" when the context carries none.
+func requestUser(ctx context.Context) string {
+	if u, ok := genericapirequest.UserFrom(ctx); ok {
+		return u.GetName()
+	}
+	return ""
 }
 
 // ---------- storage.Interface forwarding ----------

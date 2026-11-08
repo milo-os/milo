@@ -32,3 +32,13 @@ func OrganizationID(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(organizationKey).(string)
 	return id, ok
 }
+
+// IsWrite reports whether a request of this verb creates or changes an object: create, update or patch. Reads and
+// deletes are not writes here: neither brings an object, or a reference to one, into a project.
+func IsWrite(verb string) bool {
+	switch verb {
+	case "create", "update", "patch":
+		return true
+	}
+	return false
+}

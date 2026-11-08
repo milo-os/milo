@@ -91,6 +91,7 @@ import (
 	notificationcontroller "go.miloapis.com/milo/internal/controllers/notification"
 	remoteapiservicecontroller "go.miloapis.com/milo/internal/controllers/remoteapiservice"
 	resourcemanagercontroller "go.miloapis.com/milo/internal/controllers/resourcemanager"
+	"go.miloapis.com/milo/internal/emaildomain"
 	infracluster "go.miloapis.com/milo/internal/infra-cluster"
 	quotacontroller "go.miloapis.com/milo/internal/quota/controllers"
 	crmv1alpha1 "go.miloapis.com/milo/pkg/apis/crm/v1alpha1"
@@ -136,6 +137,13 @@ var (
 	// UserInvitationEmailTemplate is the template for the user invitation email.
 	UserInvitationEmailTemplate string
 
+	// OrganizationMemberJoinedEmailTemplate is the template for the email that tells organization owners someone joined.
+	OrganizationMemberJoinedEmailTemplate string
+
+	// EmailDomainJoiningRecheckInterval is how often an organization offering
+	// membership by email domain has its project Domains checked again.
+	EmailDomainJoiningRecheckInterval time.Duration
+
 	// UserWaitlistPendingEmailTemplate is the template for the waitlist pending email.
 	UserWaitlistPendingEmailTemplate string
 	// UserWaitlistApprovedEmailTemplate is the template for the waitlist approved email.
@@ -171,6 +179,8 @@ var (
 	ProjectSuspensionWarningExcludedReasons []string
 
 	QuotaMaxConcurrentReconciles int
+	// QuotaProviderMaxConcurrentReconciles is how many projects the quota system's provider engages at once.
+	QuotaProviderMaxConcurrentReconciles int
 
 	// WaitlistRelatedResourcesNamespace is the namespace that contains the waitlist related resources.
 	WaitlistRelatedResourcesNamespace string
@@ -323,6 +333,8 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&GetInvitationRoleName, "get-invitation-role-name", "iam.miloapis.com-getinvitation", "The name of the role that will be used to grant get invitation permissions.")
 	fs.StringVar(&AcceptInvitationRoleName, "accept-invitation-role-name", "iam.miloapis.com-acceptinvitation", "The name of the role that will be used to grant accept invitation permissions.")
 	fs.StringVar(&UserInvitationEmailTemplate, "user-invitation-email-template", "emailtemplates.notification.miloapis.com-userinvitationemailtemplate", "The name of the template that will be used to send the user invitation email.")
+	fs.DurationVar(&EmailDomainJoiningRecheckInterval, "email-domain-joining-recheck-interval", 10*time.Minute, "How often an organization that offers membership by email domain has its project Domains checked again. Only used when the EmailDomainJoining feature gate is enabled.")
+	fs.StringVar(&OrganizationMemberJoinedEmailTemplate, "organization-member-joined-email-template", "emailtemplates.notification.miloapis.com-organizationmemberjoinedemailtemplate", "The name of the template that will be used to tell organization owners that someone joined. Only used when the MemberJoinedEmails feature gate is enabled; set to an empty string to send no such emails.")
 	fs.StringVar(&UserWaitlistPendingEmailTemplate, "user-waitlist-pending-email-template", "emailtemplates.notification.miloapis.com-userwaitlistemailtemplate", "The name of the template that will be used to send the waitlist pending email.")
 	fs.StringVar(&UserWaitlistApprovedEmailTemplate, "user-waitlist-approved-email-template", "emailtemplates.notification.miloapis.com-userwelcomeemailtemplate", "The name of the template that will be used to send the waitlist approved email.")
 	fs.StringVar(&UserWaitlistRejectedEmailTemplate, "user-waitlist-rejected-email-template", "emailtemplates.notification.miloapis.com-userrejectedemailtemplate", "The name of the template that will be used to send the waitlist rejected email.")
@@ -333,6 +345,7 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailNamespace, "project-suspension-deletion-warning-email-namespace", "milo-system", "The namespace suspension deletion warning Email resources are created in, kept as a stable, centralized audit trail.")
 	fs.StringSliceVar(&ProjectSuspensionWarningExcludedReasons, "project-suspension-warning-excluded-reasons", []string{"Fraud", "Abuse"}, "Comma-separated suspension reasons for which countdown deletion warning e-mails are NOT sent (e.g. Fraud,Abuse). Projects suspended for these reasons still auto-delete after the retention window.")
 	fs.IntVar(&QuotaMaxConcurrentReconciles, "quota-max-concurrent-reconciles", 1, "The number of AllowanceBuckets and the number of ResourceClaims the quota controllers reconcile in parallel.")
+	fs.IntVar(&QuotaProviderMaxConcurrentReconciles, "quota-provider-max-concurrent-reconciles", 1, "The number of projects the quota system's provider engages at once after this controller manager takes the lease.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
 	fs.StringVar(&PlatformInvitationEmailVariableActionUrl, "platform-invitation-email-variable-action-url", "https://cloud.datum.net", "The action url for the platform invitation email.")
 	fs.StringVar(&OrganizationMembershipSelfDeleteRoleName, "organization-membership-self-delete-role-name", "organizationmembership-self-delete", "The name of the role that will be used to grant organization membership self delete actions.")
@@ -592,11 +605,8 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
-			subjectBindingReaperCtrl := resourcemanagercontroller.SubjectBindingReaperController{
-				Client: ctrl.GetClient(),
-			}
-			if err := subjectBindingReaperCtrl.SetupWithManager(ctrl); err != nil {
-				logger.Error(err, "Error setting up subject binding reaper controller")
+			if err := setupPolicyBindingLifecycle(ctrl); err != nil {
+				logger.Error(err, "Error setting up the policy binding lifecycle controllers")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
@@ -653,6 +663,8 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				},
 				InternalServiceDiscovery: false, // Use Project resources for user-facing API
 				ProjectRestConfig:        ctrlConfig,
+				PrestartInformers:        []client.Object{&quotav1alpha1.ResourceClaim{}, &quotav1alpha1.ResourceGrant{}, &quotav1alpha1.AllowanceBucket{}},
+				MaxConcurrentReconciles:  QuotaProviderMaxConcurrentReconciles,
 			})
 			if err != nil {
 				logger.Error(err, "Error creating Milo provider for multicluster quota")
@@ -778,9 +790,22 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				GetInvitationRoleName:           GetInvitationRoleName,
 				AcceptInvitationRoleName:        AcceptInvitationRoleName,
 				UserInvitationEmailTemplateName: UserInvitationEmailTemplate,
+				MemberJoinedEmailTemplateName:   OrganizationMemberJoinedEmailTemplate,
+				OrganizationOwnerRoleName:       OrganizationOwnerRoleName,
+				OrganizationOwnerRoleNamespace:  OrganizationOwnerRoleNamespace,
 			}
 			if err := userInvitationCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up user invitation controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			emailDomainJoiningCtrl := iamcontroller.EmailDomainJoiningController{
+				Client:          ctrl.GetClient(),
+				Verifier:        emaildomain.NewVerifier(ctrl.GetClient(), ctrl.GetConfig()),
+				RecheckInterval: EmailDomainJoiningRecheckInterval,
+			}
+			if err := emailDomainJoiningCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up email domain joining controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
@@ -903,6 +928,9 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 		go leaseCandidate.Run(ctx)
 	}
 
+	// A rollout deletes the leader's pod last when the leader marks it.
+	leaderPod := startLeaderPodMarker(ctx, logger)
+
 	var elections sync.WaitGroup
 
 	// Start the main lock
@@ -913,7 +941,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			c.ComponentConfig.Generic.LeaderElection.ResourceLock,
 			c.ComponentConfig.Generic.LeaderElection.ResourceName,
 			leaderelection.LeaderCallbacks{
-				OnStartedLeading: func(ctx context.Context) {
+				OnStartedLeading: markWhileLeading(leaderPod, logger, func(ctx context.Context) {
 					controllerDescriptors := NewControllerDescriptors()
 					if leaderMigrator != nil {
 						// If leader migration is enabled, we should start only non-migrated controllers
@@ -922,7 +950,7 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 						logger.Info("leader migration: starting main controllers.")
 					}
 					run(ctx, controllerDescriptors)
-				},
+				}),
 				OnStoppedLeading: func() {
 					if ctx.Err() != nil {
 						logger.Info("Released leader lease on shutdown")

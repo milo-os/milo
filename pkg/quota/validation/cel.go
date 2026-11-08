@@ -37,6 +37,12 @@ func (v *CELValidator) ValidateConstraints(constraints []quotav1alpha1.Condition
 	return nil
 }
 
+// ValidateBoolExpression validates a pure CEL expression (without {{ }}
+// delimiters) that must return a boolean value.
+func (v *CELValidator) ValidateBoolExpression(expression string) error {
+	return v.validateExpression(expression, cel.BoolType)
+}
+
 // ValidateTemplateExpression validates a CEL expression extracted from {{ }} delimiters in template fields.
 // The expression must return a string value or a dynamic value that will be converted to string during rendering.
 func (v *CELValidator) ValidateTemplateExpression(expression string) error {

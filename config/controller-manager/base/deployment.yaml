@@ -80,6 +80,16 @@ spec:
             value: 10s
           - name: LEADER_ELECT_RETRY_PERIOD
             value: 2s
+          # The leader marks its own pod with a deletion cost, so a rollout
+          # deletes the standby's pod first and moves the lease once.
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
           # Default to INFO level logging
           - name: LOG_LEVEL
             value: "4"
@@ -155,6 +165,8 @@ spec:
         - containerPort: 9443
           name: ctrl-mgr
           protocol: TCP
+        # kube-controller-manager's liveness values from kubeadm: a busy manager
+        # answers slowly, and a kill costs the lease and its handover.
         livenessProbe:
           httpGet:
             path: /healthz
@@ -162,6 +174,8 @@ spec:
             scheme: HTTPS
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 15
+          failureThreshold: 8
         readinessProbe:
           httpGet:
             path: /healthz
@@ -177,3 +191,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
       restartPolicy: Always
+      # Shutdown waits up to LEADER_ELECT_RENEW_DEADLINE to release the lease,
+      # so the standby takes over at once. Keep this above the longest renew
+      # deadline an overlay sets, or the kubelet kills the release.
+      terminationGracePeriodSeconds: 60

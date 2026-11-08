@@ -8,6 +8,10 @@ on:
       - 'Taskfile.yaml'
       - '.github/workflows/test-prometheus-rules.yaml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)) }}
+
 jobs:
   test-prometheus-rules:
     runs-on: ubuntu-latest
@@ -15,10 +19,10 @@ jobs:
       PROMETHEUS_VERSION: 3.13.2
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@v3.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}

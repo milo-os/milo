@@ -23,6 +23,16 @@ const (
 	// terms granted by staff. The name predates payment terms and is kept for
 	// existing consumers.
 	OrganizationOnboardingCompleteReasonPaymentMethodNotReady = "PaymentMethodNotReady"
+
+	// OrganizationConditionEmailDomainsVerified reports whether every domain in
+	// spec.emailDomainJoining is verified by a Domain in one of the
+	// organization's projects. Membership is offered only for verified
+	// domains. The condition is absent when email domain joining is off.
+	OrganizationConditionEmailDomainsVerified = "EmailDomainsVerified"
+
+	OrganizationEmailDomainsVerifiedReasonVerified    = "Verified"
+	OrganizationEmailDomainsVerifiedReasonNotVerified = "DomainNotVerified"
+	OrganizationEmailDomainsVerifiedReasonCheckFailed = "CheckFailed"
 )
 
 // OrganizationSpec defines the desired state of Organization
@@ -43,6 +53,42 @@ type OrganizationSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	ContactInfo *OrganizationContactInfo `json:"contactInfo,omitempty"`
+
+	// EmailDomainJoining offers membership to everyone whose email address is
+	// at one of the listed domains, without an invitation from an owner. Each
+	// domain must be verified by a Domain in one of the organization's
+	// projects. The EmailDomainsVerified condition reports which domains are
+	// in use.
+	//
+	// Requires the EmailDomainJoining feature gate.
+	//
+	// +kubebuilder:validation:Optional
+	EmailDomainJoining *OrganizationEmailDomainJoining `json:"emailDomainJoining,omitempty"`
+}
+
+// OrganizationEmailDomainJoining lists the email domains whose users are
+// offered membership, and the roles they get when they accept.
+// +k8s:protobuf=true
+type OrganizationEmailDomainJoining struct {
+	// Domains are the email domains to offer membership to, such as
+	// "example.com". An address matches only its exact domain, so
+	// "example.com" does not match "eu.example.com". A Domain in one of the
+	// organization's projects must verify each domain or a parent of it.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`
+	// +listType=set
+	Domains []string `json:"domains"`
+
+	// Roles are granted to people who join through a domain offer.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
+	Roles []RoleReference `json:"roles"`
 }
 
 // OrganizationContactInfo defines tenancy-level contact details for an
