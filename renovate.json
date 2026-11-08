@@ -1,15 +1,20 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "github>milo-os/.github:renovate-config"
   ],
   "flux": {
-    "managerFilePatterns": ["/^config/.+\\.ya?ml$/"]
+    "managerFilePatterns": [
+      "/^config/.+\\.ya?ml$/"
+    ]
   },
   "packageRules": [
     {
       "description": "k8s.io/kubernetes only builds against staging modules of the same release, so bump it, every pinned staging module and controller-runtime together",
-      "matchManagers": ["gomod"],
+      "matchManagers": [
+        "gomod"
+      ],
       "matchPackageNames": [
         "k8s.io/**",
         "sigs.k8s.io/controller-runtime",
@@ -23,15 +28,24 @@
     },
     {
       "description": "The testcontainers core and its modules release together",
-      "matchManagers": ["gomod"],
-      "matchPackageNames": ["github.com/testcontainers/testcontainers-go{,/**}"],
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/testcontainers/testcontainers-go{,/**}"
+      ],
       "groupName": "testcontainers",
       "groupSlug": "testcontainers"
     },
     {
       "description": "The CockroachDB operator and the cluster it runs move together. The cluster chart's version is also the CockroachDB version the storage tests run",
-      "matchManagers": ["flux"],
-      "matchPackageNames": ["cockroachdb-operator-chart", "cockroachdb-chart"],
+      "matchManagers": [
+        "flux"
+      ],
+      "matchPackageNames": [
+        "cockroachdb-operator-chart",
+        "cockroachdb-chart"
+      ],
       "groupName": "cockroachdb",
       "groupSlug": "cockroachdb"
     }
