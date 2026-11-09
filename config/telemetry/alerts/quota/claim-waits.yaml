@@ -2,6 +2,11 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: milo-quota-claim-waits
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
 spec:
   groups:
     - name: milo.quota.claim-waits
@@ -22,7 +27,7 @@ spec:
             team: platform
           annotations:
             summary: "Milo API server {{ $labels.pod }} has held more than 100 open quota claim waits for 10 minutes"
-            description: "A create of a quota-tracked resource waits up to 30 s for its claim to be judged, and a wait normally ends in about a second. This pod holds {{ $value | humanize }} open waits, so claims are judged slowly, or a caller creates in bulk faster than they are judged."
+            description: "This pod holds {{ $value | humanize }} open claim waits, and a wait normally ends in about a second. Claims are judged slowly, or a caller creates in bulk faster than they are judged."
             runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"
 
         # A claim wait watches from its own create's version, so a 410 Gone means the claim cache no longer holds
@@ -43,5 +48,5 @@ spec:
             team: platform
           annotations:
             summary: "Quota claim waits on Milo API server {{ $labels.pod }} often meet 410 Gone"
-            description: "A claim wait watches from the version of its own create, so a 410 means the claim cache no longer holds that version, for example after the cache started again. This pod's waits read their claim after a 410 {{ $value | humanize }} times in 15 minutes."
+            description: "Claim waits on this pod read their claim after a 410 {{ $value | humanize }} times in 15 minutes: the claim cache lost the versions they watch from, for example after it started again."
             runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"

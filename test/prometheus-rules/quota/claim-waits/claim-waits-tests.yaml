@@ -28,7 +28,7 @@ tests:
               pod: a
             exp_annotations:
               summary: "Milo API server a has held more than 100 open quota claim waits for 10 minutes"
-              description: "A create of a quota-tracked resource waits up to 30 s for its claim to be judged, and a wait normally ends in about a second. This pod holds 150 open waits, so claims are judged slowly, or a caller creates in bulk faster than they are judged."
+              description: "This pod holds 150 open claim waits, and a wait normally ends in about a second. Claims are judged slowly, or a caller creates in bulk faster than they are judged."
               runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"
 
   # A burst of 500 for 5 minutes, then back to 5: shorter than the rule's 10 minutes, so nothing fires
@@ -59,7 +59,7 @@ tests:
               pod: a
             exp_annotations:
               summary: "Quota claim waits on Milo API server a often meet 410 Gone"
-              description: "A claim wait watches from the version of its own create, so a 410 means the claim cache no longer holds that version, for example after the cache started again. This pod's waits read their claim after a 410 15 times in 15 minutes."
+              description: "Claim waits on this pod read their claim after a 410 15 times in 15 minutes: the claim cache lost the versions they watch from, for example after it started again."
               runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"
 
   # The same reads against 1,000 waits a minute: fewer than one in 100 waits, so 410s are still rare
