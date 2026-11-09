@@ -129,7 +129,8 @@ type watchManager struct {
 	// TTL management
 	ttlMu         sync.Mutex
 	ttlTimer      *time.Timer
-	activeWaiters int32 // Atomic counter
+	activeWaiters int32 // Atomic counter; a new waiter is counted under ttlMu
+	expired       bool  // set under ttlMu when the TTL ends the manager; it then refuses waiters
 
 	// Lifecycle
 	startOnce sync.Once
@@ -275,8 +276,8 @@ func (w *watchManager) Stop() {
 // RegisterClaimWaiter registers a waiter for a specific ResourceClaim.
 // Can be called before the claim exists.
 func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (ClaimWaiter, error) {
-	if !w.started.Load() {
-		return nil, fmt.Errorf("watch manager not started")
+	if err := w.acceptsWaiters(); err != nil {
+		return nil, err
 	}
 
 	key := types.NamespacedName{Namespace: namespace, Name: claimName}
@@ -322,9 +323,13 @@ func (w *watchManager) RegisterClaimWaiter(ctx context.Context, claimName, names
 	w.waiters[key] = waiter
 	w.waitersLock.Unlock()
 
-	// Increment active waiter count and update TTL
-	activeCount := atomic.AddInt32(&w.activeWaiters, 1)
-	w.updateTTL()
+	// Count the waiter under ttlMu: a manager whose TTL has ended refuses it.
+	activeCount, counted := w.countWaiter()
+	if !counted {
+		w.dropWaiter(key, waiter)
+		cancelFunc()
+		return nil, errWatchManagerExpired
+	}
 
 	// Metrics: track registrations and current waiter count
 	waiterRegistrations.Inc()
@@ -470,7 +475,12 @@ func (w *watchManager) unregisterLocked(key types.NamespacedName, waiter *claimW
 func (w *watchManager) updateTTL() {
 	w.ttlMu.Lock()
 	defer w.ttlMu.Unlock()
+	w.updateTTLLocked()
+}
 
+// updateTTLLocked pauses the TTL while waiters are active and arms it when
+// none is. The caller holds ttlMu.
+func (w *watchManager) updateTTLLocked() {
 	activeCount := atomic.LoadInt32(&w.activeWaiters)
 
 	if activeCount > 0 {
@@ -489,27 +499,83 @@ func (w *watchManager) updateTTL() {
 		}
 
 		ttlDuration := w.config.TTL.DefaultTTL
-		w.ttlTimer = time.AfterFunc(ttlDuration, func() {
-			w.logger.Info("TTL expired, stopping watch manager",
-				"ttl", ttlDuration,
-				"project", w.projectID)
-
-			ttlExpirations.Inc()
-
-			// Stop the watch manager
-			w.Stop()
-
-			// Notify parent to remove from cache
-			if w.onTTLExpired != nil {
-				w.onTTLExpired()
-			}
-		})
+		w.ttlTimer = time.AfterFunc(ttlDuration, func() { w.expireIfIdle(ttlDuration) })
 
 		ttlResets.Inc()
 
 		w.logger.V(5).Info("TTL started/reset",
 			"project", w.projectID)
 	}
+}
+
+// errWatchManagerExpired refuses a waiter on a manager whose TTL has ended. The
+// manager has left the cache, so the next manager for the project is a new one.
+var errWatchManagerExpired = fmt.Errorf("watch manager expired")
+
+// acceptsWaiters says why the manager cannot take a waiter: its TTL has ended
+// it, or it has not started.
+func (w *watchManager) acceptsWaiters() error {
+	w.ttlMu.Lock()
+	defer w.ttlMu.Unlock()
+	if w.expired {
+		return errWatchManagerExpired
+	}
+	if !w.started.Load() {
+		return fmt.Errorf("watch manager not started")
+	}
+	return nil
+}
+
+// countWaiter counts a new waiter and pauses the TTL, unless the TTL has
+// already ended the manager.
+func (w *watchManager) countWaiter() (int32, bool) {
+	w.ttlMu.Lock()
+	defer w.ttlMu.Unlock()
+	if w.expired {
+		return 0, false
+	}
+	activeCount := atomic.AddInt32(&w.activeWaiters, 1)
+	w.updateTTLLocked()
+	return activeCount, true
+}
+
+// dropWaiter removes a waiter the manager refused before counting it, unless
+// Stop has removed it already.
+func (w *watchManager) dropWaiter(key types.NamespacedName, waiter *claimWaiter) {
+	w.waitersLock.Lock()
+	defer w.waitersLock.Unlock()
+	if w.waiters[key] == waiter {
+		delete(w.waiters, key)
+	}
+}
+
+// expireIfIdle stops the manager when its TTL ends with no waiter.
+func (w *watchManager) expireIfIdle(ttl time.Duration) {
+	if !w.markExpired() {
+		return
+	}
+	w.logger.Info("TTL expired, stopping watch manager",
+		"ttl", ttl,
+		"project", w.projectID)
+	ttlExpirations.Inc()
+	w.Stop()
+}
+
+// markExpired marks an idle manager expired and removes it from the cache, both
+// under ttlMu, the lock a waiter is counted under. A waiter that registers as
+// the TTL ends therefore either keeps the manager or is refused and goes to a
+// new manager; Stop never closes it. It returns false when a waiter came first.
+func (w *watchManager) markExpired() bool {
+	w.ttlMu.Lock()
+	defer w.ttlMu.Unlock()
+	if w.expired || atomic.LoadInt32(&w.activeWaiters) > 0 {
+		return false
+	}
+	w.expired = true
+	if w.onTTLExpired != nil {
+		w.onTTLExpired()
+	}
+	return true
 }
 
 // watchLoop keeps a watch open until the manager stops: when a stream ends, it

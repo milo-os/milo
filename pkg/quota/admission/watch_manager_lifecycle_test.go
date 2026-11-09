@@ -283,6 +283,56 @@ func TestWatchManagerWithoutWaiterExpires(t *testing.T) {
 	}
 }
 
+// TestWaiterRegisteredAsTheTTLEndsIsNotClosed checks that a waiter which
+// registers while its manager's TTL ends is either refused or keeps the
+// manager. Stop closes every registered waiter, so a TTL that stopped the
+// manager under a new waiter would end that create with no outcome.
+func TestWaiterRegisteredAsTheTTLEndsIsNotClosed(t *testing.T) {
+	for run := range 300 {
+		w := NewWatchManager(newWatchedClient(watchScript{}), logr.Discard(), "project").(*watchManager)
+		w.config.TTL.DefaultTTL = 2 * time.Millisecond
+		if err := w.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		if waiter, err := w.RegisterClaimWaiter(context.Background(), "claim", "default", time.Hour); err == nil {
+			time.Sleep(5 * time.Millisecond)
+			select {
+			case _, open := <-waiter.Result():
+				if !open {
+					t.Fatalf("run %d: the TTL stopped the manager under a registered waiter and closed it", run)
+				}
+			default:
+			}
+			waiter.Cancel()
+		}
+		w.Stop()
+	}
+}
+
+// TestWaiterRefusedByAnExpiredManagerGoesToANewOne checks that a create whose
+// manager's TTL ends between getting the manager and registering its waiter
+// is not failed: the refused waiter goes once to the manager that replaces it.
+func TestWaiterRefusedByAnExpiredManagerGoesToANewOne(t *testing.T) {
+	p := newTestPlugin(newWatchedClient(watchScript{}))
+	expired, err := p.getWatchManager(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired.(*watchManager).expireIfIdle(0)
+	defer func() {
+		if replacement, ok := p.watchManagers.Load(""); ok {
+			replacement.(*watchManager).Stop()
+		}
+	}()
+
+	waiter, err := p.registerWaiter(context.Background(), expired, "claim", "default", time.Hour)
+	if err != nil {
+		t.Fatalf("a waiter refused by an expired manager failed the create: %v", err)
+	}
+	waiter.Cancel()
+}
+
 // TestFailedStartStopsItsWatchLoop checks that a manager whose first watch
 // fails stops trying. The plugin does not cache it and its TTL is not armed,
 // so a loop left running would open a stream that nothing can stop.

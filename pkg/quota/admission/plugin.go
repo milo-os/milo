@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -294,6 +295,20 @@ func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (C
 		return nil, err
 	}
 	return wm.(ClaimWatchManager), nil
+}
+
+// registerWaiter registers the claim's waiter on the project's watch manager.
+// A manager whose TTL ended after the request got it refuses the waiter and has
+// left the cache, so the waiter goes once to the manager that replaces it.
+func (p *ResourceQuotaEnforcementPlugin) registerWaiter(ctx context.Context, wm ClaimWatchManager, claimName, namespace string, timeout time.Duration) (ClaimWaiter, error) {
+	waiter, err := wm.RegisterClaimWaiter(ctx, claimName, namespace, timeout)
+	if !stderrors.Is(err, errWatchManagerExpired) {
+		return waiter, err
+	}
+	if wm, err = p.getWatchManager(ctx); err != nil {
+		return nil, err
+	}
+	return wm.RegisterClaimWaiter(ctx, claimName, namespace, timeout)
 }
 
 // cachedOrStartedWatchManager returns projectID's cached watch manager, or
@@ -758,7 +773,7 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 
 	// Register waiter before claim exists to ensure watch stream catches the ADDED event.
 	timeout := p.config.WatchManager.DefaultTimeout
-	waiter, err := watchManager.RegisterClaimWaiter(ctx, claimName, namespace, timeout)
+	waiter, err := p.registerWaiter(ctx, watchManager, claimName, namespace, timeout)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to register waiter")
