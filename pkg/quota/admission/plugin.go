@@ -45,9 +45,6 @@ const (
 	// "denied" when the consumer has reached its quota). Activity policies
 	// match on it instead of the user-facing error text, which can change.
 	OutcomeAuditAnnotation = "quota.miloapis.com/outcome"
-
-	// ClaimWaitTimeout is the maximum time to wait for a ResourceClaim to be granted
-	ClaimWaitTimeout = 30 * time.Second
 )
 
 // Metrics for quota admission decisions. Registered once at init.
