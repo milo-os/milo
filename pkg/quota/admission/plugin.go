@@ -288,13 +288,19 @@ func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (C
 		return cached.(ClaimWatchManager), nil
 	}
 
-	wm, err, _ := p.watchManagerStarts.Do(projectID, func() (any, error) {
+	// A create whose request is cancelled stops waiting. The shared start goes
+	// on and caches its manager for the next create.
+	select {
+	case started := <-p.watchManagerStarts.DoChan(projectID, func() (any, error) {
 		return p.cachedOrStartedWatchManager(projectID)
-	})
-	if err != nil {
-		return nil, err
+	}):
+		if started.Err != nil {
+			return nil, started.Err
+		}
+		return started.Val.(ClaimWatchManager), nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("stopped waiting for the watch manager's start: %w", ctx.Err())
 	}
-	return wm.(ClaimWatchManager), nil
 }
 
 // registerWaiter registers the claim's waiter on the project's watch manager.

@@ -333,6 +333,28 @@ func TestWaiterRefusedByAnExpiredManagerGoesToANewOne(t *testing.T) {
 	waiter.Cancel()
 }
 
+// TestCancelledCreateStopsWaitingForTheStart checks that a create whose
+// request is cancelled stops waiting for its project's shared start. The start
+// goes on and caches its manager for the next create.
+func TestCancelledCreateStopsWaitingForTheStart(t *testing.T) {
+	p := newTestPlugin(newWatchedClient(watchScript{openDelay: 500 * time.Millisecond}))
+	t.Cleanup(func() {
+		if m, err := p.getWatchManager(context.Background()); err == nil {
+			m.(*watchManager).Stop()
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	began := time.Now()
+	if _, err := p.getWatchManager(ctx); err == nil {
+		t.Fatal("a cancelled create got a manager from a start that takes 500 ms")
+	}
+	if waited := time.Since(began); waited > 250*time.Millisecond {
+		t.Fatalf("a create cancelled after 50 ms waited %v for the shared start", waited)
+	}
+}
+
 // TestFailedStartStopsItsWatchLoop checks that a manager whose first watch
 // fails stops trying. The plugin does not cache it and its TTL is not armed,
 // so a loop left running would open a stream that nothing can stop.
