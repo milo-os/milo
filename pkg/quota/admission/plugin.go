@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -104,9 +105,10 @@ type ResourceQuotaEnforcementPlugin struct {
 	// being marked ready until the resource type's cache has been synced.
 	resourceTypeValidator validation.ResourceTypeValidator
 
-	watchManagers sync.Map // map[string]ClaimWatchManager (projectID -> watch manager, "" = root)
-	config        *AdmissionPluginConfig
-	logger        logr.Logger
+	watchManagers      sync.Map           // map[string]ClaimWatchManager (projectID -> watch manager, "" = root)
+	watchManagerStarts singleflight.Group // one start per projectID at a time
+	config             *AdmissionPluginConfig
+	logger             logr.Logger
 
 	// objectConvertor converts structured native (internal) types to their
 	// external versioned representation before evaluating policy constraints.
@@ -276,6 +278,8 @@ func (p *ResourceQuotaEnforcementPlugin) getProjectClient(projectID string) (dyn
 }
 
 // getWatchManager returns a project-scoped watch manager, blocking until ready.
+// Concurrent first calls for a project share one start: a manager started for
+// each of them would keep its watch, and only the cached one gets waiters.
 func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (ClaimWatchManager, error) {
 	projectID, _ := milorequest.ProjectID(ctx)
 
@@ -283,6 +287,27 @@ func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (C
 		return cached.(ClaimWatchManager), nil
 	}
 
+	wm, err, _ := p.watchManagerStarts.Do(projectID, func() (any, error) {
+		return p.cachedOrStartedWatchManager(projectID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return wm.(ClaimWatchManager), nil
+}
+
+// cachedOrStartedWatchManager returns projectID's cached watch manager, or
+// starts one. It looks in the cache again because a call that missed the
+// cache can reach the shared start after the previous start stored its manager.
+func (p *ResourceQuotaEnforcementPlugin) cachedOrStartedWatchManager(projectID string) (ClaimWatchManager, error) {
+	if cached, ok := p.watchManagers.Load(projectID); ok {
+		return cached.(ClaimWatchManager), nil
+	}
+	return p.startWatchManager(projectID)
+}
+
+// startWatchManager starts a watch manager for projectID and caches it.
+func (p *ResourceQuotaEnforcementPlugin) startWatchManager(projectID string) (ClaimWatchManager, error) {
 	var client dynamic.Interface
 	var err error
 	if projectID == "" {
@@ -305,7 +330,8 @@ func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (C
 		wmWithCallback.SetTTLExpiredCallback(func() {
 			p.logger.Info("Watch manager TTL expired, removing from cache",
 				"project", projectID)
-			p.watchManagers.Delete(projectID)
+			// Remove this manager only: a newer one may hold the entry.
+			p.watchManagers.CompareAndDelete(projectID, wm)
 		})
 	}
 
@@ -328,14 +354,14 @@ func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (C
 		return nil, fmt.Errorf("watch manager startup timed out after %v: %w", startupTimeout, startupCtx.Err())
 	}
 
-	actual, _ := p.watchManagers.LoadOrStore(projectID, wm)
+	p.watchManagers.Store(projectID, wm)
 	if projectID == "" {
 		p.logger.V(2).Info("Created and started watch manager")
 	} else {
 		p.logger.V(2).Info("Created and started watch manager",
 			"project", projectID)
 	}
-	return actual.(ClaimWatchManager), nil
+	return wm, nil
 }
 
 // Validate implements admission.ValidationInterface and orchestrates the main admission flow

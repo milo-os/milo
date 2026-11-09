@@ -191,24 +191,35 @@ func (w *watchManager) Start(ctx context.Context) error {
 			if err != nil {
 				startErr = fmt.Errorf("failed to start watch: %w", err)
 				w.logger.Error(err, "Failed to start watch manager")
-				watchStreamsDesired.Dec() // Failed to start, decrement desired
+				w.abortStart()
 				return
 			}
 		case <-ctx.Done():
 			startErr = fmt.Errorf("watch startup cancelled: %w", ctx.Err())
 			w.logger.Error(startErr, "Watch manager startup cancelled")
-			watchStreamsDesired.Dec() // Failed to start, decrement desired
-			// Cancel the watch context to stop the watchLoop goroutine
-			w.watchCancel()
+			w.abortStart()
 			return
 		}
 
 		w.started.Store(true)
+		// Arm the TTL now: it otherwise arms only when a waiter leaves, and a
+		// manager that never gets a waiter would keep its watch forever.
+		w.updateTTL()
 		w.logger.Info("Watch manager started",
 			"project", w.projectID)
 	})
 
 	return startErr
+}
+
+// abortStart undoes a start that got no first stream. It stops the watch
+// loop, which would otherwise retry for the life of the process with no TTL
+// and no cache entry, and takes the manager out of the gauges.
+func (w *watchManager) abortStart() {
+	w.watchCancel()
+	watchStreamsDesired.Dec()
+	watchManagersActive.Dec()
+	watchManagersStopped.Inc()
 }
 
 func (w *watchManager) Stop() {
