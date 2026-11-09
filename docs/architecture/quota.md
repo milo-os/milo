@@ -93,7 +93,7 @@ requests:
 - **Restarts**: client-go's `RetryWatcher` restarts a failed watch at most once a second, honours a server's
   Retry-After, and ends the wait on a 403 or 401.
 - **Lifetime**: A wait lasts at most the claim wait timeout (30 s by default) and ends with its request.
-- **Kept denials**: Cleanup keeps a denied auto-created claim for 60 s after its denial, so a wait that must re-read
+- **Kept denials**: Cleanup keeps a denied auto-created claim for 60 s from its creation, twice the wait, so a wait that must re-read
   its claim after a 410 still finds the denial and its reason. A retry of the same resource replaces a kept denied
   claim.
 

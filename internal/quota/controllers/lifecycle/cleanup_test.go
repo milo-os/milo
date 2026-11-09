@@ -143,11 +143,13 @@ func TestDeniedAutoClaimCleanupController(t *testing.T) {
 			wantDeleted: true,
 		},
 		{
-			// Retention counts from the denial, not from the claim's creation.
-			name: "a claim created long ago but denied recently is kept and requeued",
+			// The CRD defaults the Granted condition with lastTransitionTime 1970,
+			// and Pending to Denied keeps it (status False both times), so
+			// retention must count from the claim's creation, not the condition.
+			name: "a recent denial carrying the CRD's default transition time is kept and requeued",
 			claim: func() *quotav1alpha1.ResourceClaim {
-				c := autoClaim("denied-late", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-10*time.Minute))
-				c.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-10 * time.Second))
+				c := autoClaim("denied-default-time", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-10*time.Second))
+				c.Status.Conditions[0].LastTransitionTime = metav1.NewTime(time.Unix(0, 0).UTC())
 				return c
 			}(),
 			wantDeleted: false,

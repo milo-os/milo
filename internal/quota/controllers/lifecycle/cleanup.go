@@ -33,7 +33,7 @@ const DefaultStalePendingClaimAge = quota.DefaultStalePendingClaimAge
 // were created by the admission plugin and are no longer useful:
 //
 //   - Denied claims (Granted=False, reason=QuotaExceeded) - kept for
-//     DeniedClaimRetention after the denial, then removed. A request still
+//     DeniedClaimRetention from the claim's creation, then removed. A request still
 //     waiting on the claim reads its denial if its watch answers 410 Gone;
 //     a retry of the same resource replaces the kept claim itself.
 //   - Stale pending claims (no final Granted condition, older than
@@ -50,8 +50,8 @@ type DeniedAutoClaimCleanupController struct {
 	// considered abandoned. Zero means use DefaultStalePendingClaimAge.
 	StalePendingClaimAge time.Duration
 
-	// DeniedClaimRetention is how long a denied claim is kept after its
-	// denial. Zero means use quota.DefaultDeniedClaimRetention.
+	// DeniedClaimRetention is how long a denied claim is kept, from its
+	// creation. Zero means use quota.DefaultDeniedClaimRetention.
 	DeniedClaimRetention time.Duration
 
 	logger logr.Logger
@@ -165,18 +165,17 @@ func deleteJudgedClaim(ctx context.Context, c client.Client, claim *quotav1alpha
 }
 
 // deniedRetentionLeft returns how much longer a denied claim is kept: the
-// retention window from the denial's lastTransitionTime (the claim's creation
-// when the condition carries none), less the time since.
+// retention window from the claim's creation, less the time since. It counts
+// from creation because the wait it serves does: the creating request waits
+// at most the claim wait timeout from the create. The Granted condition's
+// lastTransitionTime cannot tell the denial's time: the CRD defaults it to
+// 1970, and Pending to Denied keeps it, since the status stays False.
 func (r *DeniedAutoClaimCleanupController) deniedRetentionLeft(claim *quotav1alpha1.ResourceClaim) time.Duration {
 	retention := r.DeniedClaimRetention
 	if retention <= 0 {
 		retention = quota.DefaultDeniedClaimRetention
 	}
-	deniedAt := claim.CreationTimestamp.Time
-	if cond := apimeta.FindStatusCondition(claim.Status.Conditions, quotav1alpha1.ResourceClaimGranted); cond != nil && !cond.LastTransitionTime.IsZero() {
-		deniedAt = cond.LastTransitionTime.Time
-	}
-	return retention - r.now().Sub(deniedAt)
+	return retention - r.now().Sub(claim.CreationTimestamp.Time)
 }
 
 // stalePendingAge returns the configured stale-pending threshold, falling

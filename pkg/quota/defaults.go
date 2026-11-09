@@ -10,9 +10,10 @@ const DefaultStalePendingClaimAge = 5 * time.Minute
 // outcome of the ResourceClaim it creates.
 const DefaultClaimWaitTimeout = 30 * time.Second
 
-// DefaultDeniedClaimRetention is how long a denied auto-created claim is kept
-// after its denial before cleanup deletes it. It exceeds DefaultClaimWaitTimeout,
-// so a waiting request that must re-read its claim (after its watch answers
-// 410 Gone) still finds the denial and its reason. A retry of the same
-// resource inside this window replaces the kept claim instead of waiting for it.
+// DefaultDeniedClaimRetention is how long a denied auto-created claim is kept,
+// from its creation, before cleanup deletes it. It exceeds
+// DefaultClaimWaitTimeout, so a waiting request that must re-read its claim
+// (after its watch answers 410 Gone) still finds the denial and its reason.
+// A retry of the same resource inside this window replaces the kept claim
+// instead of waiting for it.
 const DefaultDeniedClaimRetention = 2 * DefaultClaimWaitTimeout
