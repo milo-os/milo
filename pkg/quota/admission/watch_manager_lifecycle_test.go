@@ -19,6 +19,8 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
+
+	"go.uber.org/goleak"
 )
 
 // watchedClient is a fake dynamic client whose ResourceClaim watches the test
@@ -175,6 +177,14 @@ func newWaiterOnPendingClaim(t *testing.T, w *watchManager, client *watchedClien
 }
 
 // newTestWatchManager starts a manager whose backoff starts at initialDelay.
+// noLeaks fails the test if it leaves a goroutine running: a manager that
+// stopped must leave no watch loop, re-read or start behind.
+func noLeaks(t *testing.T) {
+	t.Helper()
+	ignore := goleak.IgnoreCurrent()
+	t.Cleanup(func() { goleak.VerifyNone(t, ignore) })
+}
+
 func newTestWatchManager(t *testing.T, client *watchedClient, initialDelay time.Duration) *watchManager {
 	t.Helper()
 	w := NewWatchManager(client, logr.Discard(), "project").(*watchManager)
@@ -226,6 +236,7 @@ func newTestPlugin(client *watchedClient) *ResourceQuotaEnforcementPlugin {
 // manager that loses the race to the cache gets no waiter, so its TTL never
 // arms and its watch runs until the process ends.
 func TestConcurrentFirstCreatesShareOneWatchManager(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{openDelay: 20 * time.Millisecond})
 	p := newTestPlugin(client)
 
@@ -261,6 +272,7 @@ func TestConcurrentFirstCreatesShareOneWatchManager(t *testing.T) {
 // missed the cache, and reaches the shared start after an earlier start stored
 // its manager, takes that manager instead of starting another one.
 func TestSharedStartReturnsAManagerCachedMeanwhile(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	p := newTestPlugin(client)
 	cached := NewWatchManager(client, logr.Discard(), "")
@@ -279,6 +291,7 @@ func TestSharedStartReturnsAManagerCachedMeanwhile(t *testing.T) {
 // on still stops after its TTL. The TTL arms when the last waiter leaves; a
 // manager that never had one would otherwise watch forever.
 func TestWatchManagerWithoutWaiterExpires(t *testing.T) {
+	noLeaks(t)
 	w := NewWatchManager(newWatchedClient(watchScript{}), logr.Discard(), "project").(*watchManager)
 	w.config.TTL.DefaultTTL = 50 * time.Millisecond
 	expired := make(chan struct{})
@@ -300,6 +313,7 @@ func TestWatchManagerWithoutWaiterExpires(t *testing.T) {
 // manager. Stop closes every registered waiter, so a TTL that stopped the
 // manager under a new waiter would end that create with no outcome.
 func TestWaiterRegisteredAsTheTTLEndsIsNotClosed(t *testing.T) {
+	noLeaks(t)
 	for run := range 300 {
 		w := NewWatchManager(newWatchedClient(watchScript{}), logr.Discard(), "project").(*watchManager)
 		w.config.TTL.DefaultTTL = 2 * time.Millisecond
@@ -326,6 +340,7 @@ func TestWaiterRegisteredAsTheTTLEndsIsNotClosed(t *testing.T) {
 // manager's TTL ends between getting the manager and registering its waiter
 // is not failed: the refused waiter goes once to the manager that replaces it.
 func TestWaiterRefusedByAnExpiredManagerGoesToANewOne(t *testing.T) {
+	noLeaks(t)
 	p := newTestPlugin(newWatchedClient(watchScript{}))
 	expired, err := p.getWatchManager(context.Background())
 	if err != nil {
@@ -349,6 +364,7 @@ func TestWaiterRefusedByAnExpiredManagerGoesToANewOne(t *testing.T) {
 // request is cancelled stops waiting for its project's shared start. The start
 // goes on and caches its manager for the next create.
 func TestCancelledCreateStopsWaitingForTheStart(t *testing.T) {
+	noLeaks(t)
 	p := newTestPlugin(newWatchedClient(watchScript{openDelay: 500 * time.Millisecond}))
 	t.Cleanup(func() {
 		if m, err := p.getWatchManager(context.Background()); err == nil {
@@ -372,6 +388,7 @@ func TestCancelledCreateStopsWaitingForTheStart(t *testing.T) {
 // leaves no stream open. A manager that started while the create gave up on it
 // kept its watch, uncached, until its TTL.
 func TestStartAtItsTimeLimitLeavesNoRunningManager(t *testing.T) {
+	noLeaks(t)
 	for run := range 50 {
 		client := newWatchedClient(watchScript{openDelay: 10 * time.Millisecond})
 		p := newTestPlugin(client)
@@ -391,6 +408,7 @@ func TestStartAtItsTimeLimitLeavesNoRunningManager(t *testing.T) {
 // fails stops trying. The plugin does not cache it and its TTL is not armed,
 // so a loop left running would open a stream that nothing can stop.
 func TestFailedStartStopsItsWatchLoop(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{failFirst: 1})
 	w := NewWatchManager(client, logr.Discard(), "project").(*watchManager)
 	w.config.Retry.InitialDelay = 10 * time.Millisecond
@@ -409,6 +427,7 @@ func TestFailedStartStopsItsWatchLoop(t *testing.T) {
 // same project. A removed manager keeps its watch, and the next create starts
 // another beside it.
 func TestExpiredManagerKeepsANewerCachedManager(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	p := newTestPlugin(client)
 	older, err := p.getWatchManager(context.Background())
@@ -431,6 +450,7 @@ func TestExpiredManagerKeepsANewerCachedManager(t *testing.T) {
 // double at every close, and each reconnect would leave the project unwatched
 // for up to MaxDelay.
 func TestNormalCloseReconnectsAfterTheInitialDelay(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -457,6 +477,7 @@ func TestNormalCloseReconnectsAfterTheInitialDelay(t *testing.T) {
 // A normal close resets the backoff, so a second one waits the initial delay
 // again, where a second failure would wait twice as long.
 func TestIdleStreamEndedAfterASecondIsANormalClose(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 200*time.Millisecond)
 	defer w.Stop()
@@ -479,6 +500,7 @@ func TestIdleStreamEndedAfterASecondIsANormalClose(t *testing.T) {
 // stream counts as a normal close, so with no floor the manager would reopen
 // it in a tight loop.
 func TestServerEndingEachStreamAfterOneEventIsNotHotLooped(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{endAfterOne: func(int) bool { return true }})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -495,6 +517,7 @@ func TestServerEndingEachStreamAfterOneEventIsNotHotLooped(t *testing.T) {
 // delay. A 410 restarts the watch from now, and each start from now also
 // re-reads the waiting claims, so with no floor the loop would add reads too.
 func TestServerAnswering410IsNotHotLooped(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{goneAtOnce: func(int) bool { return true }})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -510,6 +533,7 @@ func TestServerAnswering410IsNotHotLooped(t *testing.T) {
 // event is retried with a growing delay, so a failing server is not hammered,
 // and is retried at all.
 func TestFailingStreamBacksOff(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{endAtOnce: func(int) bool { return true }})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -525,6 +549,7 @@ func TestFailingStreamBacksOff(t *testing.T) {
 // failing period resets the delay, so the next failure waits the initial delay
 // and not the delay the failing period reached.
 func TestHealthyCloseResetsTheBackoff(t *testing.T) {
+	noLeaks(t)
 	const healthy = 3 // streams 0-2 fail and grow the delay to 400 ms; stream 3 is healthy
 	client := newWatchedClient(watchScript{endAtOnce: func(i int) bool { return i != healthy }})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
@@ -544,6 +569,7 @@ func TestHealthyCloseResetsTheBackoff(t *testing.T) {
 // ends before its first event or bookmark leaves no resume point, so the next
 // one starts from now and carries no event from the gap.
 func TestReconnectFromNowRereadsWaitingClaims(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -566,6 +592,7 @@ func TestReconnectFromNowRereadsWaitingClaims(t *testing.T) {
 // to a stream from now: the resume point is too old (410 Gone), the manager
 // drops it, and a grant made before the new stream must still arrive.
 func TestReconnectAfter410RereadsWaitingClaims(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -587,6 +614,7 @@ func TestReconnectAfter410RereadsWaitingClaims(t *testing.T) {
 // TestResumedStreamReadsNoClaim checks that a stream which resumes from a
 // bookmark reads no waiting claim: it replays every event since the bookmark.
 func TestResumedStreamReadsNoClaim(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -615,6 +643,7 @@ func TestResumedStreamReadsNoClaim(t *testing.T) {
 // claim is by its cleanup. An unbound waiter's claim may not exist yet, and
 // that waiter waits for the stream.
 func TestRereadEndsABoundWaiterWhoseClaimIsGone(t *testing.T) {
+	noLeaks(t)
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
