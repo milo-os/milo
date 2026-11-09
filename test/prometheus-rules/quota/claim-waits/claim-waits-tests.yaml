@@ -1,0 +1,88 @@
+rule_files:
+  - ../../../../config/telemetry/alerts/quota/claim-waits.yaml
+
+evaluation_interval: 30s
+
+# MiloQuotaClaimWaitsHigh fires per API server pod that holds more than 100 open quota claim waits for 10 minutes.
+# MiloQuotaClaimWaitGetsAfterGone fires per pod whose claim waits made at least 5 reads after a 410 in 15 minutes,
+# and more than one for every 100 waits that started in that window.
+tests:
+  # 150 open waits on pod a, held: pending from 0m, firing from 10m. Pod b holds 50 and never fires.
+  - interval: 1m
+    input_series:
+      - series: 'milo_quota_admission_waiters_current{pod="a"}'
+        values: '150+0x20'
+      - series: 'milo_quota_admission_waiters_current{pod="b"}'
+        values: '50+0x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MiloQuotaClaimWaitsHigh
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: MiloQuotaClaimWaitsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: milo
+              team: platform
+              pod: a
+            exp_annotations:
+              summary: "Milo API server a has held more than 100 open quota claim waits for 10 minutes"
+              description: "A create of a quota-tracked resource waits up to 30 s for its claim to be judged, and a wait normally ends in about a second. This pod holds 150 open waits, so claims are judged slowly, or a caller creates in bulk faster than they are judged."
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"
+
+  # A burst of 500 for 5 minutes, then back to 5: shorter than the rule's 10 minutes, so nothing fires
+  - interval: 1m
+    input_series:
+      - series: 'milo_quota_admission_waiters_current{pod="a"}'
+        values: '500+0x5 5+0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MiloQuotaClaimWaitsHigh
+        exp_alerts: []
+
+  # One read after a 410 a minute against 60 waits a minute: 15 reads and 900 waits in 15 minutes, past both bounds
+  - interval: 1m
+    input_series:
+      - series: 'milo_quota_admission_claim_wait_gets_after_gone_total{pod="a"}'
+        values: '0+1x30'
+      - series: 'milo_quota_admission_waiter_registrations_total{pod="a"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MiloQuotaClaimWaitGetsAfterGone
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: milo
+              team: platform
+              pod: a
+            exp_annotations:
+              summary: "Quota claim waits on Milo API server a often meet 410 Gone"
+              description: "A claim wait watches from the version of its own create, so a 410 means the claim cache no longer holds that version, for example after the cache started again. This pod's waits read their claim after a 410 15 times in 15 minutes."
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"
+
+  # The same reads against 1,000 waits a minute: fewer than one in 100 waits, so 410s are still rare
+  - interval: 1m
+    input_series:
+      - series: 'milo_quota_admission_claim_wait_gets_after_gone_total{pod="a"}'
+        values: '0+1x30'
+      - series: 'milo_quota_admission_waiter_registrations_total{pod="a"}'
+        values: '0+1000x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MiloQuotaClaimWaitGetsAfterGone
+        exp_alerts: []
+
+  # Three reads in the window against 10 waits a minute: past one in 100, but under 5 reads, so one 410 does not page
+  # anyone's channel
+  - interval: 1m
+    input_series:
+      - series: 'milo_quota_admission_claim_wait_gets_after_gone_total{pod="a"}'
+        values: '0+0x10 3+0x20'
+      - series: 'milo_quota_admission_waiter_registrations_total{pod="a"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MiloQuotaClaimWaitGetsAfterGone
+        exp_alerts: []
