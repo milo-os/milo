@@ -512,103 +512,115 @@ func (w *watchManager) updateTTL() {
 	}
 }
 
-// watchLoop implements infinite retry with exponential backoff
+// watchLoop keeps a watch open until the manager stops: when a stream ends, it
+// waits the delay reconnectDelay chooses and opens the next. Only the first
+// attempt reports to watchStarted.
 func (w *watchManager) watchLoop(ctx context.Context, gvr schema.GroupVersionResource, watchStarted chan<- error) {
 	backoff := w.config.Retry.InitialDelay
-	firstAttempt := true
-
 	for {
-		select {
-		case <-ctx.Done():
-			w.logger.Info("Watch loop context cancelled", "project", w.projectID)
-			// Signal failure if we never started
-			if firstAttempt {
-				watchStarted <- fmt.Errorf("watch loop cancelled before starting")
-			}
+		if w.loopEnded(ctx, watchStarted) {
 			return
-		case <-w.stopCh:
-			w.logger.Info("Watch loop stopped", "project", w.projectID)
-			// Signal failure if we never started
-			if firstAttempt {
-				watchStarted <- fmt.Errorf("watch loop stopped before starting")
-			}
-			return
-		default:
 		}
-
-		// Attempt to establish/maintain watch stream
 		restartStart := time.Now()
-		var startedChan chan<- error
-		if firstAttempt {
-			startedChan = watchStarted
-		}
-		err := w.processWatchStream(ctx, gvr, startedChan)
-		restartDuration := time.Since(restartStart)
-
-		// Mark first attempt as complete
-		if firstAttempt {
-			firstAttempt = false
-		}
-
-		if err == nil {
-			// Clean shutdown or reconnection successful, reset backoff
-			backoff = w.config.Retry.InitialDelay
-			continue
-		}
-
-		// Error occurred - classify and retry
-
-		// Check if context was cancelled (clean shutdown)
-		if ctx.Err() != nil {
-			w.logger.Info("Watch loop stopping due to context cancellation",
-				"project", w.projectID,
-				"error", err)
+		err := w.processWatchStream(ctx, gvr, watchStarted)
+		watchStarted = nil
+		delay, retry := w.reconnectDelay(ctx, err, &backoff, time.Since(restartStart))
+		if !retry || !w.waitToReconnect(ctx, delay) {
 			return
 		}
+	}
+}
 
-		// 410 Gone - resourceVersion too old, restart from current time
-		if statusErr, ok := err.(*errors.StatusError); ok && statusErr.Status().Code == http.StatusGone {
-			w.logger.Info("ResourceVersion too old (410 Gone), restarting from current time",
-				"project", w.projectID)
+// loopEnded says whether the context ended or the manager stopped, and fails
+// a start that still waits for the first watch.
+func (w *watchManager) loopEnded(ctx context.Context, watchStarted chan<- error) bool {
+	var msg string
+	var startErr error
+	select {
+	case <-ctx.Done():
+		msg, startErr = "Watch loop context cancelled", fmt.Errorf("watch loop cancelled before starting")
+	case <-w.stopCh:
+		msg, startErr = "Watch loop stopped", fmt.Errorf("watch loop stopped before starting")
+	default:
+		return false
+	}
+	w.logger.Info(msg, "project", w.projectID)
+	if watchStarted != nil {
+		watchStarted <- startErr
+	}
+	return true
+}
 
-			w.bookmarkLock.Lock()
-			w.lastBookmark = ""
-			w.lastResourceVersion = ""
-			w.bookmarkLock.Unlock()
+// reconnectDelay returns how long to wait before the next stream, or false
+// when the loop must end. A normal close and a 410 wait the initial delay, so a
+// server that ends every stream at once, as an overloaded one shedding watches
+// does, is not called in a loop; a normal close also resets the backoff. A
+// failure waits the backoff, which then grows up to MaxDelay.
+func (w *watchManager) reconnectDelay(ctx context.Context, err error, backoff *time.Duration, restartDuration time.Duration) (time.Duration, bool) {
+	switch {
+	case err == nil:
+		*backoff = w.config.Retry.InitialDelay
+		return w.config.Retry.InitialDelay, true
+	case ctx.Err() != nil:
+		w.logger.Info("Watch loop stopping due to context cancellation",
+			"project", w.projectID,
+			"error", err)
+		return 0, false
+	case isGone(err):
+		w.restartFromNow()
+		return w.config.Retry.InitialDelay, true
+	}
+	w.recordFailure(err, restartDuration)
+	delay := *backoff
+	*backoff = min(time.Duration(float64(*backoff)*w.config.Retry.Multiplier), w.config.Retry.MaxDelay)
+	return delay, true
+}
 
-			watchRestarts.WithLabelValues("410").Inc()
-			continue
-		}
+// isGone says whether a watch ended because its resource version is too old.
+func isGone(err error) bool {
+	statusErr, ok := err.(*errors.StatusError)
+	return ok && statusErr.Status().Code == http.StatusGone
+}
 
-		jitteredBackoff := w.applyJitter(backoff)
+// restartFromNow drops the resume point after a 410, so the next stream starts
+// from the current time.
+func (w *watchManager) restartFromNow() {
+	w.logger.Info("ResourceVersion too old (410 Gone), restarting from current time",
+		"project", w.projectID)
 
-		// Extract status code for metrics
-		statusCode := "unknown"
-		if statusErr, ok := err.(*errors.StatusError); ok {
-			statusCode = fmt.Sprintf("%d", statusErr.Status().Code)
-		}
+	w.bookmarkLock.Lock()
+	w.lastBookmark = ""
+	w.lastResourceVersion = ""
+	w.bookmarkLock.Unlock()
 
-		w.logger.Info("Watch stream failed, retrying",
-			"error", err,
-			"project", w.projectID)
+	watchRestarts.WithLabelValues("410").Inc()
+}
 
-		watchRestarts.WithLabelValues(statusCode).Inc()
-		watchRestartDuration.Observe(restartDuration.Seconds())
+// recordFailure logs a failed stream and counts it by status code.
+func (w *watchManager) recordFailure(err error, restartDuration time.Duration) {
+	statusCode := "unknown"
+	if statusErr, ok := err.(*errors.StatusError); ok {
+		statusCode = fmt.Sprintf("%d", statusErr.Status().Code)
+	}
 
-		// Sleep with backoff
-		select {
-		case <-time.After(jitteredBackoff):
-		case <-ctx.Done():
-			return
-		case <-w.stopCh:
-			return
-		}
+	w.logger.Info("Watch stream failed, retrying",
+		"error", err,
+		"project", w.projectID)
 
-		// Increase backoff (capped at MaxDelay)
-		backoff = time.Duration(float64(backoff) * w.config.Retry.Multiplier)
-		if backoff > w.config.Retry.MaxDelay {
-			backoff = w.config.Retry.MaxDelay
-		}
+	watchRestarts.WithLabelValues(statusCode).Inc()
+	watchRestartDuration.Observe(restartDuration.Seconds())
+}
+
+// waitToReconnect waits the delay, with jitter, before the next watch. It
+// returns false when the context ends or the manager stops first.
+func (w *watchManager) waitToReconnect(ctx context.Context, delay time.Duration) bool {
+	select {
+	case <-time.After(w.applyJitter(delay)):
+		return true
+	case <-ctx.Done():
+		return false
+	case <-w.stopCh:
+		return false
 	}
 }
 
@@ -740,8 +752,9 @@ func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupV
 
 // consumeEvents handles a stream's events until the stream ends. It returns
 // nil for a stop, and for a healthy stream the server ends, as it does at its
-// watch timeout: the watch loop then reconnects at once from the resume point,
-// as client-go's reflector does. The backoff is for streams that fail.
+// watch timeout: the watch loop then reconnects from the resume point after
+// the initial delay, not the growing backoff. The backoff is for streams that
+// fail.
 func (w *watchManager) consumeEvents(ctx context.Context, stream watch.Interface, started time.Time) error {
 	events := 0
 	for {

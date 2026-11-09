@@ -38,9 +38,11 @@ type watchedClient struct {
 
 // watchScript says how the fake server answers the manager's watches.
 type watchScript struct {
-	openDelay time.Duration    // how long a watch takes to open, as on a busy API server
-	failFirst int              // how many first Watch calls return an error
-	endAtOnce func(i int) bool // whether stream i ends before its first event, as a failing server's does
+	openDelay   time.Duration    // how long a watch takes to open, as on a busy API server
+	failFirst   int              // how many first Watch calls return an error
+	endAtOnce   func(i int) bool // whether stream i ends before its first event, as a failing server's does
+	endAfterOne func(i int) bool // whether stream i carries one bookmark and ends, as an overloaded server's does
+	goneAtOnce  func(i int) bool // whether stream i reports 410 Gone at once, as a server past its resume point does
 }
 
 func newWatchedClient(script watchScript) *watchedClient {
@@ -60,6 +62,13 @@ func newWatchedClient(script watchScript) *watchedClient {
 		stream := watch.NewFakeWithChanSize(10, false)
 		if script.endAtOnce != nil && script.endAtOnce(len(c.streams)) {
 			stream.Stop()
+		}
+		if script.endAfterOne != nil && script.endAfterOne(len(c.streams)) {
+			stream.Action(watch.Bookmark, bookmark(fmt.Sprint(100+len(c.streams))))
+			stream.Stop()
+		}
+		if script.goneAtOnce != nil && script.goneAtOnce(len(c.streams)) {
+			stream.Error(&metav1.Status{Status: metav1.StatusFailure, Code: http.StatusGone, Reason: metav1.StatusReasonExpired})
 		}
 		c.streams = append(c.streams, stream)
 		c.from = append(c.from, action.(clienttesting.WatchActionImpl).WatchRestrictions.ResourceVersion)
@@ -312,11 +321,12 @@ func TestExpiredManagerKeepsANewerCachedManager(t *testing.T) {
 	}
 }
 
-// TestNormalCloseReconnectsAtOnce checks that a stream the server ends at its
-// watch timeout is reopened at once, from its last bookmark. Were a normal
-// close counted as a failure, the delay would double at every close, and each
-// reconnect would leave the project unwatched for up to MaxDelay.
-func TestNormalCloseReconnectsAtOnce(t *testing.T) {
+// TestNormalCloseReconnectsAfterTheInitialDelay checks that a stream the
+// server ends at its watch timeout is reopened after the initial delay, from
+// its last bookmark. Were a normal close counted as a failure, the delay would
+// double at every close, and each reconnect would leave the project unwatched
+// for up to MaxDelay.
+func TestNormalCloseReconnectsAfterTheInitialDelay(t *testing.T) {
 	client := newWatchedClient(watchScript{})
 	w := newTestWatchManager(t, client, 50*time.Millisecond)
 	defer w.Stop()
@@ -331,26 +341,64 @@ func TestNormalCloseReconnectsAtOnce(t *testing.T) {
 			t.Fatalf("watch %d started from %q, want the bookmark %d", i+1, from, 100+i)
 		}
 	}
-	// With the backoff applied, six closes cost at least 1.9 s (50 ms doubling, -25 % jitter).
-	if took := time.Since(began); took > 500*time.Millisecond {
-		t.Fatalf("%d normal closes took %v to reconnect, want no delay", closes, took)
+	// With the backoff applied, six closes cost at least 1.9 s (50 ms doubling, -25 % jitter); with no floor, none.
+	if took := time.Since(began); took > 500*time.Millisecond || took < closes*37*time.Millisecond {
+		t.Fatalf("%d normal closes took %v to reconnect, want the initial delay each", closes, took)
 	}
 }
 
-// TestIdleStreamEndedAfterASecondReconnectsAtOnce checks that a stream the
+// TestIdleStreamEndedAfterASecondIsANormalClose checks that a stream the
 // server ends with no event, after it lived for more than a second, counts as
 // a normal close: an idle project's stream carries no event for its whole life.
-func TestIdleStreamEndedAfterASecondReconnectsAtOnce(t *testing.T) {
+// A normal close resets the backoff, so a second one waits the initial delay
+// again, where a second failure would wait twice as long.
+func TestIdleStreamEndedAfterASecondIsANormalClose(t *testing.T) {
 	client := newWatchedClient(watchScript{})
-	w := newTestWatchManager(t, client, 500*time.Millisecond)
+	w := newTestWatchManager(t, client, 200*time.Millisecond)
 	defer w.Stop()
 
-	stream, _ := client.stream(t, 0)
-	time.Sleep(minHealthyStreamLifetime + 100*time.Millisecond)
-	stream.Stop()
-	// A backoff would wait 375 ms or more (500 ms, -25 % jitter).
-	if gap := client.gap(t, 0) - minHealthyStreamLifetime - 100*time.Millisecond; gap > 200*time.Millisecond {
-		t.Fatalf("an idle stream's normal close waited %v to reconnect, want no delay", gap)
+	const lived = minHealthyStreamLifetime + 100*time.Millisecond
+	for i := range 2 {
+		stream, _ := client.stream(t, i)
+		time.Sleep(lived)
+		stream.Stop()
+	}
+	// A second failure would wait 300 ms or more (400 ms, -25 % jitter); a normal close waits 150 to 250 ms.
+	if wait := client.gap(t, 1) - lived; wait > 280*time.Millisecond {
+		t.Fatalf("the second idle stream's normal close waited %v to reconnect, want the initial delay", wait)
+	}
+}
+
+// TestServerEndingEachStreamAfterOneEventIsNotHotLooped checks that a server
+// which ends every stream after one event, as an overloaded API server shedding
+// watches does, is reconnected to no faster than the initial delay. Each such
+// stream counts as a normal close, so with no floor the manager would reopen
+// it in a tight loop.
+func TestServerEndingEachStreamAfterOneEventIsNotHotLooped(t *testing.T) {
+	client := newWatchedClient(watchScript{endAfterOne: func(int) bool { return true }})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+
+	time.Sleep(400 * time.Millisecond)
+	// A floor of 50 ms (-25 % jitter) allows at most 11 opens in 400 ms; a hot loop opens hundreds.
+	if n := client.opens(); n < 3 || n > 11 {
+		t.Fatalf("%d watches opened in 400 ms against a server that ends each after one event, want 3 to 11", n)
+	}
+}
+
+// TestServerAnswering410IsNotHotLooped checks that a server which answers
+// every stream with 410 Gone is reconnected to no faster than the initial
+// delay. A 410 restarts the watch from now, and each start from now also
+// re-reads the waiting claims, so with no floor the loop would add reads too.
+func TestServerAnswering410IsNotHotLooped(t *testing.T) {
+	client := newWatchedClient(watchScript{goneAtOnce: func(int) bool { return true }})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+
+	time.Sleep(400 * time.Millisecond)
+	// A floor of 50 ms (-25 % jitter) allows at most 11 opens in 400 ms; a hot loop opens hundreds.
+	if n := client.opens(); n < 3 || n > 11 {
+		t.Fatalf("%d watches opened in 400 ms against a server that answers each with 410, want 3 to 11", n)
 	}
 }
 
