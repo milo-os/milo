@@ -35,12 +35,12 @@ const (
 
 	// claimFailureConflict indicates that another evaluation holds the
 	// claim's deterministic name: a pending claim younger than the abandonment
-	// window, a concurrent create, or a claim another retry replaced first.
-	// The caller should retry.
+	// window. The caller should retry.
 	claimFailureConflict
 
 	// claimFailureInternal covers template render failures, a claim deleted
-	// or a watch failed while the request waited, dynamic client errors, a
+	// or a watch failed while the request waited, a claim delete that failed
+	// for a reason other than a lost precondition, dynamic client errors, a
 	// caller's cancel, and anything else that is not attributable to quota
 	// capacity.
 	claimFailureInternal
@@ -51,6 +51,14 @@ const (
 	// request can't succeed until an operator corrects the policy, so it is kept
 	// distinct from transient internal errors (which advise "try again").
 	claimFailureMisconfigured
+
+	// claimFailureChanged indicates that the claim at the deterministic name
+	// changed between the plugin's read and its write: a delete lost its UID
+	// or resourceVersion precondition (409 Conflict), or a create found the
+	// name taken again (409 AlreadyExists). A concurrent request or the
+	// claim's controller made the change; no earlier attempt is being cleaned
+	// up. The caller should retry.
+	claimFailureChanged
 )
 
 // claimFailure is the structured error returned from the claim creation/wait
@@ -103,6 +111,12 @@ func newTimeoutFailure(cause error) *claimFailure {
 // evaluation holds.
 func newConflictFailure(message string, cause error) *claimFailure {
 	return &claimFailure{kind: claimFailureConflict, message: message, cause: cause}
+}
+
+// newChangedFailure constructs a claimFailure for a claim that changed
+// between the plugin's read and its write.
+func newChangedFailure(cause error) *claimFailure {
+	return &claimFailure{kind: claimFailureChanged, cause: cause}
 }
 
 // newInternalFailure constructs a claimFailure for infrastructure errors

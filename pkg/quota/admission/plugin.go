@@ -561,7 +561,7 @@ func admissionOutcomeFor(kind claimFailureKind) string {
 		return "denied"
 	case claimFailureTimeout:
 		return "timeout"
-	case claimFailureConflict:
+	case claimFailureConflict, claimFailureChanged:
 		return "conflict"
 	case claimFailureMisconfigured:
 		return "policy_misconfigured"
@@ -598,6 +598,9 @@ func userFacingClaimError(f *claimFailure) error {
 		}
 		//lint:ignore ST1005 user-facing message
 		return fmt.Errorf("We're still cleaning up from a previous attempt to create this resource. Please try again in a few seconds.")
+	case claimFailureChanged:
+		//lint:ignore ST1005 user-facing message
+		return fmt.Errorf("This resource's quota check changed while we were processing your request. Please try again.")
 	case claimFailureMisconfigured:
 		//lint:ignore ST1005 user-facing message
 		return fmt.Errorf("Quota enforcement for this resource type is misconfigured and can't be applied. This needs a fix from the service provider — please contact support.")
@@ -884,10 +887,10 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
 			// A concurrent admission pass (or our own Delete above racing
-			// with a replace) recreated the claim. Surface as conflict so
-			// the user retries.
+			// with a replace) recreated the claim after the read above: the
+			// claim changed, so the user retries.
 			claimResolutionTotal.WithLabelValues("create_conflict").Inc()
-			return claimRef{}, newConflictFailure("concurrent quota evaluation in progress", err)
+			return claimRef{}, newChangedFailure(err)
 		}
 		return claimRef{}, newInternalFailure(fmt.Errorf("failed to create ResourceClaim: %w", err))
 	}
@@ -1034,18 +1037,22 @@ func (p *ResourceQuotaEnforcementPlugin) handleExistingClaim(ctx context.Context
 
 // deleteExistingClaim deletes the claim a retry found, only if it is still
 // that claim: identity and version preconditions. A claim already gone is
-// fine. Any other failure, such as a concurrent retry that replaced the claim
-// first, is a conflict the user retries.
+// fine. A lost precondition (409 Conflict) means the claim changed after the
+// read, by a concurrent retry or the claim's controller, and the user
+// retries. Any other failure is internal.
 func (p *ResourceQuotaEnforcementPlugin) deleteExistingClaim(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, existing *unstructured.Unstructured, kind string) error {
 	name, namespace := existing.GetName(), existing.GetNamespace()
 	preconditions := metav1.Preconditions{UID: ptr.To(existing.GetUID()), ResourceVersion: ptr.To(existing.GetResourceVersion())}
 	err := client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &preconditions})
-	if err != nil && !errors.IsNotFound(err) {
-		p.logger.Info("Failed to delete "+kind+" ResourceClaim before retry", "claimName", name, "namespace", namespace, "error", err)
-		return newConflictFailure("unable to clean up "+kind+" claim", err)
+	if err == nil || errors.IsNotFound(err) {
+		p.logger.V(2).Info("Deleted "+kind+" ResourceClaim before retry", "claimName", name, "namespace", namespace)
+		return nil
 	}
-	p.logger.V(2).Info("Deleted "+kind+" ResourceClaim before retry", "claimName", name, "namespace", namespace)
-	return nil
+	p.logger.Info("Failed to delete "+kind+" ResourceClaim before retry", "claimName", name, "namespace", namespace, "error", err)
+	if errors.IsConflict(err) {
+		return newChangedFailure(err)
+	}
+	return newInternalFailure(fmt.Errorf("failed to delete %s ResourceClaim before retry: %w", kind, err))
 }
 
 // resourceClaimsGVR is the resource the plugin creates and waits on.

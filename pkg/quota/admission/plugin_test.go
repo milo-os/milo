@@ -1897,6 +1897,11 @@ func TestUserFacingClaimError(t *testing.T) {
 			contains: "still cleaning up from a previous attempt to create this resource (stale denied claim)",
 		},
 		{
+			name:     "changed",
+			failure:  newChangedFailure(errors.New("precondition failed")),
+			contains: "This resource's quota check changed while we were processing your request. Please try again.",
+		},
+		{
 			name:     "internal",
 			failure:  newInternalFailure(errors.New("boom")),
 			contains: "Something went wrong while checking your quota",
@@ -1909,6 +1914,25 @@ func TestUserFacingClaimError(t *testing.T) {
 				t.Errorf("message %q did not contain %q", msg, tt.contains)
 			}
 		})
+	}
+}
+
+// TestAdmissionOutcomeFor pins the metric label of each failure kind. A claim
+// that changed meanwhile counts as a conflict, as it did before it had its own
+// message, so queries on admission_result_total keep their meaning.
+func TestAdmissionOutcomeFor(t *testing.T) {
+	want := map[claimFailureKind]string{
+		claimFailureDenied:        "denied",
+		claimFailureTimeout:       "timeout",
+		claimFailureConflict:      "conflict",
+		claimFailureChanged:       "conflict",
+		claimFailureInternal:      "internal_error",
+		claimFailureMisconfigured: "policy_misconfigured",
+	}
+	for kind, label := range want {
+		if got := admissionOutcomeFor(kind); got != label {
+			t.Errorf("kind %d: label %q, want %q", kind, got, label)
+		}
 	}
 }
 
