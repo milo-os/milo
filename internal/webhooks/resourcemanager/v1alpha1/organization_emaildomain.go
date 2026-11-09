@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -18,8 +19,9 @@ import (
 
 // validateEmailDomainJoining checks spec.emailDomainJoining when it changes:
 // the feature gate must be on, each role must be one an invitation could
-// grant, and a verified Domain in one of the organization's projects must
-// cover each newly added domain. An unchanged setting is not re-checked, so a
+// grant, no newly added domain may be a public email provider such as
+// gmail.com, and a verified Domain in one of the organization's projects must
+// cover each other newly added domain. An unchanged setting is not re-checked, so a
 // Domain that later loses verification doesn't block unrelated updates; the
 // controller reports that through the EmailDomainsVerified condition instead.
 // oldOrg is nil on create.
@@ -65,11 +67,22 @@ func (v *OrganizationValidator) validateEmailDomainJoining(ctx context.Context, 
 		}
 	}
 
-	var added []string
+	var added, public []string
 	for _, domain := range joining.Domains {
-		if oldJoining == nil || !slices.Contains(oldJoining.Domains, domain) {
-			added = append(added, domain)
+		if oldJoining != nil && slices.Contains(oldJoining.Domains, domain) {
+			continue
 		}
+		if emaildomain.IsPublicProvider(domain) {
+			public = append(public, domain)
+			continue
+		}
+		added = append(added, domain)
+	}
+	if len(public) > 0 {
+		errs = append(errs, field.Invalid(fldPath.Child("domains"), public, fmt.Sprintf(
+			"%s is a public email provider, where anyone can get an address. "+
+				"Email domain joining works only for a domain your organization owns, such as your company's domain",
+			strings.Join(public, ", "))))
 	}
 	if len(added) == 0 {
 		return errs, nil

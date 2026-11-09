@@ -930,7 +930,9 @@ Requires the EmailDomainJoining feature gate.
           Domains are the email domains to offer membership to, such as
 "example.com". An address matches only its exact domain, so
 "example.com" does not match "eu.example.com". A Domain in one of the
-organization's projects must verify each domain or a parent of it.<br/>
+organization's projects must verify each domain or a parent of it.
+Public email providers where anyone can get an address, such as
+gmail.com, aren't allowed.<br/>
         </td>
         <td>true</td>
       </tr><tr>

@@ -131,6 +131,8 @@ spec:
                       "example.com". An address matches only its exact domain, so
                       "example.com" does not match "eu.example.com". A Domain in one of the
                       organization's projects must verify each domain or a parent of it.
+                      Public email providers where anyone can get an address, such as
+                      gmail.com, aren't allowed.
                     items:
                       maxLength: 63
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$

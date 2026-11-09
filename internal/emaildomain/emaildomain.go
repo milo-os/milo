@@ -55,9 +55,13 @@ func Of(email string) string {
 }
 
 // Covers reports whether one of the verified domain names is emailDomain or a
-// parent of it. A verified subdomain never covers its parent.
+// parent of it. A verified subdomain never covers its parent, and nothing
+// covers a public email provider such as gmail.com.
 func Covers(verified []string, emailDomain string) bool {
 	emailDomain = strings.ToLower(strings.TrimSuffix(emailDomain, "."))
+	if IsPublicProvider(emailDomain) {
+		return false
+	}
 	for _, v := range verified {
 		v = strings.ToLower(strings.TrimSuffix(v, "."))
 		if v == "" {

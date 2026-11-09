@@ -43,9 +43,29 @@ func TestCovers(t *testing.T) {
 		{[]string{"example.com"}, "badexample.com", false},
 		{[]string{"example.com"}, "example.co", false},
 		{nil, "example.com", false},
+		{[]string{"gmail.com"}, "gmail.com", false},
+		{[]string{"yahoo.co.uk"}, "mail.yahoo.co.uk", false},
 	} {
 		if got := Covers(tc.verified, tc.emailDomain); got != tc.want {
 			t.Errorf("Covers(%v, %q) = %v, want %v", tc.verified, tc.emailDomain, got, tc.want)
+		}
+	}
+}
+
+func TestIsPublicProvider(t *testing.T) {
+	for domain, want := range map[string]bool{
+		"gmail.com":         true,
+		"GMail.COM.":        true,
+		"eu.outlook.com":    true,
+		"yahoo.co.uk":       true,
+		"example.com":       false,
+		"gmail.example.com": false,
+		"notgmail.com":      false,
+		"co.uk":             false,
+		"":                  false,
+	} {
+		if got := IsPublicProvider(domain); got != want {
+			t.Errorf("IsPublicProvider(%q) = %v, want %v", domain, got, want)
 		}
 	}
 }
