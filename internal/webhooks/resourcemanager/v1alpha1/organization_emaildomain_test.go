@@ -93,6 +93,12 @@ func TestOrganizationValidator_validateEmailDomainJoining(t *testing.T) {
 			wantErrors: []string{"other.io", "DNS TXT record"},
 		},
 		{
+			name:       "public email provider is rejected",
+			gate:       true,
+			newOrg:     org(viewerRole, "example.com", "gmail.com"),
+			wantErrors: []string{"gmail.com is a public email provider"},
+		},
+		{
 			name:   "unchanged setting is not re-checked",
 			gate:   false,
 			oldOrg: org(viewerRole, "other.io"),
