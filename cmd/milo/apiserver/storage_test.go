@@ -2,11 +2,14 @@ package app
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apiserver/pkg/server/options"
+	"k8s.io/apiserver/pkg/storage/storagebackend"
 )
 
 func TestStorageOptionsAreCommandLocal(t *testing.T) {
@@ -53,16 +56,17 @@ func TestStorageOptionsValidation(t *testing.T) {
 }
 
 func TestStorageValidationPreservesUnrelatedErrors(t *testing.T) {
-	missingEtcd := errors.New("--etcd-servers must be specified")
+	missingEtcd := options.NewEtcdOptions(storagebackend.NewDefaultConfig("", nil)).Validate()
+	require.NotEmpty(t, missingEtcd)
 	other := errors.New("invalid serving configuration")
 	for _, engine := range []string{storageEngineEtcd, storageEngineCockroachDB} {
 		t.Run(engine, func(t *testing.T) {
 			o := newStorageOptions()
 			o.engine = engine
-			got := o.withoutEtcdServersError([]error{missingEtcd, other})
+			got := o.withoutEtcdServersError(append(slices.Clone(missingEtcd), other))
 			want := []error{other}
 			if engine == storageEngineEtcd {
-				want = []error{missingEtcd, other}
+				want = append(slices.Clone(missingEtcd), other)
 			}
 			require.Equal(t, want, got)
 		})
