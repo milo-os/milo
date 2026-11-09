@@ -21,6 +21,8 @@ import (
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
 
 	"go.uber.org/goleak"
+	"k8s.io/component-base/metrics"
+	"k8s.io/component-base/metrics/testutil"
 )
 
 // watchedClient is a fake dynamic client whose ResourceClaim watches the test
@@ -177,6 +179,33 @@ func newWaiterOnPendingClaim(t *testing.T, w *watchManager, client *watchedClien
 }
 
 // newTestWatchManager starts a manager whose backoff starts at initialDelay.
+func counterValue(t *testing.T, m metrics.CounterMetric) float64 {
+	t.Helper()
+	v, err := testutil.GetCounterMetricValue(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func gaugeValue(t *testing.T, m metrics.GaugeMetric) float64 {
+	t.Helper()
+	v, err := testutil.GetGaugeMetricValue(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func histogramCount(t *testing.T, m metrics.ObserverMetric) uint64 {
+	t.Helper()
+	n, err := testutil.GetHistogramMetricCount(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // noLeaks fails the test if it leaves a goroutine running: a manager that
 // stopped must leave no watch loop, re-read or start behind.
 func noLeaks(t *testing.T) {
@@ -526,6 +555,44 @@ func TestServerAnswering410IsNotHotLooped(t *testing.T) {
 	// A floor of 50 ms (-25 % jitter) allows at most 11 opens in 400 ms; a hot loop opens hundreds.
 	if n := client.opens(); n < 3 || n > 11 {
 		t.Fatalf("%d watches opened in 400 ms against a server that answers each with 410, want 3 to 11", n)
+	}
+}
+
+// TestNormalCloseCountsAsClosed checks that a stream the server ends at its
+// watch timeout counts once as "closed" in the restart and the lifetime
+// metrics, apart from the failures an alert on them should see.
+func TestNormalCloseCountsAsClosed(t *testing.T) {
+	noLeaks(t)
+	restarts := counterValue(t, watchRestarts.WithLabelValues("closed"))
+	lifetimes := histogramCount(t, watchStreamLifetimeSeconds.WithLabelValues("closed"))
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+
+	stream, _ := client.stream(t, 0)
+	stream.Action(watch.Bookmark, bookmark("100"))
+	stream.Stop()
+	client.stream(t, 1)
+	if got := counterValue(t, watchRestarts.WithLabelValues("closed")) - restarts; got != 1 {
+		t.Fatalf("a normal close added %v to the closed restarts, want 1", got)
+	}
+	if got := histogramCount(t, watchStreamLifetimeSeconds.WithLabelValues("closed")) - lifetimes; got != 1 {
+		t.Fatalf("a normal close added %d closed stream lifetimes, want 1", got)
+	}
+}
+
+// TestFailedStartLeavesNoActiveManager checks that a start whose first watch
+// fails takes its manager out of the active-manager gauge, which a watch page
+// plots as live managers.
+func TestFailedStartLeavesNoActiveManager(t *testing.T) {
+	noLeaks(t)
+	before := gaugeValue(t, watchManagersActive)
+	w := NewWatchManager(newWatchedClient(watchScript{failFirst: 1}), logr.Discard(), "project").(*watchManager)
+	if err := w.Start(context.Background()); err == nil {
+		t.Fatal("the start succeeded although its first watch failed")
+	}
+	if got := gaugeValue(t, watchManagersActive); got != before {
+		t.Fatalf("a failed start left the active managers at %v, want %v", got, before)
 	}
 }
 
