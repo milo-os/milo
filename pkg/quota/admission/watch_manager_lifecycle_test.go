@@ -3,11 +3,13 @@ package admission
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic/fake"
@@ -88,6 +90,15 @@ func (c *watchedClient) stream(t *testing.T, i int) (*watch.FakeWatcher, string)
 	}
 }
 
+// gap returns the time from watch i's opening to watch i+1's.
+func (c *watchedClient) gap(t *testing.T, i int) time.Duration {
+	t.Helper()
+	c.stream(t, i+1)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.openedAt[i+1].Sub(c.openedAt[i])
+}
+
 func (c *watchedClient) opens() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -98,6 +109,26 @@ func (c *watchedClient) watchAttempts() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.attempts
+}
+
+// newTestWatchManager starts a manager whose backoff starts at initialDelay.
+func newTestWatchManager(t *testing.T, client *watchedClient, initialDelay time.Duration) *watchManager {
+	t.Helper()
+	w := NewWatchManager(client, logr.Discard(), "project").(*watchManager)
+	w.config.Retry.InitialDelay = initialDelay
+	w.config.Retry.MaxDelay = time.Second
+	if err := w.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func bookmark(resourceVersion string) *unstructured.Unstructured {
+	b := &unstructured.Unstructured{}
+	b.SetAPIVersion("quota.miloapis.com/v1alpha1")
+	b.SetKind("ResourceClaim")
+	b.SetResourceVersion(resourceVersion)
+	return b
 }
 
 func newTestPlugin(client *watchedClient) *ResourceQuotaEnforcementPlugin {
@@ -213,5 +244,80 @@ func TestExpiredManagerKeepsANewerCachedManager(t *testing.T) {
 	older.(*watchManager).onTTLExpired()
 	if cached, ok := p.watchManagers.Load(""); !ok || cached != newer {
 		t.Fatal("an older manager's TTL removed the newer manager from the cache")
+	}
+}
+
+// TestNormalCloseReconnectsAtOnce checks that a stream the server ends at its
+// watch timeout is reopened at once, from its last bookmark. Were a normal
+// close counted as a failure, the delay would double at every close, and each
+// reconnect would leave the project unwatched for up to MaxDelay.
+func TestNormalCloseReconnectsAtOnce(t *testing.T) {
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+
+	const closes = 6
+	began := time.Now()
+	for i := range closes {
+		stream, _ := client.stream(t, i)
+		stream.Action(watch.Bookmark, bookmark(fmt.Sprint(100+i)))
+		stream.Stop()
+		if _, from := client.stream(t, i+1); from != fmt.Sprint(100+i) {
+			t.Fatalf("watch %d started from %q, want the bookmark %d", i+1, from, 100+i)
+		}
+	}
+	// With the backoff applied, six closes cost at least 1.9 s (50 ms doubling, -25 % jitter).
+	if took := time.Since(began); took > 500*time.Millisecond {
+		t.Fatalf("%d normal closes took %v to reconnect, want no delay", closes, took)
+	}
+}
+
+// TestIdleStreamEndedAfterASecondReconnectsAtOnce checks that a stream the
+// server ends with no event, after it lived for more than a second, counts as
+// a normal close: an idle project's stream carries no event for its whole life.
+func TestIdleStreamEndedAfterASecondReconnectsAtOnce(t *testing.T) {
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 500*time.Millisecond)
+	defer w.Stop()
+
+	stream, _ := client.stream(t, 0)
+	time.Sleep(minHealthyStreamLifetime + 100*time.Millisecond)
+	stream.Stop()
+	// A backoff would wait 375 ms or more (500 ms, -25 % jitter).
+	if gap := client.gap(t, 0) - minHealthyStreamLifetime - 100*time.Millisecond; gap > 200*time.Millisecond {
+		t.Fatalf("an idle stream's normal close waited %v to reconnect, want no delay", gap)
+	}
+}
+
+// TestFailingStreamBacksOff checks that a stream which ends before its first
+// event is retried with a growing delay, so a failing server is not hammered,
+// and is retried at all.
+func TestFailingStreamBacksOff(t *testing.T) {
+	client := newWatchedClient(watchScript{endAtOnce: func(int) bool { return true }})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+
+	time.Sleep(400 * time.Millisecond)
+	// Delays of 50, 100, 200 ms (±25 %) leave room for two to five opens.
+	if n := client.opens(); n < 2 || n > 5 {
+		t.Fatalf("%d watches opened in 400 ms against a failing server, want 2 to 5", n)
+	}
+}
+
+// TestHealthyCloseResetsTheBackoff checks that a healthy stream after a
+// failing period resets the delay, so the next failure waits the initial delay
+// and not the delay the failing period reached.
+func TestHealthyCloseResetsTheBackoff(t *testing.T) {
+	const healthy = 3 // streams 0-2 fail and grow the delay to 400 ms; stream 3 is healthy
+	client := newWatchedClient(watchScript{endAtOnce: func(i int) bool { return i != healthy }})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+
+	stream, _ := client.stream(t, healthy)
+	stream.Action(watch.Bookmark, bookmark("100"))
+	stream.Stop()
+	// Stream 4 fails at once. Without the reset it waits 300 ms or more (400 ms, -25 % jitter).
+	if gap := client.gap(t, healthy+1); gap > 200*time.Millisecond {
+		t.Fatalf("the first failure after a healthy stream waited %v, want the initial delay", gap)
 	}
 }

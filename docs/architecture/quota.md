@@ -630,7 +630,7 @@ The quota system exposes application-level Prometheus metrics that provide visib
 - `milo_quota_admission_watch_streams_connected`: Currently connected watch streams
   - Use case: Monitor watch stream health (should equal desired)
 - `milo_quota_admission_watch_restarts_total`: Watch stream restarts
-  - Labels: `status_code` (e.g., "410", "500", "unknown")
+  - Labels: `status_code` (e.g., "410", "500", "unknown"; "closed" for a stream the server ended normally, as it does at its watch timeout)
   - Use case: Detect API server instability or resourceVersion expiration (410 Gone)
 - `milo_quota_admission_watch_restart_duration_seconds`: Time to restart watch streams (histogram)
   - Buckets: [0.001, 0.01, 0.1, 0.5, 1, 2, 5, 10, 30, 60]
@@ -638,7 +638,7 @@ The quota system exposes application-level Prometheus metrics that provide visib
 
 *Watch Stream Performance*:
 - `milo_quota_admission_watch_stream_lifetime_seconds`: Stream lifetime from connection to disconnect (histogram)
-  - Labels: `reason` (error|shutdown)
+  - Labels: `reason` (error|shutdown|closed)
   - Buckets: [1, 10, 30, 60, 300, 600, 1800, 3600, 7200, 14400, 28800, 86400]
   - Use case: Calculate MTBF and detect flapping
 - `milo_quota_admission_watch_stream_max_uptime_seconds`: Maximum uptime across all streams (gauge)
@@ -713,8 +713,8 @@ queries for common operational scenarios.
 # Watch stream connectivity (should be ~1.0)
 milo_quota_admission_watch_streams_connected / milo_quota_admission_watch_streams_desired
 
-# High watch restart rate indicating instability
-rate(milo_quota_admission_watch_restarts_total[5m]) > 0.1
+# High watch restart rate indicating instability (a normal close is not one)
+rate(milo_quota_admission_watch_restarts_total{status_code!="closed"}[5m]) > 0.1
 
 # 410 Gone errors indicating resourceVersion expiration
 rate(milo_quota_admission_watch_restarts_total{status_code="410"}[5m])

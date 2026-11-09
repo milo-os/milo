@@ -60,7 +60,7 @@ var (
 		&metrics.CounterOpts{
 			Subsystem:      "milo_quota_admission",
 			Name:           "watch_restarts_total",
-			Help:           "Total number of watch stream restarts, labeled by HTTP status code (or 'unknown' for non-HTTP errors).",
+			Help:           "Total number of watch stream restarts, labeled by HTTP status code ('unknown' for non-HTTP errors, 'closed' for a stream the server ended normally).",
 			StabilityLevel: metrics.ALPHA,
 		},
 		[]string{"status_code"},

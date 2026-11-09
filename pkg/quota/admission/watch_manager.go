@@ -30,6 +30,11 @@ import (
 // time out, and a client retries a timeout.
 const maxHeldOutcomes = 4
 
+// minHealthyStreamLifetime is how long a stream with no event must live for
+// its end to count as a normal close; client-go's reflector uses the same
+// second to tell a failing watch from one the server ended.
+const minHealthyStreamLifetime = time.Second
+
 // claimWaiter represents a waiter for a specific ResourceClaim. It implements
 // ClaimWaiter for the request that registered it.
 type claimWaiter struct {
@@ -610,7 +615,7 @@ func (w *watchManager) watchLoop(ctx context.Context, gvr schema.GroupVersionRes
 // processWatchStream establishes and processes a single watch stream.
 // The optional watchStarted channel is used to signal successful watch establishment
 // on the first attempt. It's signaled with nil on success or an error on failure.
-func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupVersionResource, watchStarted chan<- error) error {
+func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupVersionResource, watchStarted chan<- error) (err error) {
 	// Determine resumption point
 	w.bookmarkLock.RLock()
 	lastBookmark := w.lastBookmark
@@ -674,8 +679,11 @@ func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupV
 
 		// Determine disconnect reason (will be set by caller context)
 		reason := "error"
-		if ctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
 			reason = "shutdown"
+		case err == nil:
+			reason = "closed"
 		}
 
 		watchStreamLifetimeSeconds.WithLabelValues(reason).Observe(lifetime.Seconds())
@@ -725,14 +733,22 @@ func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupV
 		"resourceVersion", watchOpts.ResourceVersion,
 		"project", w.projectID)
 
-	// Process events
+	return w.consumeEvents(ctx, watchInterface, streamStartTime)
+}
+
+// consumeEvents handles a stream's events until the stream ends. It returns
+// nil for a stop, and for a healthy stream the server ends, as it does at its
+// watch timeout: the watch loop then reconnects at once from the resume point,
+// as client-go's reflector does. The backoff is for streams that fail.
+func (w *watchManager) consumeEvents(ctx context.Context, stream watch.Interface, started time.Time) error {
+	events := 0
 	for {
 		select {
-		case event, ok := <-watchInterface.ResultChan():
+		case event, ok := <-stream.ResultChan():
 			if !ok {
-				w.logger.V(3).Info("Watch channel closed", "project", w.projectID)
-				return fmt.Errorf("watch channel closed")
+				return w.streamEnded(events, time.Since(started))
 			}
+			events++
 
 			if err := w.handleWatchEvent(event); err != nil {
 				return err
@@ -747,6 +763,17 @@ func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupV
 			return nil
 		}
 	}
+}
+
+// streamEnded judges a stream the server closed. One that ends at once with no
+// event failed, as in client-go's reflector, and is retried with a backoff.
+func (w *watchManager) streamEnded(events int, lifetime time.Duration) error {
+	w.logger.V(3).Info("Watch channel closed", "project", w.projectID)
+	if events == 0 && lifetime < minHealthyStreamLifetime {
+		return fmt.Errorf("watch channel closed after %v with no event", lifetime)
+	}
+	watchRestarts.WithLabelValues("closed").Inc()
+	return nil
 }
 
 // handleWatchEvent processes a single watch event
