@@ -59,7 +59,7 @@ func TestRetryIsNotAdmittedByItsStaleClaimsGrant(t *testing.T) {
 }
 
 // retryOverStaleClaim admits a create whose claim name holds a stale pending
-// claim, with the real watch manager on the fake client's watch. The fresh
+// claim, reading the claim until its outcome on the fake client. The fresh
 // claim is granted or denied when it is added, as the quota controller would.
 // With staleGrantedLate, the stale claim is granted inside the inline delete,
 // just before it goes.

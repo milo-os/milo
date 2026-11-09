@@ -34,6 +34,7 @@ type claimServer struct {
 	oldest  int  // the oldest version the watch window still serves
 	forbid  bool // every watch is refused with 403
 	gets    atomic.Int32
+	fields  []string // the field selector of each watch
 }
 
 const ourUID = types.UID("ours")
@@ -63,7 +64,9 @@ func (s *claimServer) watch(a clienttesting.Action) (bool, watch.Interface, erro
 	if s.forbid {
 		return true, nil, apierrors.NewForbidden(resourceClaimsGVR.GroupResource(), "", nil)
 	}
-	from, _ := strconv.Atoi(a.(clienttesting.WatchAction).GetWatchRestrictions().ResourceVersion)
+	restrictions := a.(clienttesting.WatchAction).GetWatchRestrictions()
+	s.fields = append(s.fields, restrictions.Fields.String())
+	from, _ := strconv.Atoi(restrictions.ResourceVersion)
 	w := watch.NewFakeWithChanSize(len(s.history)+1, false)
 	if from < s.oldest-1 {
 		w.Error(&apierrors.NewResourceExpired("too old resource version").ErrStatus)
@@ -156,18 +159,41 @@ func TestWaitWhoseClaimARetryReplacedEndsAsDeleted(t *testing.T) {
 		{12, watch.Deleted, nil},
 		{13, watch.Added, claimAt("retry", 13, "")},
 	}
-	for name, oldest := range map[string]int{"the watch sees the delete": 1, "the GET after a 410 finds the retry's claim": 20} {
-		t.Run(name, func(t *testing.T) {
-			// The watch sees the denial first only when it starts in time; the
-			// GET sees the retry's claim. Neither waits to the timeout.
-			got := (&claimServer{oldest: oldest, history: history}).wait(t)
-			if got.Reason == waitTimedOut {
-				t.Fatalf("the wait hung to its timeout: %+v", got)
-			}
-			if oldest > 1 && got.Reason != waitDeleted {
-				t.Fatalf("want deleted, got %+v", got)
-			}
-		})
+	// A watch that starts in time sees the denial before the delete, so the
+	// original create gets its denial.
+	if got := (&claimServer{oldest: 1, history: history}).wait(t); got.Granted || got.Error != nil {
+		t.Fatalf("the watch: want the denial, got %+v", got)
+	}
+	// After a 410 the GET finds the retry's claim: the wait ends as deleted.
+	if got := (&claimServer{oldest: 20, history: history}).wait(t); got.Reason != waitDeleted {
+		t.Fatalf("the GET after a 410: want deleted, got %+v", got)
+	}
+}
+
+// A pending claim that is deleted ends the wait at once, as "deleted".
+func TestPendingClaimDeletedEndsTheWaitAsDeleted(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := &claimServer{oldest: 1, history: []claimEvent{
+		{10, watch.Added, claimAt(ourUID, 10, "")},
+		{11, watch.Deleted, nil},
+	}}
+	start := time.Now()
+	if got := s.wait(t); got.Reason != waitDeleted || time.Since(start) > time.Second {
+		t.Fatalf("want a prompt deleted, got %+v after %v", got, time.Since(start))
+	}
+}
+
+// The wait's watch is narrowed to its claim's name: the watch cache then
+// serves it from that one key, which is what makes a watch per create cheap.
+func TestWaitWatchesOnlyItsClaimsName(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := &claimServer{oldest: 1, history: []claimEvent{
+		{10, watch.Added, claimAt(ourUID, 10, "")},
+		{11, watch.Modified, claimAt(ourUID, 11, "True")},
+	}}
+	s.wait(t)
+	if len(s.fields) == 0 || s.fields[0] != "metadata.name=c" {
+		t.Fatalf("want every watch narrowed to metadata.name=c, got %q", s.fields)
 	}
 }
 

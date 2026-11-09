@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,8 +58,9 @@ func TestCancelledRequestEndsItsWait(t *testing.T) {
 		namespace: "default",
 		userInfo:  &user.DefaultInfo{Name: "system:control@networking.datumapis.com"},
 	}
-	if err := plugin.Validate(ctx, attrs, nil); err == nil {
-		t.Fatal("a request whose context ended was admitted")
+	err = plugin.Validate(ctx, attrs, nil)
+	if err == nil || !strings.Contains(err.Error(), "Something went wrong while checking your quota") {
+		t.Fatalf("a caller's cancel must answer the internal failure, not the timeout or an admit; got %v", err)
 	}
 	if late := time.Since(cancelled); late > time.Second {
 		t.Fatalf("the request returned %v after its cancel; its wait must end with it", late)

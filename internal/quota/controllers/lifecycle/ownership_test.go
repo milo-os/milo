@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
@@ -421,5 +422,38 @@ func TestResourceClaimOwnershipController_BackoffPerCluster(t *testing.T) {
 	want := []time.Duration{ownerReadFirstWait, 2 * ownerReadFirstWait, ownerReadFirstWait}
 	if got := append(waitsA, resB.RequeueAfter); !slices.Equal(got, want) {
 		t.Errorf("waits a, a, b = %v; want %v", got, want)
+	}
+}
+
+// TestOrphanDeleteLeavesAReplacementClaim checks that the orphan delete, acting
+// on a claim read from a cache behind the store, does not delete a newer claim
+// of the same name: a retry's fresh claim belongs to a waiting request.
+func TestOrphanDeleteLeavesAReplacementClaim(t *testing.T) {
+	judged := widgetClaim("claim", time.Now().Add(-2*time.Minute))
+	judged.ResourceVersion = "1"
+	replacement := widgetClaim("claim", time.Now())
+	replacement.UID = "replacement"
+	f := newOwnerFixture(t, func() bool { return false }, replacement)
+	store := f.cli
+	stale := interceptor.NewClient(store.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if claim, ok := obj.(*quotav1alpha1.ResourceClaim); ok {
+				judged.DeepCopyInto(claim)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	f.r.Manager = &testManager{cluster: &testCluster{client: stale}}
+
+	if _, err := f.r.Reconcile(context.Background(), claimRequest("claim")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got quotav1alpha1.ResourceClaim
+	if err := store.Get(context.Background(), client.ObjectKey{Name: "claim", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("the replacement claim was deleted: %v", err)
+	}
+	if got.UID != "replacement" {
+		t.Fatalf("want the replacement claim, got UID %q", got.UID)
 	}
 }

@@ -143,6 +143,17 @@ func TestDeniedAutoClaimCleanupController(t *testing.T) {
 			wantDeleted: true,
 		},
 		{
+			// Retention counts from the denial, not from the claim's creation.
+			name: "a claim created long ago but denied recently is kept and requeued",
+			claim: func() *quotav1alpha1.ResourceClaim {
+				c := autoClaim("denied-late", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-10*time.Minute))
+				c.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-10 * time.Second))
+				return c
+			}(),
+			wantDeleted: false,
+			wantRequeue: true,
+		},
+		{
 			// A request still waiting on this claim reads its denial after a 410.
 			name:        "denied auto-created claim inside its retention is kept and requeued",
 			claim:       autoClaim("denied-recent", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-10*time.Second)),

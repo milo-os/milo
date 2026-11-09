@@ -91,9 +91,10 @@ func (w claimWait) watchFrom(ctx context.Context, rv string) (*ClaimResult, bool
 			gone = apierrors.IsGone(err) || apierrors.IsResourceExpired(err)
 			return true, err
 		}
+		// Every event here is our claim's: the watch starts at our create, the
+		// name was free before it, and our claim's delete ends the wait.
 		claim, ok := ev.Object.(*unstructured.Unstructured)
-		if !ok || claim.GetUID() != w.ref.UID {
-			// An earlier claim of the same name: its events may still arrive.
+		if !ok {
 			return false, nil
 		}
 		out = w.outcome(ev.Type, claim)
