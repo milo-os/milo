@@ -108,8 +108,11 @@ type ResourceQuotaEnforcementPlugin struct {
 
 	watchManagers      sync.Map           // map[string]ClaimWatchManager (projectID -> watch manager, "" = root)
 	watchManagerStarts singleflight.Group // one start per projectID at a time
-	config             *AdmissionPluginConfig
-	logger             logr.Logger
+	// watchManagerStartupTimeout bounds a manager's start apart from any one
+	// request's deadline; zero means defaultWatchManagerStartupTimeout.
+	watchManagerStartupTimeout time.Duration
+	config                     *AdmissionPluginConfig
+	logger                     logr.Logger
 
 	// objectConvertor converts structured native (internal) types to their
 	// external versioned representation before evaluating policy constraints.
@@ -303,6 +306,17 @@ func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (C
 	}
 }
 
+// defaultWatchManagerStartupTimeout bounds a watch manager's start.
+const defaultWatchManagerStartupTimeout = 30 * time.Second
+
+// startupTimeout returns the limit on a watch manager's start.
+func (p *ResourceQuotaEnforcementPlugin) startupTimeout() time.Duration {
+	if p.watchManagerStartupTimeout > 0 {
+		return p.watchManagerStartupTimeout
+	}
+	return defaultWatchManagerStartupTimeout
+}
+
 // registerWaiter registers the claim's waiter on the project's watch manager.
 // A manager whose TTL ended after the request got it refuses the waiter and has
 // left the cache, so the waiter goes once to the manager that replaces it.
@@ -356,23 +370,13 @@ func (p *ResourceQuotaEnforcementPlugin) startWatchManager(projectID string) (Cl
 		})
 	}
 
-	// Dedicated timeout prevents admission request timeout from affecting watch manager startup
-	startupTimeout := 30 * time.Second
-	startupCtx, startupCancel := context.WithTimeout(context.Background(), startupTimeout)
+	// A dedicated limit keeps one request's deadline from failing a start that
+	// other creates share. Start honours it: when the limit ends first, Start
+	// stops its loop and returns an error, so its answer alone decides.
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), p.startupTimeout())
 	defer startupCancel()
-
-	startChan := make(chan error, 1)
-	go func() {
-		startChan <- wm.Start(startupCtx)
-	}()
-
-	select {
-	case err := <-startChan:
-		if err != nil {
-			return nil, fmt.Errorf("failed to start watch manager: %w", err)
-		}
-	case <-startupCtx.Done():
-		return nil, fmt.Errorf("watch manager startup timed out after %v: %w", startupTimeout, startupCtx.Err())
+	if err := wm.Start(startupCtx); err != nil {
+		return nil, fmt.Errorf("failed to start watch manager: %w", err)
 	}
 
 	p.watchManagers.Store(projectID, wm)

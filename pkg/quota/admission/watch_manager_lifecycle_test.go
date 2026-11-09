@@ -111,6 +111,18 @@ func (c *watchedClient) gap(t *testing.T, i int) time.Duration {
 	return c.openedAt[i+1].Sub(c.openedAt[i])
 }
 
+func (c *watchedClient) openStreams() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	open := 0
+	for _, stream := range c.streams {
+		if !stream.IsStopped() {
+			open++
+		}
+	}
+	return open
+}
+
 func (c *watchedClient) opens() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -352,6 +364,26 @@ func TestCancelledCreateStopsWaitingForTheStart(t *testing.T) {
 	}
 	if waited := time.Since(began); waited > 250*time.Millisecond {
 		t.Fatalf("a create cancelled after 50 ms waited %v for the shared start", waited)
+	}
+}
+
+// TestStartAtItsTimeLimitLeavesNoRunningManager checks that a start which
+// ends as its time limit ends either gives the create a cached manager or
+// leaves no stream open. A manager that started while the create gave up on it
+// kept its watch, uncached, until its TTL.
+func TestStartAtItsTimeLimitLeavesNoRunningManager(t *testing.T) {
+	for run := range 50 {
+		client := newWatchedClient(watchScript{openDelay: 10 * time.Millisecond})
+		p := newTestPlugin(client)
+		p.watchManagerStartupTimeout = 10 * time.Millisecond
+		if m, err := p.getWatchManager(context.Background()); err == nil {
+			m.(*watchManager).Stop()
+			continue
+		}
+		time.Sleep(50 * time.Millisecond)
+		if open := client.openStreams(); open > 0 {
+			t.Fatalf("run %d: the start failed and left %d stream(s) open", run, open)
+		}
 	}
 }
 
