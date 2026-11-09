@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/initializer"
 	"k8s.io/apiserver/pkg/audit"
@@ -104,9 +103,12 @@ type ResourceQuotaEnforcementPlugin struct {
 	// being marked ready until the resource type's cache has been synced.
 	resourceTypeValidator validation.ResourceTypeValidator
 
-	watchManagers sync.Map // map[string]ClaimWatchManager (projectID -> watch manager, "" = root)
-	config        *AdmissionPluginConfig
-	logger        logr.Logger
+	config *AdmissionPluginConfig
+	logger logr.Logger
+
+	// awaitClaim waits for a created claim's outcome. Nil means waitForClaim;
+	// tests replace it to decide outcomes without a watch.
+	awaitClaim func(ctx context.Context, claims dynamic.ResourceInterface, ref claimRef) ClaimResult
 
 	// objectConvertor converts structured native (internal) types to their
 	// external versioned representation before evaluating policy constraints.
@@ -273,69 +275,6 @@ func (p *ResourceQuotaEnforcementPlugin) getProjectClient(projectID string) (dyn
 	actual, _ := p.projectClients.LoadOrStore(projectID, client)
 	p.logger.V(3).Info("Created project-specific dynamic client", "project", projectID, "path", projectPath)
 	return actual.(dynamic.Interface), nil
-}
-
-// getWatchManager returns a project-scoped watch manager, blocking until ready.
-func (p *ResourceQuotaEnforcementPlugin) getWatchManager(ctx context.Context) (ClaimWatchManager, error) {
-	projectID, _ := milorequest.ProjectID(ctx)
-
-	if cached, ok := p.watchManagers.Load(projectID); ok {
-		return cached.(ClaimWatchManager), nil
-	}
-
-	var client dynamic.Interface
-	var err error
-	if projectID == "" {
-		client = p.dynamicClient
-	} else {
-		client, err = p.getProjectClient(projectID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get project client for watch manager: %w", err)
-		}
-	}
-
-	logger := p.logger.WithName("watch-manager")
-	if projectID != "" {
-		logger = logger.WithValues("project", projectID)
-	}
-
-	wm := NewWatchManager(client, logger, projectID)
-
-	if wmWithCallback, ok := wm.(*watchManager); ok {
-		wmWithCallback.SetTTLExpiredCallback(func() {
-			p.logger.Info("Watch manager TTL expired, removing from cache",
-				"project", projectID)
-			p.watchManagers.Delete(projectID)
-		})
-	}
-
-	// Dedicated timeout prevents admission request timeout from affecting watch manager startup
-	startupTimeout := 30 * time.Second
-	startupCtx, startupCancel := context.WithTimeout(context.Background(), startupTimeout)
-	defer startupCancel()
-
-	startChan := make(chan error, 1)
-	go func() {
-		startChan <- wm.Start(startupCtx)
-	}()
-
-	select {
-	case err := <-startChan:
-		if err != nil {
-			return nil, fmt.Errorf("failed to start watch manager: %w", err)
-		}
-	case <-startupCtx.Done():
-		return nil, fmt.Errorf("watch manager startup timed out after %v: %w", startupTimeout, startupCtx.Err())
-	}
-
-	actual, _ := p.watchManagers.LoadOrStore(projectID, wm)
-	if projectID == "" {
-		p.logger.V(2).Info("Created and started watch manager")
-	} else {
-		p.logger.V(2).Info("Created and started watch manager",
-			"project", projectID)
-	}
-	return actual.(ClaimWatchManager), nil
 }
 
 // Validate implements admission.ValidationInterface and orchestrates the main admission flow
@@ -682,14 +621,6 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		))
 	defer span.End()
 
-	watchManager, err := p.getWatchManager(ctx)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to get watch manager")
-		return newInternalFailure(fmt.Errorf("failed to get watch manager: %w", err))
-	}
-
-	// Determine claim name (must be deterministic to pre-register waiter before claim creation).
 	claimName, err := p.determineClaimName(evalContext, policy)
 	if err != nil {
 		span.RecordError(err)
@@ -730,29 +661,11 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 		"policy", policy.Name,
 		"resourceName", evalContext.Object.GetName())
 
-	// Register waiter before claim exists to ensure watch stream catches the ADDED event.
-	timeout := p.config.WatchManager.DefaultTimeout
-	waiter, err := watchManager.RegisterClaimWaiter(ctx, claimName, namespace, timeout)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to register waiter")
-		if failure, ok := asClaimFailure(err); ok {
-			return failure
-		}
-		return newInternalFailure(fmt.Errorf("failed to register waiter: %w", err))
-	}
-	defer waiter.Cancel()
-
-	p.logger.V(2).Info("Waiter registered before claim creation",
-		"claimName", claimName,
-		"namespace", namespace,
-		"timeout", timeout)
-
 	// createResourceClaim either creates a fresh ResourceClaim, returns a
 	// typed *claimFailure for a real failure, or returns an errAlreadyGranted
 	// sentinel when an existing Granted claim with the same name already
 	// reserves capacity for this resource.
-	claimUID, createErr := p.createResourceClaim(ctx, attrs, policy, evalContext, claimName, namespace)
+	ref, createErr := p.createResourceClaim(ctx, attrs, policy, evalContext, claimName, namespace)
 	switch {
 	case createErr == nil:
 		// Claim was created fresh; fall through to wait for the controller.
@@ -774,61 +687,63 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	p.logger.V(2).Info("ResourceClaim created with predetermined name",
 		"claimName", claimName,
 		"namespace", namespace,
-		"uid", claimUID)
+		"uid", ref.UID)
 
-	// The name may have held an earlier claim, such as a stale one deleted
-	// above, whose events are still arriving: wait on this claim only.
-	waiter.Bind(claimUID)
-	return p.awaitClaimResult(ctx, span, waiter, claimName, namespace)
+	return p.awaitClaimResult(ctx, span, ref)
 }
 
-// awaitClaimResult waits for the outcome of the claim that waiter is bound to.
-// It returns nil for a grant, and a *claimFailure otherwise.
-func (p *ResourceQuotaEnforcementPlugin) awaitClaimResult(ctx context.Context, span trace.Span, waiter ClaimWaiter, claimName, namespace string) error {
-	// Wait for result from watch stream.
-	select {
-	case result, ok := <-waiter.Result():
-		if !ok {
-			span.SetStatus(codes.Error, "Result channel closed")
-			return newInternalFailure(fmt.Errorf("result channel closed unexpectedly"))
-		}
-
-		// Timeouts and deletions carry result.Error; denials do not (they
-		// come back as Granted=false with a denial Reason/message).
-		if result.Error != nil {
-			span.RecordError(result.Error)
-			span.SetStatus(codes.Error, "Wait failed")
-			if result.Reason == "timeout" {
-				return newTimeoutFailure(result.Error)
-			}
-			return newInternalFailure(result.Error)
-		}
-
-		if result.Granted {
-			span.SetAttributes(
-				attribute.String("claim.result", "granted"),
-			)
-			p.logger.V(2).Info("ResourceClaim granted",
-				"claimName", claimName,
-				"namespace", namespace)
-			return nil
-		}
-
-		span.SetAttributes(
-			attribute.String("claim.result", "denied"),
-			attribute.String("claim.denial_reason", result.Reason),
-		)
-		p.logger.Info("ResourceClaim denied",
-			"claimName", claimName,
-			"namespace", namespace,
-			"reason", result.Reason)
-		return newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, result.Reason)
-
-	case <-ctx.Done():
-		// The caller's deferred Cancel removes this request's waiter, and only it.
+// awaitClaimResult waits for the outcome of the claim ref names, for at most
+// the configured claim wait timeout. It returns nil for a grant, and a
+// *claimFailure otherwise.
+func (p *ResourceQuotaEnforcementPlugin) awaitClaimResult(ctx context.Context, span trace.Span, ref claimRef) error {
+	client, err := p.getClient(ctx)
+	if err != nil {
+		return newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, p.config.ClaimWaitTimeout)
+	defer cancel()
+	result := p.waitFor(waitCtx, client.Resource(resourceClaimsGVR).Namespace(ref.Namespace), ref)
+	if ctx.Err() != nil {
+		// The request itself ended, not the wait's own timeout.
 		span.SetStatus(codes.Error, "Context cancelled")
 		return newInternalFailure(ctx.Err())
 	}
+	return p.claimFailureFor(span, ref, result)
+}
+
+// waitFor runs the plugin's claim wait: waitForClaim, unless a test replaced it.
+func (p *ResourceQuotaEnforcementPlugin) waitFor(ctx context.Context, claims dynamic.ResourceInterface, ref claimRef) ClaimResult {
+	if p.awaitClaim != nil {
+		return p.awaitClaim(ctx, claims, ref)
+	}
+	return waitForClaim(ctx, claims, ref)
+}
+
+// claimFailureFor maps a claim's outcome to the admission answer: nil for a
+// grant, a denial for a denial, a timeout failure for a timeout, and an
+// internal failure otherwise.
+func (p *ResourceQuotaEnforcementPlugin) claimFailureFor(span trace.Span, ref claimRef, result ClaimResult) error {
+	// Timeouts, deletions and watch errors carry result.Error; denials do not
+	// (they come back as Granted=false with the denial message as Reason).
+	if result.Error != nil {
+		span.RecordError(result.Error)
+		span.SetStatus(codes.Error, "Wait failed")
+		if result.Reason == waitTimedOut {
+			return newTimeoutFailure(result.Error)
+		}
+		return newInternalFailure(result.Error)
+	}
+	if result.Granted {
+		span.SetAttributes(attribute.String("claim.result", "granted"))
+		p.logger.V(2).Info("ResourceClaim granted", "claimName", ref.Name, "namespace", ref.Namespace)
+		return nil
+	}
+	span.SetAttributes(
+		attribute.String("claim.result", "denied"),
+		attribute.String("claim.denial_reason", result.Reason),
+	)
+	p.logger.Info("ResourceClaim denied", "claimName", ref.Name, "namespace", ref.Namespace, "reason", result.Reason)
+	return newDeniedFailure(quotav1alpha1.ResourceClaimDeniedReason, result.Reason)
 }
 
 // getClaimNamespace determines the namespace for a ResourceClaim.
@@ -863,9 +778,11 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 //   - Granted (condition Granted=True) → returns errAlreadyGranted, which the
 //     caller treats as admission success. Quota has already been reserved
 //     for this resource, so there is nothing more to do.
-//   - Denied (Granted=False, reason=QuotaExceeded) → returns a
-//     claimFailureConflict. The DeniedAutoClaimCleanupController will remove
-//     the stale claim shortly; the user should retry.
+//   - Denied (Granted=False, reason=QuotaExceeded) → deletes the kept claim
+//     with identity/version preconditions and creates a fresh one, so a retry
+//     is evaluated afresh. Cleanup keeps a denied claim for
+//     quota.DefaultDeniedClaimRetention, so that a request still waiting on it
+//     can read its denial after a 410; the retry does not wait for that.
 //   - Pending / no condition → returns a conflict while younger than five
 //     minutes; deletes an abandoned claim with identity/version preconditions
 //     before creating a fresh one. This covers claims left behind by a previous
@@ -873,7 +790,7 @@ func (p *ResourceQuotaEnforcementPlugin) getClaimNamespace(policy *quotav1alpha1
 //
 // Any non-NotFound Get error falls through to Create so that transient API
 // read failures do not permanently block admission.
-func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context, attrs admission.Attributes, policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext, claimName, namespace string) (types.UID, error) {
+func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context, attrs admission.Attributes, policy *quotav1alpha1.ClaimCreationPolicy, evalContext *EvaluationContext, claimName, namespace string) (claimRef, error) {
 	ctx, span := p.startSpan(ctx, "quota.admission.ResourceQuotaEnforcement.createResourceClaim",
 		trace.WithAttributes(
 			attribute.String("policy.name", policy.Name),
@@ -885,7 +802,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	engineContext := p.convertToEngineContext(evalContext)
 	claim, err := p.templateEngine.RenderClaim(policy, engineContext)
 	if err != nil {
-		return "", fmt.Errorf("failed to render ResourceClaim: %w", err)
+		return claimRef{}, fmt.Errorf("failed to render ResourceClaim: %w", err)
 	}
 
 	// Use predetermined name/namespace to ensure waiter receives events
@@ -942,57 +859,24 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 	claim.Annotations["quota.miloapis.com/resource-name"] = evalContext.Object.GetName()
 	claim.Annotations["quota.miloapis.com/policy"] = policy.Name
 
-	gvr := schema.GroupVersionResource{
-		Group:    "quota.miloapis.com",
-		Version:  "v1alpha1",
-		Resource: "resourceclaims",
-	}
+	gvr := resourceClaimsGVR
 
 	unstructuredMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(claim)
 	if err != nil {
-		return "", fmt.Errorf("failed to convert ResourceClaim to unstructured: %w", err)
+		return claimRef{}, fmt.Errorf("failed to convert ResourceClaim to unstructured: %w", err)
 	}
 	unstructuredObj := &unstructured.Unstructured{Object: unstructuredMap}
 
 	client, err := p.getClient(ctx)
 	if err != nil {
-		return "", newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
+		return claimRef{}, newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
 	}
 
 	// Resolve any existing claim at the same deterministic name before
 	// attempting to Create. See function doc comment for decision table.
 	if action, existing, getErr := p.resolveExistingClaim(ctx, client, gvr, claimName, namespace); getErr == nil {
-		switch action {
-		case existingClaimGranted:
-			claimResolutionTotal.WithLabelValues("granted").Inc()
-			return "", errAlreadyGranted
-		case existingClaimDenied:
-			claimResolutionTotal.WithLabelValues("denied").Inc()
-			denialMsg := extractGrantedConditionMessage(existing)
-			return "", newConflictFailure(denialMsg, nil)
-		case existingClaimPending:
-			// A pending claim can belong to a request still being evaluated.
-			// Match the lifecycle controller's five-minute abandonment window.
-			createdAt := existing.GetCreationTimestamp()
-			if createdAt.IsZero() || time.Since(createdAt.Time) < quota.DefaultStalePendingClaimAge {
-				return "", newConflictFailure("concurrent quota evaluation in progress", nil)
-			}
-			// Stale pending claim - delete so we can create a fresh one. This
-			// mirrors what the stale-claim GC controller would eventually do,
-			// after the abandonment window, an inline delete lets this retry
-			// evaluate a fresh claim.
-			claimResolutionTotal.WithLabelValues("deleted_pending").Inc()
-			if delErr := client.Resource(gvr).Namespace(namespace).Delete(ctx, claimName, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: ptr.To(existing.GetUID()), ResourceVersion: ptr.To(existing.GetResourceVersion())}}); delErr != nil && !errors.IsNotFound(delErr) {
-				p.logger.Info("Failed to delete stale pending ResourceClaim before retry",
-					"claimName", claimName,
-					"namespace", namespace,
-					"error", delErr)
-				// Treat as conflict so the user retries once GC catches up.
-				return "", newConflictFailure("unable to clean up stale pending claim", delErr)
-			}
-			p.logger.V(2).Info("Deleted stale pending ResourceClaim before retry",
-				"claimName", claimName,
-				"namespace", namespace)
+		if err := p.handleExistingClaim(ctx, client, gvr, action, existing); err != nil {
+			return claimRef{}, err
 		}
 	}
 
@@ -1003,9 +887,9 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 			// with a replace) recreated the claim. Surface as conflict so
 			// the user retries.
 			claimResolutionTotal.WithLabelValues("create_conflict").Inc()
-			return "", newConflictFailure("concurrent quota evaluation in progress", err)
+			return claimRef{}, newConflictFailure("concurrent quota evaluation in progress", err)
 		}
-		return "", newInternalFailure(fmt.Errorf("failed to create ResourceClaim: %w", err))
+		return claimRef{}, newInternalFailure(fmt.Errorf("failed to create ResourceClaim: %w", err))
 	}
 
 	p.logger.V(2).Info("ResourceClaim created successfully",
@@ -1015,7 +899,7 @@ func (p *ResourceQuotaEnforcementPlugin) createResourceClaim(ctx context.Context
 		"uid", created.GetUID(),
 	)
 
-	return created.GetUID(), nil
+	return claimRef{Name: claimName, Namespace: namespace, UID: created.GetUID(), ResourceVersion: created.GetResourceVersion()}, nil
 }
 
 // existingClaimAction classifies how createResourceClaim should handle a
@@ -1028,8 +912,8 @@ const (
 	// existingClaimGranted indicates capacity is already reserved; admission
 	// can short-circuit to allow.
 	existingClaimGranted
-	// existingClaimDenied indicates a previous denial awaiting GC; the user
-	// should retry.
+	// existingClaimDenied indicates a kept denial (see
+	// quota.DefaultDeniedClaimRetention); caller should delete and recreate.
 	existingClaimDenied
 	// existingClaimPending indicates a stale claim with no final condition;
 	// caller should delete and recreate.
@@ -1065,7 +949,7 @@ func (p *ResourceQuotaEnforcementPlugin) resolveExistingClaim(ctx context.Contex
 		return existingClaimAbsent, nil, nil
 	}
 
-	switch classifyGrantedCondition(existing) {
+	switch classify(grantedCondition(existing)) {
 	case claimConditionGranted:
 		return existingClaimGranted, existing, nil
 	case claimConditionDenied:
@@ -1085,59 +969,87 @@ const (
 	claimConditionDenied
 )
 
-// classifyGrantedCondition reads the Granted condition from a ResourceClaim
-// and returns the corresponding state. Missing conditions map to pending.
-func classifyGrantedCondition(claim *unstructured.Unstructured) claimConditionState {
-	conditions, found, err := unstructured.NestedSlice(claim.Object, "status", "conditions")
-	if err != nil || !found {
-		return claimConditionPending
-	}
+// grantedConditionFields are the fields of a claim's Granted condition that
+// admission reads. found is false when the claim has no such condition.
+type grantedConditionFields struct {
+	found   bool
+	status  string
+	reason  string
+	message string
+}
+
+// grantedCondition returns the claim's Granted condition.
+func grantedCondition(claim *unstructured.Unstructured) grantedConditionFields {
+	conditions, _, _ := unstructured.NestedSlice(claim.Object, "status", "conditions")
 	for _, c := range conditions {
 		m, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		condType, _, _ := unstructured.NestedString(m, "type")
-		if condType != quotav1alpha1.ResourceClaimGranted {
+		if !ok || m["type"] != quotav1alpha1.ResourceClaimGranted {
 			continue
 		}
 		status, _, _ := unstructured.NestedString(m, "status")
 		reason, _, _ := unstructured.NestedString(m, "reason")
-		switch {
-		case status == string(metav1.ConditionTrue):
-			return claimConditionGranted
-		case status == string(metav1.ConditionFalse) && reason == quotav1alpha1.ResourceClaimDeniedReason:
-			return claimConditionDenied
-		default:
-			// Granted=False with any non-denied reason (e.g. PendingEvaluation,
-			// ValidationFailed) is not a final state from our perspective.
-			return claimConditionPending
-		}
+		message, _, _ := unstructured.NestedString(m, "message")
+		return grantedConditionFields{found: true, status: status, reason: reason, message: message}
+	}
+	return grantedConditionFields{}
+}
+
+// classify returns the coarse state of a Granted condition. A missing
+// condition, and Granted=False with any reason but a denial (such as
+// PendingEvaluation or ValidationFailed), are not final: pending.
+func classify(c grantedConditionFields) claimConditionState {
+	switch {
+	case c.status == string(metav1.ConditionTrue):
+		return claimConditionGranted
+	case c.status == string(metav1.ConditionFalse) && c.reason == quotav1alpha1.ResourceClaimDeniedReason:
+		return claimConditionDenied
 	}
 	return claimConditionPending
 }
 
-// extractGrantedConditionMessage returns the message from the Granted
-// condition if present, otherwise the empty string.
-func extractGrantedConditionMessage(claim *unstructured.Unstructured) string {
-	conditions, found, err := unstructured.NestedSlice(claim.Object, "status", "conditions")
-	if err != nil || !found {
-		return ""
-	}
-	for _, c := range conditions {
-		m, ok := c.(map[string]interface{})
-		if !ok {
-			continue
+// handleExistingClaim acts on a claim found at the name a create is about to
+// use. It returns errAlreadyGranted for a granted claim, a conflict for a
+// pending claim younger than the abandonment window or one it could not
+// delete, and nil when the caller should create a fresh claim.
+func (p *ResourceQuotaEnforcementPlugin) handleExistingClaim(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, action existingClaimAction, existing *unstructured.Unstructured) error {
+	switch action {
+	case existingClaimGranted:
+		claimResolutionTotal.WithLabelValues("granted").Inc()
+		return errAlreadyGranted
+	case existingClaimDenied:
+		claimResolutionTotal.WithLabelValues("denied").Inc()
+		return p.deleteExistingClaim(ctx, client, gvr, existing, "kept denied")
+	case existingClaimPending:
+		// A pending claim can belong to a request still being evaluated.
+		// Match the lifecycle controller's five-minute abandonment window.
+		createdAt := existing.GetCreationTimestamp()
+		if createdAt.IsZero() || time.Since(createdAt.Time) < quota.DefaultStalePendingClaimAge {
+			return newConflictFailure("concurrent quota evaluation in progress", nil)
 		}
-		condType, _, _ := unstructured.NestedString(m, "type")
-		if condType != quotav1alpha1.ResourceClaimGranted {
-			continue
-		}
-		msg, _, _ := unstructured.NestedString(m, "message")
-		return msg
+		claimResolutionTotal.WithLabelValues("deleted_pending").Inc()
+		return p.deleteExistingClaim(ctx, client, gvr, existing, "stale pending")
 	}
-	return ""
+	return nil
 }
+
+// deleteExistingClaim deletes the claim a retry found, only if it is still
+// that claim: identity and version preconditions. A claim already gone is
+// fine. Any other failure, such as a concurrent retry that replaced the claim
+// first, is a conflict the user retries.
+func (p *ResourceQuotaEnforcementPlugin) deleteExistingClaim(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, existing *unstructured.Unstructured, kind string) error {
+	name, namespace := existing.GetName(), existing.GetNamespace()
+	preconditions := metav1.Preconditions{UID: ptr.To(existing.GetUID()), ResourceVersion: ptr.To(existing.GetResourceVersion())}
+	err := client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &preconditions})
+	if err != nil && !errors.IsNotFound(err) {
+		p.logger.Info("Failed to delete "+kind+" ResourceClaim before retry", "claimName", name, "namespace", namespace, "error", err)
+		return newConflictFailure("unable to clean up "+kind+" claim", err)
+	}
+	p.logger.V(2).Info("Deleted "+kind+" ResourceClaim before retry", "claimName", name, "namespace", namespace)
+	return nil
+}
+
+// resourceClaimsGVR is the resource the plugin creates and waits on.
+var resourceClaimsGVR = quotav1alpha1.GroupVersion.WithResource("resourceclaims")
 
 // validateResourceClaim validates ResourceClaim objects when they are created directly
 func (p *ResourceQuotaEnforcementPlugin) validateResourceClaim(ctx context.Context, attrs admission.Attributes) error {

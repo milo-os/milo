@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/apis/audit"
@@ -412,7 +411,7 @@ func TestResourceQuotaEnforcementPlugin_Validate(t *testing.T) {
 				config:         DefaultAdmissionPluginConfig(),
 				logger:         logger.WithName("plugin"),
 			}
-			plugin.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+			plugin.awaitClaim = decidedBy("grant")
 
 			attrs := &testAdmissionAttributes{
 				operation: tt.operation,
@@ -774,7 +773,7 @@ func TestResourceQuotaEnforcementPlugin_ResourceClaimValidation(t *testing.T) {
 				config:                 DefaultAdmissionPluginConfig(),
 				logger:                 logger.WithName("plugin"),
 			}
-			plugin.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+			plugin.awaitClaim = decidedBy("grant")
 
 			// Convert typed ResourceClaim to unstructured (as CRDs are always unstructured in admission)
 			unstructuredMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(tt.claim)
@@ -866,7 +865,7 @@ func TestResourceQuotaEnforcementPlugin_InitializationValidation(t *testing.T) {
 				plugin.grantCreationPolicyValidator = validation.NewGrantCreationPolicyValidator(celValidator, grantTemplateValidator)
 				plugin.resourceGrantValidator = validation.NewResourceGrantValidator(mockValidator)
 
-				plugin.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+				plugin.awaitClaim = decidedBy("grant")
 
 				return plugin
 			},
@@ -918,7 +917,7 @@ func TestResourceQuotaEnforcementPlugin_PolicyEngineFailure(t *testing.T) {
 		config:         DefaultAdmissionPluginConfig(),
 		logger:         logger.WithName("plugin"),
 	}
-	plugin.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+	plugin.awaitClaim = decidedBy("grant")
 
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -1074,15 +1073,11 @@ func TestClaimWaitScenarios(t *testing.T) {
 				logger:         logger.WithName("plugin"),
 			}
 
-			var watchManager ClaimWatchManager
-			if tt.claimBehavior == "granted" {
-				watchManager = &testWatchManager{behavior: "grant"}
-			} else if tt.claimBehavior == "denied" {
-				watchManager = &testWatchManager{behavior: "deny"}
-			} else {
-				watchManager = &testWatchManager{behavior: "timeout"}
+			behavior := map[string]string{"granted": "grant", "denied": "deny"}[tt.claimBehavior]
+			if behavior == "" {
+				behavior = "timeout"
 			}
-			plugin.watchManagers.Store("", watchManager)
+			plugin.awaitClaim = decidedBy(behavior)
 
 			obj := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -1276,46 +1271,22 @@ func contains(s, substr string) bool {
 		}())
 }
 
-type testWatchManager struct {
-	behavior string
-}
-
-// chanWaiter is a ClaimWaiter whose result a test double sends.
-type chanWaiter chan ClaimResult
-
-func (c chanWaiter) Result() <-chan ClaimResult { return c }
-func (chanWaiter) Bind(types.UID)               {}
-func (chanWaiter) Cancel()                      {}
-
-func (m *testWatchManager) RegisterClaimWaiter(ctx context.Context, claimName, namespace string, timeout time.Duration) (ClaimWaiter, error) {
-	resultChan := make(chan ClaimResult, 1)
-
-	go func() {
+// decidedBy is a claim wait that returns the outcome behavior names after
+// 10 ms: "grant", "deny" or "timeout".
+func decidedBy(behavior string) func(context.Context, dynamic.ResourceInterface, claimRef) ClaimResult {
+	return func(ctx context.Context, _ dynamic.ResourceInterface, _ claimRef) ClaimResult {
 		time.Sleep(10 * time.Millisecond)
-		switch m.behavior {
+		switch behavior {
 		case "grant":
-			resultChan <- ClaimResult{Granted: true, Reason: "test granted"}
+			return ClaimResult{Granted: true, Reason: "test granted"}
 		case "deny":
-			// Matches watchManager.evaluateClaimStatus: denied claims are
-			// surfaced with Granted=false and Reason set to the denial
-			// message, and no Error.
-			resultChan <- ClaimResult{Granted: false, Reason: "quota exceeded"}
-		case "timeout":
-			resultChan <- ClaimResult{
-				Granted: false,
-				Reason:  "timeout",
-				Error:   fmt.Errorf("timeout waiting for ResourceClaim after 30s"),
-			}
+			// As claimWait.outcome returns a denial: Granted=false, the denial
+			// message as Reason, and no Error.
+			return ClaimResult{Granted: false, Reason: "quota exceeded"}
 		}
-		close(resultChan)
-	}()
-
-	return chanWaiter(resultChan), nil
+		return ClaimResult{Reason: waitTimedOut, Error: fmt.Errorf("timeout waiting for ResourceClaim after 30s")}
+	}
 }
-
-func (m *testWatchManager) UnregisterClaimWaiter(claimName, namespace string) {}
-func (m *testWatchManager) Start(ctx context.Context) error                   { return nil }
-func (m *testWatchManager) Stop()                                             {}
 
 // Shared test helpers for deterministic claim retry tests.
 
@@ -1443,7 +1414,7 @@ func TestStructuredEndpointSliceCELTemplateRendering(t *testing.T) {
 		config:         DefaultAdmissionPluginConfig(),
 		logger:         logger.WithName("plugin"),
 	}
-	plugin.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+	plugin.awaitClaim = decidedBy("grant")
 
 	tests := []struct {
 		name    string
@@ -1780,12 +1751,14 @@ func TestResolveExistingClaim(t *testing.T) {
 			expectCreate:  false,
 		},
 		{
-			name:          "existing denied claim returns conflict error",
+			// Cleanup keeps a denied claim for a while (quota.DefaultDeniedClaimRetention);
+			// a retry inside that window replaces it and is evaluated afresh.
+			name:          "a retry replaces a kept denied claim and is evaluated afresh",
 			seedClaim:     existingClaim(claimName, namespace, ptr.To(false), quotav1alpha1.ResourceClaimDeniedReason, "quota exhausted previously"),
 			watchBehavior: "grant",
-			expectError:   true,
-			errorSubstr:   "still cleaning up from a previous attempt",
-			expectCreate:  false,
+			expectError:   false,
+			expectCreate:  true,
+			expectDelete:  true,
 		},
 		{
 			name:          "existing pending claim is deleted before re-create",
@@ -1837,7 +1810,7 @@ func TestResolveExistingClaim(t *testing.T) {
 				config:         DefaultAdmissionPluginConfig(),
 				logger:         logger.WithName("plugin"),
 			}
-			plugin.watchManagers.Store("", &testWatchManager{behavior: tt.watchBehavior})
+			plugin.awaitClaim = decidedBy(tt.watchBehavior)
 
 			obj := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -2004,7 +1977,7 @@ func TestClusterScopedClaimNamespace(t *testing.T) {
 			config:         cfg,
 			logger:         logger.WithName("plugin"),
 		}
-		p.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+		p.awaitClaim = decidedBy("grant")
 		return p
 	}
 

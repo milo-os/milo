@@ -97,11 +97,6 @@ func retryOverStaleClaim(t *testing.T, grantFresh, staleGrantedLate bool) error 
 	judgeFreshClaim(ctx, t, client, grantFresh)
 
 	plugin := newStaleClaimPlugin(t, client, claimName)
-	defer func() {
-		if wm, ok := plugin.watchManagers.Load(""); ok {
-			wm.(*watchManager).Stop()
-		}
-	}()
 	return plugin.Validate(ctx, deploymentAttrs("test-deployment", namespace), nil)
 }
 
@@ -147,9 +142,9 @@ func newStaleClaimPlugin(t *testing.T, client *fake.FakeDynamicClient, claimName
 	}
 	logger := zap.New(zap.UseDevMode(true))
 	config := DefaultAdmissionPluginConfig()
-	// A waiter that is never judged fails the test in seconds, not after the
+	// A claim that is never judged fails the test in seconds, not after the
 	// production timeout.
-	config.WatchManager.DefaultTimeout = 5 * time.Second
+	config.ClaimWaitTimeout = 5 * time.Second
 	return &ResourceQuotaEnforcementPlugin{
 		Handler:        admission.NewHandler(admission.Create),
 		dynamicClient:  client,
@@ -157,6 +152,7 @@ func newStaleClaimPlugin(t *testing.T, client *fake.FakeDynamicClient, claimName
 		templateEngine: engine.NewTemplateEngine(celEngine, logger.WithName("template")),
 		config:         config,
 		logger:         logger.WithName("plugin"),
+		awaitClaim:     readUntilOutcome,
 	}
 }
 
@@ -189,11 +185,6 @@ func TestConcurrentRequestDoesNotDeletePendingClaim(t *testing.T) {
 	claim.SetCreationTimestamp(metav1.Now())
 	client := fake.NewSimpleDynamicClient(scheme, claim)
 	plugin := newStaleClaimPlugin(t, client, "fixed-claim")
-	defer func() {
-		if wm, ok := plugin.watchManagers.Load(""); ok {
-			wm.(*watchManager).Stop()
-		}
-	}()
 	err := plugin.Validate(context.Background(), deploymentAttrs("test-deployment", "default"), nil)
 	if err == nil {
 		t.Fatal("pending claim must not admit another request")
