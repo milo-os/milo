@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -111,6 +114,45 @@ func (c *watchedClient) watchAttempts() int {
 	return c.attempts
 }
 
+// claimReads counts the manager's GETs of ResourceClaims.
+func (c *watchedClient) claimReads() int {
+	reads := 0
+	for _, action := range c.Actions() {
+		if action.GetVerb() == "get" && action.GetResource().Resource == "resourceclaims" {
+			reads++
+		}
+	}
+	return reads
+}
+
+func (c *watchedClient) createClaim(t *testing.T, claim *unstructured.Unstructured) {
+	t.Helper()
+	claims := c.Resource(quotav1alpha1.GroupVersion.WithResource("resourceclaims")).Namespace(claim.GetNamespace())
+	if _, err := claims.Create(context.Background(), claim, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (c *watchedClient) updateClaim(t *testing.T, claim *unstructured.Unstructured) {
+	t.Helper()
+	claims := c.Resource(quotav1alpha1.GroupVersion.WithResource("resourceclaims")).Namespace(claim.GetNamespace())
+	if _, err := claims.Update(context.Background(), claim, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newWaiterOnPendingClaim registers a waiter, creates its claim pending, and
+// binds the waiter, in the order a create request does.
+func newWaiterOnPendingClaim(t *testing.T, w *watchManager, client *watchedClient) ClaimWaiter {
+	t.Helper()
+	waiter := newBoundWaiter(t, w, "claim", "")
+	pending := existingClaim("claim", "default", nil, "", "")
+	pending.SetUID("own")
+	client.createClaim(t, pending)
+	waiter.Bind("own")
+	return waiter
+}
+
 // newTestWatchManager starts a manager whose backoff starts at initialDelay.
 func newTestWatchManager(t *testing.T, client *watchedClient, initialDelay time.Duration) *watchManager {
 	t.Helper()
@@ -121,6 +163,29 @@ func newTestWatchManager(t *testing.T, client *watchedClient, initialDelay time.
 		t.Fatal(err)
 	}
 	return w
+}
+
+func newBoundWaiter(t *testing.T, w *watchManager, claimName string, uid string) ClaimWaiter {
+	t.Helper()
+	waiter, err := w.RegisterClaimWaiter(context.Background(), claimName, "default", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != "" {
+		waiter.Bind(types.UID(uid))
+	}
+	return waiter
+}
+
+func awaitResult(t *testing.T, waiter ClaimWaiter, lost string) ClaimResult {
+	t.Helper()
+	select {
+	case result := <-waiter.Result():
+		return result
+	case <-time.After(2 * time.Second):
+		t.Fatal(lost)
+		return ClaimResult{}
+	}
 }
 
 func bookmark(resourceVersion string) *unstructured.Unstructured {
@@ -319,5 +384,99 @@ func TestHealthyCloseResetsTheBackoff(t *testing.T) {
 	// Stream 4 fails at once. Without the reset it waits 300 ms or more (400 ms, -25 % jitter).
 	if gap := client.gap(t, healthy+1); gap > 200*time.Millisecond {
 		t.Fatalf("the first failure after a healthy stream waited %v, want the initial delay", gap)
+	}
+}
+
+// TestReconnectFromNowRereadsWaitingClaims checks that a waiter whose claim is
+// judged while the manager has no stream still gets the outcome. A stream that
+// ends before its first event or bookmark leaves no resume point, so the next
+// one starts from now and carries no event from the gap.
+func TestReconnectFromNowRereadsWaitingClaims(t *testing.T) {
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+	waiter := newWaiterOnPendingClaim(t, w, client)
+
+	first, _ := client.stream(t, 0)
+	// The grant lands while the stream carries no event of it, and the stream then ends before its first event.
+	client.updateClaim(t, judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	first.Stop()
+
+	if _, from := client.stream(t, 1); from != "" {
+		t.Fatalf("watch 1 started from %q, want from now", from)
+	}
+	if result := awaitResult(t, waiter, "the grant made while the manager had no stream never reached its waiter"); !result.Granted {
+		t.Fatalf("got %+v, want the grant", result)
+	}
+}
+
+// TestReconnectAfter410RereadsWaitingClaims checks the route production takes
+// to a stream from now: the resume point is too old (410 Gone), the manager
+// drops it, and a grant made before the new stream must still arrive.
+func TestReconnectAfter410RereadsWaitingClaims(t *testing.T) {
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+	waiter := newWaiterOnPendingClaim(t, w, client)
+
+	first, _ := client.stream(t, 0)
+	first.Action(watch.Bookmark, bookmark("100"))
+	client.updateClaim(t, judgedClaim("claim", "default", "own", true, quotav1alpha1.ResourceClaimGrantedReason))
+	first.Error(&metav1.Status{Status: metav1.StatusFailure, Code: http.StatusGone, Reason: metav1.StatusReasonExpired})
+
+	if _, from := client.stream(t, 1); from != "" {
+		t.Fatalf("watch 1 after a 410 started from %q, want from now", from)
+	}
+	if result := awaitResult(t, waiter, "the grant made before the 410's new stream never reached its waiter"); !result.Granted {
+		t.Fatalf("got %+v, want the grant", result)
+	}
+}
+
+// TestResumedStreamReadsNoClaim checks that a stream which resumes from a
+// bookmark reads no waiting claim: it replays every event since the bookmark.
+func TestResumedStreamReadsNoClaim(t *testing.T) {
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+	pending := existingClaim("claim", "default", nil, "", "")
+	pending.SetUID("own")
+	client.createClaim(t, pending)
+	newBoundWaiter(t, w, "claim", "own")
+
+	const closes = 3
+	for i := range closes {
+		stream, _ := client.stream(t, i)
+		stream.Action(watch.Bookmark, bookmark(fmt.Sprint(100+i)))
+		stream.Stop()
+	}
+	client.stream(t, closes)
+	time.Sleep(100 * time.Millisecond) // a read runs in its own goroutine
+	// The first stream starts from now and may read the claim once.
+	if n := client.claimReads(); n > 1 {
+		t.Fatalf("%d reads of the waiting claim over %d resumed streams, want none", n-1, closes)
+	}
+}
+
+// TestRereadEndsABoundWaiterWhoseClaimIsGone checks that a bound waiter whose
+// claim is not found on the re-read ends as deleted: its request created the
+// claim, so the claim was deleted while the manager had no stream, as a denied
+// claim is by its cleanup. An unbound waiter's claim may not exist yet, and
+// that waiter waits for the stream.
+func TestRereadEndsABoundWaiterWhoseClaimIsGone(t *testing.T) {
+	client := newWatchedClient(watchScript{})
+	w := newTestWatchManager(t, client, 50*time.Millisecond)
+	defer w.Stop()
+	bound := newBoundWaiter(t, w, "deleted-claim", "own")
+	unbound := newBoundWaiter(t, w, "unborn-claim", "")
+
+	first, _ := client.stream(t, 0)
+	first.Stop()
+
+	if result := awaitResult(t, bound, "a waiter whose claim was deleted in the gap waited to its timeout"); result.Reason != "deleted" {
+		t.Fatalf("got %+v, want deleted", result)
+	}
+	time.Sleep(100 * time.Millisecond) // the re-read reads the waiters in no fixed order
+	if result, ok := pendingResult(unbound); ok || heldCount(w, unbound) != 0 {
+		t.Fatalf("a waiter whose claim is not created yet was given an outcome: %+v", result)
 	}
 }

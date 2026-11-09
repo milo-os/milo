@@ -733,6 +733,8 @@ func (w *watchManager) processWatchStream(ctx context.Context, gvr schema.GroupV
 		"resourceVersion", watchOpts.ResourceVersion,
 		"project", w.projectID)
 
+	w.rereadIfFromNow(ctx, gvr, watchOpts.ResourceVersion)
+
 	return w.consumeEvents(ctx, watchInterface, streamStartTime)
 }
 
@@ -868,6 +870,65 @@ func (w *watchManager) handleClaimEvent(obj interface{}) {
 	}
 }
 
+// rereadIfFromNow starts the re-read of waiting claims for a stream that
+// starts from now, that is with no resource version. A stream that resumes
+// replays every event since its resume point and needs none.
+func (w *watchManager) rereadIfFromNow(ctx context.Context, gvr schema.GroupVersionResource, resourceVersion string) {
+	if resourceVersion == "" {
+		go w.rereadWaitingClaims(ctx, gvr)
+	}
+}
+
+// rereadWaitingClaims gives each waiter its claim's current outcome, read
+// once a stream that starts from now is open. Such a stream carries no event
+// from before it opened, so a claim judged while the manager had no stream
+// would otherwise never reach its waiter. A claim that is not there yet
+// arrives on the stream.
+func (w *watchManager) rereadWaitingClaims(ctx context.Context, gvr schema.GroupVersionResource) {
+	for _, waiting := range w.waitingClaims() {
+		key := waiting.waiter.key()
+		claim, err := w.dynamicClient.Resource(gvr).Namespace(key.Namespace).Get(ctx, key.Name, metav1.GetOptions{})
+		switch {
+		case err == nil:
+			w.handleClaimEvent(claim)
+		case errors.IsNotFound(err) && waiting.uid != "":
+			// The waiter was bound before the read, so its claim existed
+			// then: it was deleted while the manager had no stream, which a
+			// relist reports as a deletion too.
+			w.offer(key, waiting.waiter, waiting.uid, deletedClaimResult(key), "deleted")
+		case !errors.IsNotFound(err):
+			w.logger.V(2).Info("Failed to re-read a waiting claim", "claimName", key.Name,
+				"namespace", key.Namespace, "project", w.projectID, "error", err)
+		}
+	}
+}
+
+// waitingClaim is a waiter and the claim UID it was bound to when read.
+type waitingClaim struct {
+	waiter *claimWaiter
+	uid    types.UID
+}
+
+// waitingClaims returns every registered waiter with its bound UID.
+func (w *watchManager) waitingClaims() []waitingClaim {
+	w.waitersLock.RLock()
+	defer w.waitersLock.RUnlock()
+	waiting := make([]waitingClaim, 0, len(w.waiters))
+	for _, waiter := range w.waiters {
+		waiting = append(waiting, waitingClaim{waiter: waiter, uid: waiter.uid})
+	}
+	return waiting
+}
+
+// deletedClaimResult is the outcome of a waiter whose claim was deleted.
+func deletedClaimResult(key types.NamespacedName) ClaimResult {
+	return ClaimResult{
+		Granted: false,
+		Reason:  "deleted",
+		Error:   fmt.Errorf("ResourceClaim %s/%s was deleted", key.Namespace, key.Name),
+	}
+}
+
 // handleClaimDeletion processes a ResourceClaim deletion event
 func (w *watchManager) handleClaimDeletion(obj interface{}) {
 	unstructuredObj, ok := obj.(*unstructured.Unstructured)
@@ -898,11 +959,7 @@ func (w *watchManager) handleClaimDeletion(obj interface{}) {
 	}
 
 	// Claim was deleted - notify waiter, if it is the waiter's own claim
-	w.offer(key, waiter, unstructuredObj.GetUID(), ClaimResult{
-		Granted: false,
-		Reason:  "deleted",
-		Error:   fmt.Errorf("ResourceClaim %s/%s was deleted", key.Namespace, key.Name),
-	}, "deleted")
+	w.offer(key, waiter, unstructuredObj.GetUID(), deletedClaimResult(key), "deleted")
 }
 
 // evaluateClaimStatus evaluates a ResourceClaim's status and returns a result if final
