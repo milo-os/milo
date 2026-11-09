@@ -115,6 +115,55 @@ spec:
                 - email
                 - name
                 type: object
+              emailDomainJoining:
+                description: |-
+                  EmailDomainJoining offers membership to everyone whose email address is
+                  at one of the listed domains, without an invitation from an owner. Each
+                  domain must be verified by a Domain in one of the organization's
+                  projects. The EmailDomainsVerified condition reports which domains are
+                  in use.
+
+                  Requires the EmailDomainJoining feature gate.
+                properties:
+                  domains:
+                    description: |-
+                      Domains are the email domains to offer membership to, such as
+                      "example.com". An address matches only its exact domain, so
+                      "example.com" does not match "eu.example.com". A Domain in one of the
+                      organization's projects must verify each domain or a parent of it.
+                    items:
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$
+                      type: string
+                    maxItems: 10
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                  roles:
+                    description: Roles are granted to people who join through a domain
+                      offer.
+                    items:
+                      description: RoleReference defines a reference to a Role resource
+                        for organization membership.
+                      properties:
+                        name:
+                          description: Name of the referenced Role.
+                          type: string
+                        namespace:
+                          description: |-
+                            Namespace of the referenced Role.
+                            If not specified, it defaults to the organization membership's namespace.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    maxItems: 10
+                    minItems: 1
+                    type: array
+                required:
+                - domains
+                - roles
+                type: object
               type:
                 description: |-
                   Type distinguishes personal and standard organizations in legacy mode.

@@ -14,6 +14,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"go.miloapis.com/milo/internal/emaildomain"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -24,6 +25,13 @@ var userinvitationlog = logf.Log.WithName("userinvitation-resource")
 const userInvitationCompositeKey = "userInvitationByEmailAndOrg"
 const organizationMembershipCompositeKey = "organizationMembershipByOrgAndUser"
 const userEmailKey = "userByEmail"
+
+// emailVerifiedExtraKey is the userInfo.extra key zitadel-provider stamps with
+// the requester's email verification verdict. The emailverification admission
+// plugin reads the same key; "true" is the only verified value.
+const emailVerifiedExtraKey = "iam.miloapis.com/emailVerified"
+
+const systemMastersGroup = "system:masters"
 
 // buildUserInvitationCompositeKey returns a composite key of lowercased email and organization name
 func buildUserInvitationCompositeKey(ui iamv1alpha1.UserInvitation) string {
@@ -71,6 +79,7 @@ func SetupUserInvitationWebhooksWithManager(mgr ctrl.Manager, systemNamespace, a
 			client:                   mgr.GetClient(),
 			systemNamespace:          systemNamespace,
 			assignableRolesNamespace: assignableRolesNamespace,
+			emailDomains:             emaildomain.NewVerifier(mgr.GetClient(), mgr.GetConfig()),
 		}).
 		Complete()
 }
@@ -88,6 +97,12 @@ func (m *UserInvitationMutator) Default(ctx context.Context, ui *iamv1alpha1.Use
 	if err != nil {
 		userinvitationlog.Error(err, "failed to get admission request from context", "name", ui.GetName())
 		return fmt.Errorf("failed to get request from context: %w", err)
+	}
+
+	// The platform, such as the email domain joining controller, makes offers
+	// that no user sent, so it has no User to record as the inviter.
+	if slices.Contains(req.UserInfo.Groups, systemMastersGroup) {
+		return nil
 	}
 
 	inviterUser := &iamv1alpha1.User{}
@@ -110,6 +125,7 @@ type UserInvitationValidator struct {
 	client                   client.Client
 	systemNamespace          string
 	assignableRolesNamespace string
+	emailDomains             *emaildomain.Verifier
 }
 
 // ValidateCreate ensures the expiration date, if provided, is not already expired.
@@ -123,6 +139,13 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 	}
 
 	var errs field.ErrorList
+
+	if isEmailDomainOffer(ui) && !slices.Contains(req.UserInfo.Groups, systemMastersGroup) {
+		errs = append(errs, field.Forbidden(
+			field.NewPath("metadata", "labels").Key(emaildomain.JoinMethodLabel),
+			"only the platform can create email domain offers",
+		))
+	}
 
 	// Ensure the expiration date is in the future
 	if ui.Spec.ExpirationDate != nil {
@@ -195,12 +218,36 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 }
 
 func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *iamv1alpha1.UserInvitation) (admission.Warnings, error) {
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get request from context: %w", err)
+	}
+
+	// Removing the labels would turn an offer into an ordinary invitation and
+	// skip the checks below.
+	if !slices.Contains(req.UserInfo.Groups, systemMastersGroup) &&
+		(oldObj.Labels[emaildomain.JoinMethodLabel] != newObj.Labels[emaildomain.JoinMethodLabel] ||
+			oldObj.Labels[emaildomain.EmailDomainLabel] != newObj.Labels[emaildomain.EmailDomainLabel]) {
+		return nil, errors.NewInvalid(
+			iamv1alpha1.SchemeGroupVersion.WithKind("UserInvitation").GroupKind(),
+			newObj.Name,
+			field.ErrorList{field.Forbidden(field.NewPath("metadata", "labels"), "email domain offer labels cannot be changed")},
+		)
+	}
+
+	accepting := oldObj.Spec.State == iamv1alpha1.UserInvitationStatePending && newObj.Spec.State == iamv1alpha1.UserInvitationStateAccepted
+	if accepting && isEmailDomainOffer(newObj) {
+		if err := v.validateEmailDomainOfferAcceptance(ctx, req, newObj); err != nil {
+			return nil, err
+		}
+	}
+
 	// Reject accepting an invitation whose expiration date has already passed.
 	// Accepting an expired invitation used to silently succeed while granting no
 	// membership, which left a stale "Accepted" record that blocked every future
 	// invite to the same address. Rejecting here tells the invitee immediately
 	// that the link is no longer valid so they can request a new invitation.
-	if oldObj.Spec.State == iamv1alpha1.UserInvitationStatePending && newObj.Spec.State == iamv1alpha1.UserInvitationStateAccepted && newObj.IsExpired() {
+	if accepting && newObj.IsExpired() {
 		return nil, errors.NewInvalid(
 			iamv1alpha1.SchemeGroupVersion.WithKind("UserInvitation").GroupKind(),
 			newObj.Name,
@@ -214,6 +261,44 @@ func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		)
 	}
 	return nil, nil
+}
+
+// validateEmailDomainOfferAcceptance lets someone accept an email domain offer
+// only with a verified email address, and only while a verified Domain in one
+// of the organization's projects still covers the offer's domain.
+func (v *UserInvitationValidator) validateEmailDomainOfferAcceptance(ctx context.Context, req admission.Request, ui *iamv1alpha1.UserInvitation) error {
+	statePath := field.NewPath("spec").Child("state")
+	invalid := func(msg string) error {
+		return errors.NewInvalid(
+			iamv1alpha1.SchemeGroupVersion.WithKind("UserInvitation").GroupKind(),
+			ui.Name,
+			field.ErrorList{field.Invalid(statePath, ui.Spec.State, msg)},
+		)
+	}
+
+	verified := req.UserInfo.Extra[emailVerifiedExtraKey]
+	if len(verified) == 0 || verified[0] != "true" {
+		return invalid("verify your email address before joining an organization through your email domain")
+	}
+
+	domain := ui.Labels[emaildomain.EmailDomainLabel]
+	if domain == "" || emaildomain.Of(ui.Spec.Email) != domain {
+		return invalid("this offer is not for your email domain")
+	}
+
+	verifiedDomains, err := v.emailDomains.VerifiedDomains(ctx, ui.Spec.OrganizationRef.Name)
+	if err != nil {
+		userinvitationlog.Error(err, "failed to check verified Domains", "organization", ui.Spec.OrganizationRef.Name)
+		return errors.NewInternalError(fmt.Errorf("failed to check verified Domains: %w", err))
+	}
+	if !emaildomain.Covers(verifiedDomains, domain) {
+		return invalid("this organization no longer has a verified Domain for " + domain + "; ask an owner for an invitation")
+	}
+	return nil
+}
+
+func isEmailDomainOffer(ui *iamv1alpha1.UserInvitation) bool {
+	return ui.Labels[emaildomain.JoinMethodLabel] == emaildomain.JoinMethodEmailDomain
 }
 
 func (v *UserInvitationValidator) ValidateDelete(ctx context.Context, obj *iamv1alpha1.UserInvitation) (admission.Warnings, error) {

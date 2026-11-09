@@ -167,6 +167,7 @@ tasks:
         echo "📨 Installing the user-invitation role and email template in Milo API server..."
         task kubectl -- apply -n milo-system -f config/roles/organization-viewer.yaml
         task kubectl -- apply -f config/overlays/test-infra/resources/userinvitation-emailtemplate.yaml
+        task kubectl -- apply -f config/overlays/test-infra/resources/organization-member-joined-emailtemplate.yaml
 
         echo "⏳ Waiting for controller manager to be ready..."
         task test-infra:kubectl -- wait --for=condition=Ready pod -l app.kubernetes.io/name=milo-controller-manager -n milo-system --timeout=120s

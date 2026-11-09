@@ -12,7 +12,7 @@ spec:
           - name: KUBECONFIG
             value: "/etc/kubernetes/config/kubeconfig"
           - name: FEATURE_GATES
-            value: "ProjectSuspension=true"
+            value: "ProjectSuspension=true,MemberJoinedEmails=true,EmailDomainJoining=true"
         volumeMounts:
           - name: kubeconfig
             mountPath: /etc/kubernetes/config
