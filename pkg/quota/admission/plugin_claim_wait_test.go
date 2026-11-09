@@ -46,6 +46,28 @@ func TestWaitEndsAtTheClaimWaitTimeout(t *testing.T) {
 	}
 }
 
+// A request whose own deadline comes before the claim wait timeout gets the
+// quota timeout answer, and gets it while the request is still alive: the API
+// server's create handler stops at 34 s, and a wait that ran into that ceiling
+// answered a bare 504 instead (1,000 creates released together on kind).
+func TestWaitEndsBeforeTheRequestsDeadline(t *testing.T) {
+	plugin := newStaleClaimPlugin(t, quotaFakeClient(t), "fixed-claim")
+	plugin.config.ClaimWaitTimeout = time.Minute
+	plugin.awaitClaim = func(ctx context.Context, _ dynamic.ResourceInterface, ref claimRef) ClaimResult {
+		<-ctx.Done()
+		return claimWait{ref: ref}.unfinished(ctx, nil)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4500*time.Millisecond)
+	defer cancel()
+	err := plugin.Validate(ctx, deploymentAttrs("test-deployment", "default"), nil)
+	if err == nil || !strings.Contains(err.Error(), "took too long to be checked against your quota") {
+		t.Fatalf("want the quota timeout answer, got %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the plugin answered after the request's deadline")
+	}
+}
+
 // The wait starts from the resource version the claim's create returned.
 func TestTheWaitStartsFromTheCreatesVersion(t *testing.T) {
 	client := quotaFakeClient(t)

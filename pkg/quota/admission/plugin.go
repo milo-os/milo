@@ -695,15 +695,36 @@ func (p *ResourceQuotaEnforcementPlugin) createAndWaitForResourceClaim(ctx conte
 	return p.awaitClaimResult(ctx, span, ref)
 }
 
+// claimAnswerMargin is how long before the request's own deadline a claim wait
+// ends, so the plugin answers before the API server stops the request. A
+// create's handler stops at 34 s (k8s.io/apiserver endpoints/handlers/rest.go,
+// requestTimeoutUpperBound), 4 s after the default 30 s wait; the margin keeps
+// those 4 s for a wait that started late. Answers to 1,000 waits that ended
+// together took up to 2.2 s to write.
+const claimAnswerMargin = 4 * time.Second
+
+// claimWaitContext returns the context a claim wait runs under. It ends at the
+// claim wait timeout, or claimAnswerMargin before the request's own deadline
+// if that comes first, so the caller gets the quota answer rather than the
+// API server's timeout.
+func (p *ResourceQuotaEnforcementPlugin) claimWaitContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(p.config.ClaimWaitTimeout)
+	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Add(-claimAnswerMargin).Before(deadline) {
+		deadline = requestDeadline.Add(-claimAnswerMargin)
+	}
+	return context.WithDeadline(ctx, deadline)
+}
+
 // awaitClaimResult waits for the outcome of the claim ref names, for at most
-// the configured claim wait timeout. It returns nil for a grant, and a
-// *claimFailure otherwise.
+// the configured claim wait timeout, and never past claimAnswerMargin before
+// the request's deadline. It returns nil for a grant, and a *claimFailure
+// otherwise.
 func (p *ResourceQuotaEnforcementPlugin) awaitClaimResult(ctx context.Context, span trace.Span, ref claimRef) error {
 	client, err := p.getClient(ctx)
 	if err != nil {
 		return newInternalFailure(fmt.Errorf("failed to get client for context: %w", err))
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, p.config.ClaimWaitTimeout)
+	waitCtx, cancel := p.claimWaitContext(ctx)
 	defer cancel()
 	result := p.waitFor(waitCtx, client.Resource(resourceClaimsGVR).Namespace(ref.Namespace), ref)
 	if ctx.Err() != nil {
