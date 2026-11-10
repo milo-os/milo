@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
@@ -37,6 +38,7 @@ import (
 	mccontroller "sigs.k8s.io/multicluster-runtime/pkg/controller"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
@@ -576,14 +578,13 @@ func (r *AllowanceBucketController) SetupWithManager(mgr mcmanager.Manager) erro
 				},
 			}),
 		).
-		// Watch ResourceClaims that affect bucket usage
+		// Watch ResourceClaims that affect bucket usage; an undecided claim's
+		// buckets go ahead of other work, since a create waits on them.
 		Watches(
 			&quotav1alpha1.ResourceClaim{},
-			mchandler.TypedEnqueueRequestsFromMapFunc(
-				func(ctx context.Context, obj client.Object) []mcreconcile.Request {
-					return r.enqueueAffectedBuckets(ctx, obj)
-				},
-			),
+			func(name multicluster.ClusterName, _ cluster.Cluster) handler.TypedEventHandler[client.Object, mcreconcile.Request] {
+				return claimMapped(name, affectedBuckets)
+			},
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(true),
 			mcbuilder.WithPredicates(predicate.Funcs{
@@ -616,11 +617,16 @@ func (r *AllowanceBucketController) SetupWithManager(mgr mcmanager.Manager) erro
 }
 
 // enqueueAffectedBuckets determines which AllowanceBuckets need to be reconciled
-// when ResourceGrants or ResourceClaims change. Buckets are centralized in milo-system namespace.
+// when ResourceGrants or ResourceClaims change, in the cluster the context names.
 func (r *AllowanceBucketController) enqueueAffectedBuckets(ctx context.Context, obj client.Object) []mcreconcile.Request {
-	var requests []mcreconcile.Request
-
 	clusterName, _ := mccontext.ClusterFrom(ctx)
+	return affectedBuckets(clusterName, obj)
+}
+
+// affectedBuckets returns the AllowanceBuckets a ResourceGrant or ResourceClaim
+// in the named cluster bears on. Buckets are centralized in milo-system namespace.
+func affectedBuckets(clusterName multicluster.ClusterName, obj client.Object) []mcreconcile.Request {
+	var requests []mcreconcile.Request
 
 	switch o := obj.(type) {
 	case *quotav1alpha1.ResourceGrant:

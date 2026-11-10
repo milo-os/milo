@@ -17,10 +17,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mccontroller "sigs.k8s.io/multicluster-runtime/pkg/controller"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	quotav1alpha1 "go.miloapis.com/milo/pkg/apis/quota/v1alpha1"
@@ -175,13 +178,17 @@ func (r *ResourceClaimController) updateOverallClaimCondition(ctx context.Contex
 }
 
 // SetupWithManager sets up the controller with the Manager.
-// Watches ResourceClaims across all control planes (core and project control planes).
+// Watches ResourceClaims across all control planes (core and project control planes);
+// an undecided claim goes ahead of other work, since a create waits on it.
 func (r *ResourceClaimController) SetupWithManager(mgr mcmanager.Manager) error {
 	return mcbuilder.ControllerManagedBy(mgr).
-		For(&quotav1alpha1.ResourceClaim{},
+		Named("resource-claim").
+		Watches(&quotav1alpha1.ResourceClaim{},
+			func(name multicluster.ClusterName, _ cluster.Cluster) handler.TypedEventHandler[client.Object, mcreconcile.Request] {
+				return claimMapped(name, claimItself)
+			},
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(true)).
-		Named("resource-claim").
 		WithOptions(mccontroller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Complete(r)
 }
