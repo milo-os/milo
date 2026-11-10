@@ -1,0 +1,52 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: milo-quota-claim-waits
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: quota-system
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: milo.quota.claim-waits
+      interval: 30s
+      rules:
+        # A create of a quota-tracked resource waits in admission for its claim, holding one claim watch, for at
+        # most 30 s. Nothing in admission limits concurrent waits. Measured on kind (4 CPU, 4 GiB): one open wait
+        # costs 8 to 9 goroutines and 0.35 to 0.6 MB resident, linear from 100 to 1,000 waits; 300 creates released
+        # together held their waits cleanly, and 1,000 delayed an unrelated read by seconds. The threshold is a
+        # third of that clean 300, and far above what production holds.
+        - alert: MiloQuotaClaimWaitsHigh
+          expr: |
+            max by (pod) (milo_quota_admission_waiters_current) > 100
+          for: 10m
+          labels:
+            severity: warning
+            service: milo
+            team: platform
+          annotations:
+            summary: "Milo API server {{ $labels.pod }} has held more than 100 open quota claim waits for 10 minutes"
+            description: "This pod holds {{ $value | humanize }} open claim waits, and a wait normally ends in about a second. Claims are judged slowly, or a caller creates in bulk faster than they are judged."
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"
+
+        # A claim wait watches from its own create's version, so a 410 Gone means the claim cache no longer holds
+        # that version; the wait then reads its claim, at most three times. On kind, with every watch closing each
+        # 4 to 8 s, 345 waits made no such read. At least 5 reads in 15 minutes, and more than one per 100 waits,
+        # means 410s are not rare.
+        - alert: MiloQuotaClaimWaitGetsAfterGone
+          expr: |
+            (sum by (pod) (increase(milo_quota_admission_claim_wait_gets_after_gone_total[15m])) >= 5)
+            and
+            (
+              sum by (pod) (increase(milo_quota_admission_claim_wait_gets_after_gone_total[15m]))
+              > 0.01 * sum by (pod) (increase(milo_quota_admission_waiter_registrations_total[15m]))
+            )
+          labels:
+            severity: warning
+            service: milo
+            team: platform
+          annotations:
+            summary: "Quota claim waits on Milo API server {{ $labels.pod }} often meet 410 Gone"
+            description: "Claim waits on this pod read their claim after a 410 {{ $value | humanize }} times in 15 minutes: the claim cache lost the versions they watch from, for example after it started again."
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/quota-claim-waits.md"

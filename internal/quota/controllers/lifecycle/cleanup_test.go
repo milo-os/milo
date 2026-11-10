@@ -138,9 +138,29 @@ func TestDeniedAutoClaimCleanupController(t *testing.T) {
 		wantRequeue     bool
 	}{
 		{
-			name:        "denied auto-created claim is deleted",
-			claim:       autoClaim("denied", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-1*time.Minute)),
+			name:        "denied auto-created claim past its retention is deleted",
+			claim:       autoClaim("denied", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-2*time.Minute)),
 			wantDeleted: true,
+		},
+		{
+			// The CRD defaults the Granted condition with lastTransitionTime 1970,
+			// and Pending to Denied keeps it (status False both times), so
+			// retention must count from the claim's creation, not the condition.
+			name: "a recent denial carrying the CRD's default transition time is kept and requeued",
+			claim: func() *quotav1alpha1.ResourceClaim {
+				c := autoClaim("denied-default-time", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-10*time.Second))
+				c.Status.Conditions[0].LastTransitionTime = metav1.NewTime(time.Unix(0, 0).UTC())
+				return c
+			}(),
+			wantDeleted: false,
+			wantRequeue: true,
+		},
+		{
+			// A request still waiting on this claim reads its denial after a 410.
+			name:        "denied auto-created claim inside its retention is kept and requeued",
+			claim:       autoClaim("denied-recent", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, now.Add(-10*time.Second)),
+			wantDeleted: false,
+			wantRequeue: true,
 		},
 		{
 			name:            "stale pending auto-created claim is deleted",
@@ -214,5 +234,28 @@ func TestDeniedAutoClaimCleanupController(t *testing.T) {
 				t.Errorf("expected zero RequeueAfter for no-op, got %v", result.RequeueAfter)
 			}
 		})
+	}
+}
+
+// TestCleanupDeletesOnlyTheClaimItJudged checks that cleanup, acting on a
+// claim read from its cache, does not delete a newer claim a retry created
+// under the same name since: the newer claim belongs to a waiting request.
+func TestCleanupDeletesOnlyTheClaimItJudged(t *testing.T) {
+	scheme := testScheme(t)
+	judged := autoClaim("same-name", "default", "False", quotav1alpha1.ResourceClaimDeniedReason, time.Now().Add(-2*time.Minute))
+	judged.ResourceVersion = "1"
+	replacement := autoClaim("same-name", "default", "", "", time.Now())
+	replacement.UID = types.UID("replacement")
+	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(replacement).Build()
+
+	if err := deleteJudgedClaim(context.Background(), cli, judged, "denied"); err != nil {
+		t.Fatalf("deleting a claim that was replaced is not an error, got %v", err)
+	}
+	var got quotav1alpha1.ResourceClaim
+	if err := cli.Get(context.Background(), client.ObjectKey{Name: "same-name", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("the replacement claim was deleted: %v", err)
+	}
+	if got.UID != "replacement" {
+		t.Fatalf("want the replacement claim, got UID %q", got.UID)
 	}
 }

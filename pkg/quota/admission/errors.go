@@ -33,15 +33,16 @@ const (
 	// propagating, or a slow control plane.
 	claimFailureTimeout
 
-	// claimFailureConflict indicates a ResourceClaim with the deterministic
-	// name already exists in a non-usable state (e.g., a previously denied
-	// claim that has not yet been garbage collected). The caller should retry
-	// after the GC controller deletes the stale claim.
+	// claimFailureConflict indicates that another evaluation holds the
+	// claim's deterministic name: a pending claim younger than the abandonment
+	// window. The caller should retry.
 	claimFailureConflict
 
-	// claimFailureInternal covers template render failures, watch manager
-	// startup failures, dynamic client errors, and anything else that is not
-	// attributable to quota capacity.
+	// claimFailureInternal covers template render failures, a claim deleted
+	// or a watch failed while the request waited, a claim delete that failed
+	// for a reason other than a lost precondition, dynamic client errors, a
+	// caller's cancel, and anything else that is not attributable to quota
+	// capacity.
 	claimFailureInternal
 
 	// claimFailureMisconfigured indicates the ClaimCreationPolicy cannot enforce
@@ -50,6 +51,14 @@ const (
 	// request can't succeed until an operator corrects the policy, so it is kept
 	// distinct from transient internal errors (which advise "try again").
 	claimFailureMisconfigured
+
+	// claimFailureChanged indicates that the claim at the deterministic name
+	// changed between the plugin's read and its write: a delete lost its UID
+	// or resourceVersion precondition (409 Conflict), or a create found the
+	// name taken again (409 AlreadyExists). A concurrent request or the
+	// claim's controller made the change; no earlier attempt is being cleaned
+	// up. The caller should retry.
+	claimFailureChanged
 )
 
 // claimFailure is the structured error returned from the claim creation/wait
@@ -98,14 +107,20 @@ func newTimeoutFailure(cause error) *claimFailure {
 	return &claimFailure{kind: claimFailureTimeout, cause: cause}
 }
 
-// newConflictFailure constructs a claimFailure for a pre-existing claim that
-// blocks retry (typically a denied claim awaiting GC).
+// newConflictFailure constructs a claimFailure for a claim name that another
+// evaluation holds.
 func newConflictFailure(message string, cause error) *claimFailure {
 	return &claimFailure{kind: claimFailureConflict, message: message, cause: cause}
 }
 
+// newChangedFailure constructs a claimFailure for a claim that changed
+// between the plugin's read and its write.
+func newChangedFailure(cause error) *claimFailure {
+	return &claimFailure{kind: claimFailureChanged, cause: cause}
+}
+
 // newInternalFailure constructs a claimFailure for infrastructure errors
-// (template render, watch manager, dynamic client, etc).
+// (template render, claim wait, dynamic client, etc).
 func newInternalFailure(cause error) *claimFailure {
 	return &claimFailure{kind: claimFailureInternal, cause: cause}
 }

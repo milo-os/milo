@@ -78,25 +78,34 @@ The quota system uses an event-driven architecture with different watching patte
 - Policy controllers watch trigger resources dynamically based on policy specifications
 - All controllers use predicate filters to ignore irrelevant events
 
-**Admission Plugin - Stream-Based Watch Manager**:
+**Admission Plugin - One Watch per Waiting Create**:
 
-The admission plugin uses a **stream-based watch pattern** optimized for real-time, request-time enforcement:
+The admission plugin waits for each claim it creates on a watch of that one claim, and keeps no state between
+requests:
 
-- **Direct Watch Streams**: No SharedInformer or cache; connects directly to Kubernetes watch API
-- **Fast Startup**: Begins watching from "now" using `Limit=0` LIST (1-10ms startup vs 10-500ms for informers)
-- **Minimal Memory**: Only tracks active waiters (~10KB per waiter) instead of full claim cache (~1-10MB)
-- **TTL-based Lifecycle**: Watch managers automatically start when needed and stop after 5 minutes of inactivity
-- **Dynamic Per-Project Watches**: Creates separate watch manager for each project control plane
-- **Infinite Retry**: Exponential backoff with jitter (100ms → 30s) for transient failures; never gives up
-- **Bookmark Resumption**: Uses Kubernetes watch bookmarks to resume efficiently after disconnects
-- **410 Gone Handling**: Restarts from current time when resourceVersion expires
+- **Watch from the create's version**: The plugin creates the ResourceClaim, then watches it by name from the
+  resource version the create returned, with client-go's `watchtools.Until`. The watch cache accepts a version it
+  has not reached yet and sends only later events, so no grant or denial after the create is missed.
+- **One key**: The watch carries a `metadata.name` field selector, so the watch cache serves it from that claim's
+  key alone, and the watcher receives only that claim's events.
+- **410 Gone**: If the create's version has left the watch cache's window, the watch ends, and one GET decides: the
+  claim's outcome if it has one, or a new watch from the GET's version. At most three such rounds per wait.
+- **Restarts**: client-go's `RetryWatcher` restarts a failed watch at most once a second, honours a server's
+  Retry-After, and ends the wait on a 403 or 401.
+- **Lifetime**: A wait lasts at most the claim wait timeout (30 s by default) and ends with its request.
+- **Kept denials**: Cleanup keeps a denied auto-created claim for 60 s from its creation, twice the wait, so a wait that must re-read
+  its claim after a 410 still finds the denial and its reason. A retry of the same resource replaces a kept denied
+  claim.
 
-**Key Watch Manager Characteristics**:
+**Key Characteristics of the Claim Wait**:
 
-1. **Watch-Before-Claim Pattern**: Establishes watch stream before creating ResourceClaim, guaranteeing zero missed events
-2. **Deterministic Claim Naming**: Uses hash-based names allowing waiter pre-registration before claim exists
-3. **Stateless Operation**: No persistent cache; state is derived from active admission requests
-4. **Multi-Project Scalability**: O(active projects) instead of O(total projects) resource usage
+1. **Deterministic Claim Naming**: A policy's template names the claim, so a retry of the same resource meets the
+   claim of the previous attempt and resolves it (granted: admit; denied or stale pending: replace).
+2. **Stateless Operation**: No cache and no per-project manager; the only state is the open waits of admission
+   requests in flight.
+3. **Safe Deletes**: Every delete of one claim, by the plugin, cleanup or the ownership controller, carries the UID
+   and resourceVersion it judged, so it never removes a newer claim of the same name.
+4. **Scalability**: One short watch per waiting create, not one long watch per project
 
 **Shared Components**:
 - **ResourceTypeValidator**: Uses informers to maintain a cache of all registered resource types
@@ -396,22 +405,17 @@ sequenceDiagram
     Plugin->>Plugin: 10. Evaluate trigger conditions
     Note over Plugin: trigger.spec.type == "application"<br/>CEL expression returns true
 
-    Plugin->>Plugin: 11. Get/Create Watch Manager for project
-    Note over Plugin: Creates per-project watch manager with TTL<br/>Uses direct watch stream (not informer)<br/>Startup: 1-10ms with Limit=0 LIST
-
     Plugin->>TE: 12. Render ResourceClaim template
     TE-->>Plugin: Rendered claim spec
 
     Plugin->>Plugin: 13. Generate deterministic claim name
     Note over Plugin: Hash-based name: policy + resource GVK + name
 
-    Plugin->>Plugin: 14. Register waiter BEFORE creating claim
-    Note over Plugin: Watch-before-claim pattern prevents race<br/>Waiter registered, watch stream active
-
     Plugin->>API: 15. Create ResourceClaim with predetermined name
     Note over API: Stores ResourceClaim<br/>Consumer: acme-corp (resolved)<br/>Request: 1 project<br/>ResourceRef: web-app project
 
-    Note over Plugin: Watch manager receives events via direct watch stream<br/>Waiter already registered; guaranteed event delivery
+    Plugin->>API: 15b. Watch the claim by name from the create's resourceVersion
+    Note over Plugin: The watch cache sends every event after the create;<br/>a 410 ends the watch and one GET decides
 
     alt Claim Eventually Granted
         Note over Plugin: ResourceClaim status:<br/>Granted=True condition observed via watch
@@ -424,7 +428,7 @@ sequenceDiagram
         Note over Developer: "Insufficient quota resources available"
     end
 
-    Note over Plugin: After 5 minutes of no activity,<br/>watch manager automatically stops (TTL expiration)
+    Note over Plugin: The watch ends with the outcome or the request
 ```
 
 **Key Points:**
@@ -434,12 +438,10 @@ sequenceDiagram
   fast lookup
 - **Template context**: Claim templates access the triggering resource, user
   context, and request information
-- **Watch-before-claim pattern**: The system establishes the watch stream and
-  registers the waiter before claim creation, guaranteeing zero missed events
-- **Direct watch streams**: No informer or cache overhead; minimal memory
-  footprint and fast startup (1-10ms)
-- **TTL-based lifecycle**: Watch managers clean up after 5 minutes of inactivity,
-  scaling resources with active projects
+- **Watch from the create's version**: The plugin watches its claim from the
+  resource version the create returned, so no outcome after the create is missed
+- **No shared state**: Each wait holds one watch of one claim, for at most the
+  claim wait timeout, and ends with its request
 
 ### Resource Claiming Flow
 
@@ -616,62 +618,23 @@ The quota system exposes application-level Prometheus metrics that provide visib
   - Labels: `result` (granted|denied|policy_disabled), `policy_name`, `policy_namespace`, `resource_group`, `resource_kind`
   - Use case: Track quota enforcement patterns and denial rates per policy
 
-*Watch Manager Lifecycle*:
-- `milo_quota_admission_watch_managers_created_total`: Total watch managers created
-  - Use case: Track watch manager creation rate across all projects
-- `milo_quota_admission_watch_managers_stopped_total`: Total watch managers stopped
-  - Use case: Monitor watch manager lifecycle and TTL expiration
-- `milo_quota_admission_watch_managers_active`: Current number of active watch managers
-  - Use case: Track system-wide watch manager count (scales with active projects)
-
-*Watch Stream Health*:
-- `milo_quota_admission_watch_streams_desired`: Total number of watch managers (desired streams)
-  - Use case: Expected number of active watch connections
-- `milo_quota_admission_watch_streams_connected`: Currently connected watch streams
-  - Use case: Monitor watch stream health (should equal desired)
-- `milo_quota_admission_watch_restarts_total`: Watch stream restarts
-  - Labels: `status_code` (e.g., "410", "500", "unknown")
-  - Use case: Detect API server instability or resourceVersion expiration (410 Gone)
-- `milo_quota_admission_watch_restart_duration_seconds`: Time to restart watch streams (histogram)
-  - Buckets: [0.001, 0.01, 0.1, 0.5, 1, 2, 5, 10, 30, 60]
-  - Use case: Monitor watch recovery latency
-
-*Watch Stream Performance*:
-- `milo_quota_admission_watch_stream_lifetime_seconds`: Stream lifetime from connection to disconnect (histogram)
-  - Labels: `reason` (error|shutdown)
-  - Buckets: [1, 10, 30, 60, 300, 600, 1800, 3600, 7200, 14400, 28800, 86400]
-  - Use case: Calculate MTBF and detect flapping
-- `milo_quota_admission_watch_stream_max_uptime_seconds`: Maximum uptime across all streams (gauge)
-  - Use case: Monitor longest-running stream stability
-- `milo_quota_admission_watch_bookmark_max_age_seconds`: Maximum bookmark age (gauge)
-  - Use case: Detect bookmark staleness that could cause event loss on reconnect
-
-*Event Processing*:
-- `milo_quota_admission_watch_events_received_total`: Events received from watch streams
-  - Labels: `event_type` (Added|Modified|Deleted|Bookmark|Error)
-  - Use case: Monitor watch event volume and types
-- `milo_quota_admission_watch_events_processed_total`: Events processed by watch manager
-  - Labels: `result` (granted|denied|pending|ignored|error)
-  - Use case: Track claim processing outcomes
-
-*Waiter Management*:
-- `milo_quota_admission_waiter_registrations_total`: Total waiter registrations
+*Claim Waits*:
+- `milo_quota_admission_waiter_registrations_total`: Total claim waits started
   - Use case: Track admission request volume
-- `milo_quota_admission_waiter_completions_total`: Waiter completions by result
-  - Labels: `result` (granted|denied|timeout|deleted|unregistered)
+- `milo_quota_admission_waiter_completions_total`: Claim waits completed, by result
+  - Labels: `result` (granted|denied|timeout|deleted|watch_failed)
   - Use case: Track admission outcomes and timeout frequency
-- `milo_quota_admission_waiters_current`: Current number of active claim waiters (gauge)
+- `milo_quota_admission_waiters_current`: Current number of claim waits, each holding one claim watch (gauge)
   - Use case: Monitor concurrent admission request load
-- `milo_quota_admission_waiter_duration_seconds`: Waiter duration from registration to completion (histogram)
-  - Labels: `result` (granted|denied|timeout|deleted)
+- `milo_quota_admission_waiter_duration_seconds`: Duration of a claim wait, from the claim's create to its outcome (histogram)
+  - Labels: `result` (granted|denied|timeout|deleted|watch_failed)
   - Buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60]
   - Use case: Track admission latency by outcome
+- `milo_quota_admission_claim_wait_gets_after_gone_total`: Claim reads made because a wait's watch answered 410 Gone
+  - Use case: Track how often a claim's version leaves the watch cache's window during a wait
 
-*TTL Management*:
-- `milo_quota_admission_ttl_resets_total`: TTL countdown starts/resets
-  - Use case: Monitor watch manager activity patterns
-- `milo_quota_admission_ttl_expirations_total`: TTL expirations causing cleanup
-  - Use case: Track automatic watch manager garbage collection
+The claim watches themselves show in the API server's own `apiserver_longrunning_requests` and
+`apiserver_request_total` series, with `resource="resourceclaims"` and `verb="WATCH"`.
 
 *Policy Engine Performance*:
 - `milo_quota_policy_informer_events_total`: ClaimCreationPolicy events observed by shared informer
@@ -689,9 +652,9 @@ ensures metrics appear on the apiserver `/metrics` endpoint alongside standard
 Kubernetes metrics.
 
 **Implementation Locations**:
-- Admission Plugin: `internal/quota/admission/plugin.go`
-- Watch Manager: `internal/quota/admission/watch_manager.go`
-- Watch Metrics: `internal/quota/admission/watch_metrics.go`
+- Admission Plugin: `pkg/quota/admission/plugin.go`
+- Claim Wait: `pkg/quota/admission/claim_wait.go`
+- Claim Wait Metrics: `pkg/quota/admission/claim_wait_metrics.go`
 
 ### Monitoring and Alerting
 
@@ -708,27 +671,16 @@ queries for common operational scenarios.
 (milo_quota_bucket_allocated / milo_quota_bucket_limit) > 0.9
 ```
 
-*Watch Manager Health*:
+*Claim Wait Health*:
 ```promql
-# Watch stream connectivity (should be ~1.0)
-milo_quota_admission_watch_streams_connected / milo_quota_admission_watch_streams_desired
+# Claim watches refused while a claim cache starts (each delays a wait by its Retry-After)
+sum(rate(apiserver_request_total{resource="resourceclaims", verb="WATCH", code="429"}[5m]))
 
-# High watch restart rate indicating instability
-rate(milo_quota_admission_watch_restarts_total[5m]) > 0.1
+# Claim reads after a 410 (a claim's version left the watch cache's window during a wait)
+rate(milo_quota_admission_claim_wait_gets_after_gone_total[5m])
 
-# 410 Gone errors indicating resourceVersion expiration
-rate(milo_quota_admission_watch_restarts_total{status_code="410"}[5m])
-
-# Bookmark staleness (>5 minutes could cause event loss on restart)
-milo_quota_admission_watch_bookmark_max_age_seconds > 300
-
-# Watch manager churn (high TTL expiration rate)
-rate(milo_quota_admission_ttl_expirations_total[5m])
-
-# Watch stream flapping (short lifetimes indicating connection issues)
-histogram_quantile(0.50,
-  rate(milo_quota_admission_watch_stream_lifetime_seconds_bucket{reason="error"}[5m])
-) < 60
+# Waits that ended without an outcome other than a timeout
+rate(milo_quota_admission_waiter_completions_total{result=~"deleted|watch_failed"}[5m])
 ```
 
 *Admission Performance*:
@@ -768,9 +720,7 @@ milo_quota_claim_policy_status_condition{type="Ready", status="False"}
 
 **Dashboard Recommendations**:
 - **Quota Utilization**: Allocated vs limit per consumer, approaching capacity alerts
-- **Watch Manager Health**: Stream connectivity ratio, restart rates, TTL expiration trends
+- **Claim Wait Health**: Claim watches refused with 429, reads after a 410, waits ended as deleted or watch_failed
 - **Admission Latency**: Histograms by result type (granted/denied/timeout), p50/p95/p99 percentiles
-- **Watch Stream Stability**: Stream lifetime histograms, bookmark age, maximum uptime
-- **System Load**: Active waiter counts, active watch managers, policy cache size
+- **System Load**: Open claim waits, claim WATCH request rate, policy cache size
 - **Denial Analysis**: Denial rate trends with policy and resource type breakdowns
-- **Event Processing**: Watch event volume by type, processing outcomes
