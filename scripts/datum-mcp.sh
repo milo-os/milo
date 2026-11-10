@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tiny client for the Datum infra MCP gateway (staging).
-# Sources auth from infra/.mcp.json. Maintains a session in /tmp/datum-mcp.session.
+# Reads the staging API key from DATUM_MCP_API_KEY_STAGING. Maintains a session in /tmp/datum-mcp.session.
 #
 # Usage:
 #   ./datum-mcp.sh tools                                # list available tools
@@ -11,10 +11,13 @@
 set -euo pipefail
 
 ENDPOINT="https://mcp.staging.env.datum.net"
-APIKEY="datum-is-the-future"
 SESSION_FILE="/tmp/datum-mcp.session"
+DOCS_URL="https://github.com/datum-cloud/infra/blob/main/docs/mcp-servers.md"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+APIKEY="${DATUM_MCP_API_KEY_STAGING:-}"
+[[ -n "$APIKEY" ]] || die "DATUM_MCP_API_KEY_STAGING is not set. See $DOCS_URL for how to fetch the staging key."
 
 new_session() {
   local resp headers session
