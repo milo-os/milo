@@ -53,7 +53,7 @@ func newClaimChildren() *claimChildren {
 func (c *claimChildren) storage(cfg *storagebackend.ConfigForResource, _ string, _ func(runtime.Object) (string, error),
 	_ func() runtime.Object, _ func() runtime.Object, _ storage.AttrFunc, _ storage.IndexerFuncs,
 	_ *cache.Indexers) (storage.Interface, factory.DestroyFunc, error) {
-	project := path.Base(cfg.Config.Prefix) // "/projects/<name>"; the root plane's prefix is empty
+	project := path.Base(cfg.Prefix) // "/projects/<name>"; the root plane's prefix is empty
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.built[project]++
