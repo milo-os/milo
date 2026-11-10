@@ -17,7 +17,8 @@ import (
 	projectstorage "go.miloapis.com/milo/internal/apiserver/storage/project"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1" // ← add / keep this
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema" // ← add / keep this
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -28,6 +29,7 @@ import (
 	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/notfoundhandler"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
@@ -92,6 +94,8 @@ var (
 	sharedETCDClientPoolSize             int
 	projectNamespaceBootstrapTimeout     time.Duration
 	watchCacheConsistencyCheckPeriod     time.Duration
+	claimCacheReadiness                  bool
+	claimCacheReadinessBatch             int
 )
 
 // defaultWatchCacheConsistencyCheckPeriod is longer than upstream's 5 minutes because Milo keeps one watch cache per
@@ -221,6 +225,8 @@ func NewCommand() *cobra.Command {
 	fs.StringSliceVar(&eventsForwardExtras, "events-forward-extras", []string{"iam.miloapis.com/parent-api-group", "iam.miloapis.com/parent-type", "iam.miloapis.com/parent-name"}, "User extras keys to forward to Activity for events")
 	fs.IntVar(&sharedETCDClientPoolSize, "shared-etcd-client-pool-size", 32, "Number of etcd client connections opened per transport and round-robined across all project control plane watch caches. Higher values spread watch progress traffic across more gRPC streams at the cost of more connections. Minimum 1.")
 	fs.DurationVar(&projectNamespaceBootstrapTimeout, "project-namespace-bootstrap-timeout", projectstorage.DefaultNamespaceBootstrapTimeout, "Maximum time to wait for the milo-system namespace to be ensured in a project control plane on first use. Requests for that project wait at most this long; other projects are never blocked.")
+	fs.BoolVar(&claimCacheReadiness, "quota-claim-cache-readiness", true, "Hold a starting server out of traffic until every Project's ResourceClaim storage serves, within --storage-initialization-timeout. Quota admission waits for a claim on a watch through this server, so a cold claim cache refuses it. Off: the server goes ready with those caches cold.")
+	fs.IntVar(&claimCacheReadinessBatch, "quota-claim-cache-readiness-batch", 50, "Project ResourceClaim storages built per readiness check at the server's start; the check runs every 100 ms. Minimum 1.")
 	fs.DurationVar(&watchCacheConsistencyCheckPeriod, "watch-cache-consistency-check-period", defaultWatchCacheConsistencyCheckPeriod, "How often each watch cache compares itself with etcd when the DetectCacheInconsistency feature gate is on, with up to half again as jitter. Each check lists the cache's resource from etcd. Must be positive.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
@@ -395,6 +401,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	if err != nil {
 		return nil, fmt.Errorf("failed to create datum controlplane apiserver: %w", err)
 	}
+	registerClaimCacheReadiness(nativeAPIs.GenericAPIServer.StorageReadinessHook, config)
 
 	nativeAPIs.GenericAPIServer.AddPostStartHookOrDie("milo-discovery-policy-registry", func(hookCtx genericapiserver.PostStartHookContext) error {
 		go func() {
@@ -463,4 +470,32 @@ func bootstrapCRDsHook(hookCtx genericapiserver.PostStartHookContext, loopbackCo
 
 	logger.Info("CRD bootstrap completed successfully")
 	return nil
+}
+
+// claimsGVR is the resource quota admission waits on, through loopback.
+var claimsGVR = schema.GroupVersionResource{Group: "quota.miloapis.com", Version: "v1alpha1", Resource: "resourceclaims"}
+
+// registerClaimCacheReadiness holds the starting server out of traffic, through
+// the server's storage readiness hook, until every Project's claim storage
+// serves: a claim wait watches its claim through this server, so a cold claim
+// cache refuses it.
+func registerClaimCacheReadiness(hook projectstorage.ReadinessRegistrar, config CompletedConfig) {
+	check := projectstorage.NewChildrenReadiness(claimsGVR.GroupResource(), config.ProjectStates,
+		rootList(config.ControlPlane.Generic.LoopbackClientConfig, claimsGVR), max(1, claimCacheReadinessBatch))
+	projectstorage.RegisterChildrenReadiness(hook, claimCacheReadiness,
+		metav1.GroupVersionResource{Group: claimsGVR.Group, Version: claimsGVR.Version, Resource: claimsGVR.Resource}, check)
+}
+
+// rootList lists gvr on the root through loopback: the request that makes
+// apiextensions build a definition's storage. It answers 404 until the
+// definition is served.
+func rootList(cfg *rest.Config, gvr schema.GroupVersionResource) func() error {
+	return func() error {
+		client, err := dynamic.NewForConfig(cfg)
+		if err != nil {
+			return err
+		}
+		_, err = client.Resource(gvr).List(context.Background(), metav1.ListOptions{Limit: 1})
+		return err
+	}
 }
