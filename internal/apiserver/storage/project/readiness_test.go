@@ -16,10 +16,10 @@ import (
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
-	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/component-base/metrics/testutil"
 )
 
 var claimsGR = schema.GroupResource{Group: "quota.miloapis.com", Resource: "resourceclaims"}
