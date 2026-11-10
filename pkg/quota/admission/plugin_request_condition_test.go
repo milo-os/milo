@@ -136,7 +136,7 @@ func TestRequestConditionAdmission(t *testing.T) {
 				config:         DefaultAdmissionPluginConfig(),
 				logger:         logger.WithName("plugin"),
 			}
-			plugin.watchManagers.Store("", &testWatchManager{behavior: "grant"})
+			plugin.awaitClaim = decidedBy("grant")
 
 			attrs := &testAdmissionAttributes{
 				operation: admission.Create,

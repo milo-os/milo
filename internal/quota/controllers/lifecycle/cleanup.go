@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,9 +32,10 @@ const DefaultStalePendingClaimAge = quota.DefaultStalePendingClaimAge
 // DeniedAutoClaimCleanupController automatically deletes ResourceClaims that
 // were created by the admission plugin and are no longer useful:
 //
-//   - Denied claims (Granted=False, reason=QuotaExceeded) - removed
-//     immediately so the next admission attempt for the same resource can
-//     Create a fresh claim.
+//   - Denied claims (Granted=False, reason=QuotaExceeded) - kept for
+//     DeniedClaimRetention from the claim's creation, then removed. A request still
+//     waiting on the claim reads its denial if its watch answers 410 Gone;
+//     a retry of the same resource replaces the kept claim itself.
 //   - Stale pending claims (no final Granted condition, older than
 //     StalePendingClaimAge) - removed so leftover claims from admission
 //     timeouts cannot permanently block retries via AlreadyExists.
@@ -47,6 +49,10 @@ type DeniedAutoClaimCleanupController struct {
 	// StalePendingClaimAge is the minimum age before a Pending claim is
 	// considered abandoned. Zero means use DefaultStalePendingClaimAge.
 	StalePendingClaimAge time.Duration
+
+	// DeniedClaimRetention is how long a denied claim is kept, from its
+	// creation. Zero means use quota.DefaultDeniedClaimRetention.
+	DeniedClaimRetention time.Duration
 
 	logger logr.Logger
 	now    func() time.Time
@@ -102,19 +108,16 @@ func (r *DeniedAutoClaimCleanupController) Reconcile(ctx context.Context, req mc
 		return ctrl.Result{}, nil
 	}
 
-	// Denied claims are removed immediately.
+	// Denied claims are kept for the retention window, then removed.
 	if r.isClaimDenied(&claim) {
+		if left := r.deniedRetentionLeft(&claim); left > 0 {
+			return ctrl.Result{RequeueAfter: left}, nil
+		}
 		logger.Info("Deleting denied auto-created ResourceClaim",
 			"policy", claim.Labels["quota.miloapis.com/policy"],
 			"resourceName", claim.Annotations["quota.miloapis.com/resource-name"],
 			"denialReason", r.getClaimDenialReason(&claim))
-
-		if err := clusterClient.Delete(ctx, &claim); err != nil {
-			logger.Error(err, "Failed to delete denied auto-created ResourceClaim")
-			return ctrl.Result{}, fmt.Errorf("failed to delete denied auto-created ResourceClaim: %w", err)
-		}
-		logger.V(1).Info("Successfully deleted denied auto-created ResourceClaim")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, deleteJudgedClaim(ctx, clusterClient, &claim, "denied")
 	}
 
 	// Stale pending claims (no final condition, older than the threshold) are
@@ -134,16 +137,45 @@ func (r *DeniedAutoClaimCleanupController) Reconcile(ctx context.Context, req mc
 			"resourceName", claim.Annotations["quota.miloapis.com/resource-name"],
 			"age", age)
 
-		if err := clusterClient.Delete(ctx, &claim); err != nil {
-			logger.Error(err, "Failed to delete stale pending auto-created ResourceClaim")
-			return ctrl.Result{}, fmt.Errorf("failed to delete stale pending auto-created ResourceClaim: %w", err)
-		}
-		logger.V(1).Info("Successfully deleted stale pending auto-created ResourceClaim")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, deleteJudgedClaim(ctx, clusterClient, &claim, "stale pending")
 	}
 
 	logger.V(3).Info("Skipping granted claim")
 	return ctrl.Result{}, nil
+}
+
+// deleteJudgedClaim deletes the claim this reconcile judged, and only that
+// claim: identity and version preconditions. A retry may have replaced it
+// under the same name since the cache was read, and the replacement is a
+// fresh claim of a waiting request; it gets its own reconcile. A claim that
+// is gone or replaced is not an error.
+func deleteJudgedClaim(ctx context.Context, c client.Client, claim *quotav1alpha1.ResourceClaim, kind string) error {
+	logger := log.FromContext(ctx)
+	err := c.Delete(ctx, claim, client.Preconditions{UID: &claim.UID, ResourceVersion: &claim.ResourceVersion})
+	switch {
+	case apierrors.IsNotFound(err) || apierrors.IsConflict(err):
+		logger.V(1).Info("Auto-created ResourceClaim already gone or replaced", "kind", kind)
+		return nil
+	case err != nil:
+		logger.Error(err, "Failed to delete auto-created ResourceClaim", "kind", kind)
+		return fmt.Errorf("failed to delete %s auto-created ResourceClaim: %w", kind, err)
+	}
+	logger.V(1).Info("Deleted auto-created ResourceClaim", "kind", kind)
+	return nil
+}
+
+// deniedRetentionLeft returns how much longer a denied claim is kept: the
+// retention window from the claim's creation, less the time since. It counts
+// from creation because the wait it serves does: the creating request waits
+// at most the claim wait timeout from the create. The Granted condition's
+// lastTransitionTime cannot tell the denial's time: the CRD defaults it to
+// 1970, and Pending to Denied keeps it, since the status stays False.
+func (r *DeniedAutoClaimCleanupController) deniedRetentionLeft(claim *quotav1alpha1.ResourceClaim) time.Duration {
+	retention := r.DeniedClaimRetention
+	if retention <= 0 {
+		retention = quota.DefaultDeniedClaimRetention
+	}
+	return retention - r.now().Sub(claim.CreationTimestamp.Time)
 }
 
 // stalePendingAge returns the configured stale-pending threshold, falling

@@ -195,7 +195,7 @@ func (r *ResourceClaimOwnershipController) Reconcile(ctx context.Context, req mc
 		maxAge := r.getOrphanMaxAge()
 		if claimAge > maxAge {
 			logger.Info("Deleting orphaned ResourceClaim after max age", "claim", claim.Name, "age", claimAge, "maxAge", maxAge)
-			return ctrl.Result{}, clusterClient.Delete(ctx, &claim)
+			return ctrl.Result{}, deleteJudgedClaim(ctx, clusterClient, &claim, "orphaned")
 		}
 
 		// Not beyond max age; requeue to check later

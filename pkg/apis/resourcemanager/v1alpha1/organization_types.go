@@ -74,6 +74,8 @@ type OrganizationEmailDomainJoining struct {
 	// "example.com". An address matches only its exact domain, so
 	// "example.com" does not match "eu.example.com". A Domain in one of the
 	// organization's projects must verify each domain or a parent of it.
+	// Public email providers where anyone can get an address, such as
+	// gmail.com, aren't allowed.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
