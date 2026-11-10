@@ -2,10 +2,14 @@ package projectstorage
 
 import (
 	"context"
+	"io"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,21 +23,62 @@ import (
 	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 )
 
-// The premise of the readiness check (storage/DESIGN.md §3, V40's "what would
-// make it wrong"): when a child built outside a request reports ready through
-// its own ReadinessCheck, a watch from a create's version is served, not
-// refused with 429, and it delivers the next change, as a claim wait needs.
-// Real storage: Milo's shared-client cacher over envtest's etcd.
-func TestAChildThatReportsReadyServesAWatchFromACreatesVersion(t *testing.T) {
+// coldWindow is how long the test holds etcd while a child's cache starts:
+// long enough for many readiness polls, short of the client's keepalive.
+const coldWindow = time.Second
+
+// The premise of the readiness check: a child's ReadinessCheck passes only
+// when its cache serves. While etcd cannot answer the cache's first list, the
+// check fails and a watch is refused with 429. Once the check passes, a watch
+// from a create's version is served and delivers the next change, as a claim
+// wait needs. Real storage: Milo's shared-client cacher over envtest's etcd.
+func TestAChildsCheckPassesOnlyWhenItsCacheServes(t *testing.T) {
 	env := &envtest.Environment{}
 	if _, err := env.Start(); err != nil {
 		t.Fatalf("start envtest: %v", err)
 	}
 	t.Cleanup(func() { _ = env.Stop() })
 
-	child := configMapChild(t, env.ControlPlane.Etcd.URL.String(), "p1")
-	waitReady(t, child)
+	etcd := forwardEtcd(t, env.ControlPlane.Etcd.URL.Host)
+	mux := configMapMux(t, "http://"+etcd.addr)
+	etcd.hold()
+	child, err := mux.childForProject("p1")
+	if err != nil {
+		t.Fatalf("build project p1's child: %v", err)
+	}
+	assertColdWhileHeld(t, child)
+	etcd.release()
 
+	waitReady(t, child)
+	assertWatchDeliversTheNextChange(t, child)
+}
+
+// assertColdWhileHeld checks, for the whole cold window, that the child does
+// not report ready and that a watch on it is refused with 429.
+func assertColdWhileHeld(t *testing.T, child storage.Interface) {
+	t.Helper()
+	polls := 0
+	for end := time.Now().Add(coldWindow); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if child.ReadinessCheck() == nil {
+			t.Fatalf("the child reported ready after %d polls while etcd could not answer its list", polls)
+		}
+		polls++
+	}
+	w, err := child.Watch(context.Background(), "/configmaps/default/c1",
+		storage.ListOptions{Predicate: storage.Everything})
+	if err == nil {
+		w.Stop()
+		t.Fatal("a watch on a child whose cache cannot list was served")
+	}
+	if !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("want a watch on a cold child refused with 429, got %v", err)
+	}
+}
+
+// assertWatchDeliversTheNextChange creates an object, watches it from the
+// create's version, updates it, and checks the watch delivers the update.
+func assertWatchDeliversTheNextChange(t *testing.T, child storage.Interface) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	created := &corev1.ConfigMap{}
@@ -58,19 +103,14 @@ func TestAChildThatReportsReadyServesAWatchFromACreatesVersion(t *testing.T) {
 	}
 }
 
-// configMapChild builds a ConfigMap storage through the project decorator over
-// Milo's shared-client cacher, and the named project's child in-process, as
-// the readiness check builds it.
-func configMapChild(t *testing.T, etcdURL, project string) storage.Interface {
+// configMapMux builds a ConfigMap storage through the project decorator over
+// Milo's shared-client cacher, as the server builds a resource's storage.
+func configMapMux(t *testing.T, etcdURL string) *projectMux {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	cfg := storagebackend.NewDefaultConfig("", serializer.NewCodecFactory(scheme).LegacyCodec(corev1.SchemeGroupVersion))
+	cfg := storagebackend.NewDefaultConfig("", configMapCodec(t))
 	cfg.Transport.ServerList = []string{etcdURL}
 	gr := schema.GroupResource{Resource: "configmaps"}
-	keyFunc := func(obj runtime.Object) (string, error) { return storage.NamespaceKeyFunc("/configmaps", obj) }
+	keyFunc := func(obj runtime.Object) (string, error) { return storage.NamespaceKeyFunc("/configmaps/", obj) }
 	s, destroy, err := ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), everyProjectKnown(), nil, testDrain)(
 		cfg.ForResource(gr), "/configmaps", keyFunc,
 		func() runtime.Object { return &corev1.ConfigMap{} }, func() runtime.Object { return &corev1.ConfigMapList{} },
@@ -79,11 +119,22 @@ func configMapChild(t *testing.T, etcdURL, project string) storage.Interface {
 		t.Fatalf("build the storage: %v", err)
 	}
 	t.Cleanup(destroy)
-	child, err := s.(*projectMux).childForProject(project)
-	if err != nil {
-		t.Fatalf("build project %s's child: %v", project, err)
+	return s.(*projectMux)
+}
+
+// configMapCodec decodes to v1, not to the internal version LegacyCodec
+// targets: this scheme registers no internal types, so every decode in a
+// watch would fail.
+func configMapCodec(t *testing.T) runtime.Codec {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
 	}
-	return child
+	codecs := serializer.NewCodecFactory(scheme)
+	json, _ := runtime.SerializerInfoForMediaType(codecs.SupportedMediaTypes(), runtime.ContentTypeJSON)
+	return codecs.CodecForVersions(json.Serializer, codecs.UniversalDeserializer(),
+		corev1.SchemeGroupVersion, corev1.SchemeGroupVersion)
 }
 
 func waitReady(t *testing.T, child storage.Interface) {
@@ -107,4 +158,78 @@ func update(ctx context.Context, t *testing.T, child storage.Interface) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
+}
+
+// heldEtcd forwards TCP connections to etcd and can hold every byte in both
+// directions: etcd made slow at will, so a cache that starts while it holds
+// cannot finish its first list.
+type heldEtcd struct {
+	addr string
+	mu   sync.Mutex
+	held chan struct{} // non-nil while held; closed on release
+}
+
+func forwardEtcd(t *testing.T, target string) *heldEtcd {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &heldEtcd{addr: l.Addr().String()}
+	t.Cleanup(func() { h.release(); _ = l.Close() })
+	go func() {
+		for {
+			in, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go h.pipe(in, target)
+		}
+	}()
+	return h
+}
+
+func (h *heldEtcd) pipe(in net.Conn, target string) {
+	out, err := net.Dial("tcp", target)
+	if err != nil {
+		_ = in.Close()
+		return
+	}
+	go func() { _, _ = io.Copy(heldWriter{out, h}, in); _ = out.Close() }()
+	_, _ = io.Copy(heldWriter{in, h}, out)
+	_ = in.Close()
+}
+
+func (h *heldEtcd) hold() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.held = make(chan struct{})
+}
+
+func (h *heldEtcd) release() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.held != nil {
+		close(h.held)
+		h.held = nil
+	}
+}
+
+func (h *heldEtcd) wait() {
+	h.mu.Lock()
+	held := h.held
+	h.mu.Unlock()
+	if held != nil {
+		<-held
+	}
+}
+
+type heldWriter struct {
+	w io.Writer
+	h *heldEtcd
+}
+
+func (hw heldWriter) Write(p []byte) (int, error) {
+	hw.h.wait()
+	return hw.w.Write(p)
 }
