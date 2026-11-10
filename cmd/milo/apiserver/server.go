@@ -18,7 +18,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema" // ← add / keep this
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -486,6 +486,11 @@ func registerClaimCacheReadiness(hook projectstorage.ReadinessRegistrar, config 
 		metav1.GroupVersionResource{Group: claimsGVR.Group, Version: claimsGVR.Version, Resource: claimsGVR.Resource}, check)
 }
 
+// rootListTimeout bounds the root list: the readiness check runs under the
+// storage readiness hook's lock, and a list that hung there would hold every
+// registered check. The check asks again at most once a second.
+const rootListTimeout = 5 * time.Second
+
 // rootList lists gvr on the root through loopback: the request that makes
 // apiextensions build a definition's storage. It answers 404 until the
 // definition is served.
@@ -495,7 +500,9 @@ func rootList(cfg *rest.Config, gvr schema.GroupVersionResource) func() error {
 		if err != nil {
 			return err
 		}
-		_, err = client.Resource(gvr).List(context.Background(), metav1.ListOptions{Limit: 1})
+		ctx, cancel := context.WithTimeout(context.Background(), rootListTimeout)
+		defer cancel()
+		_, err = client.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
 		return err
 	}
 }

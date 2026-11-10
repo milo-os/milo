@@ -16,6 +16,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
+	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	"k8s.io/client-go/tools/cache"
@@ -44,11 +45,14 @@ type claimChildren struct {
 	mu    sync.Mutex
 	built map[string]int
 	cold  map[string]bool
+	fails map[string]int // builds still to fail, per project
 }
 
 func newClaimChildren() *claimChildren {
-	return &claimChildren{built: map[string]int{}, cold: map[string]bool{}}
+	return &claimChildren{built: map[string]int{}, cold: map[string]bool{}, fails: map[string]int{}}
 }
+
+var errInjectedBuild = errors.New("injected build failure")
 
 func (c *claimChildren) storage(cfg *storagebackend.ConfigForResource, _ string, _ func(runtime.Object) (string, error),
 	_ func() runtime.Object, _ func() runtime.Object, _ storage.AttrFunc, _ storage.IndexerFuncs,
@@ -56,6 +60,10 @@ func (c *claimChildren) storage(cfg *storagebackend.ConfigForResource, _ string,
 	project := path.Base(cfg.Prefix) // "/projects/<name>"; the root plane's prefix is empty
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.fails[project] > 0 {
+		c.fails[project]--
+		return nil, nil, errInjectedBuild
+	}
 	c.built[project]++
 	return readinessStorage{c: c, project: project}, func() {}, nil
 }
@@ -148,6 +156,54 @@ func TestReadinessNamesAColdProjectUntilItServes(t *testing.T) {
 	c.setCold("p2", false)
 	if err := r.ReadinessCheck(); err != nil {
 		t.Fatalf("every child serves: want ready, got %v", err)
+	}
+}
+
+// A child whose build fails is named with its error, not read as a slow
+// cache, and the next call builds it again.
+func TestReadinessNamesAChildBuildThatFails(t *testing.T) {
+	c := newClaimChildren()
+	c.fails["p2"] = 2
+	buildClaims(t, c)
+	r := NewChildrenReadiness(claimsGR, &view{synced: true, names: []string{"p1", "p2", "p3"}}, served, 50)
+	for i := 0; i < 2; i++ {
+		err := r.ReadinessCheck()
+		wantReason(t, err, "building the storage of project p2")
+		if !errors.Is(err, errInjectedBuild) {
+			t.Fatalf("call %d: want the build's own error carried, got %v", i+1, err)
+		}
+	}
+	if err := r.ReadinessCheck(); err != nil {
+		t.Fatalf("the third build succeeds: want ready, got %v", err)
+	}
+	if n := c.builtFor("p2"); n != 1 {
+		t.Fatalf("project p2: %d children built, want 1", n)
+	}
+}
+
+// The gauge reports what the check last read: one cold child, then none.
+func TestReadinessGaugeCountsColdAndReadyChildren(t *testing.T) {
+	c := newClaimChildren()
+	c.setCold("p2", true)
+	buildClaims(t, c)
+	r := NewChildrenReadiness(claimsGR, &view{synced: true, names: []string{"p1", "p2", "p3"}}, served, 50)
+	_ = r.ReadinessCheck()
+	wantGauge(t, "ready", 2)
+	wantGauge(t, "cold", 1)
+	c.setCold("p2", false)
+	_ = r.ReadinessCheck()
+	wantGauge(t, "ready", 3)
+	wantGauge(t, "cold", 0)
+}
+
+func wantGauge(t *testing.T, state string, want float64) {
+	t.Helper()
+	got, err := testutil.GetGaugeMetricValue(readinessChildren.WithLabelValues(claimsGR.Group, claimsGR.Resource, state))
+	if err != nil {
+		t.Fatalf("read the readiness gauge: %v", err)
+	}
+	if got != want {
+		t.Fatalf("children %s: gauge %v, want %v", state, got, want)
 	}
 }
 

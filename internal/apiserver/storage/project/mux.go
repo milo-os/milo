@@ -2,6 +2,7 @@ package projectstorage
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"strings"
 	"sync"
@@ -359,19 +360,27 @@ func (m *projectMux) destroyAll() {
 }
 
 // buildChildren builds the missing children of the named Projects, at most n
-// of them, as a request into each would.
-func (m *projectMux) buildChildren(names []string, n int) {
+// of them, as a request into each would. It returns the first build that
+// failed, so the readiness check can say a build failed rather than a cache
+// being slow; the next call tries that Project again.
+func (m *projectMux) buildChildren(names []string, n int) error {
+	var failed error
 	for _, name := range names {
 		if n == 0 {
-			return
+			break
 		}
 		if m.hasChild(name) {
 			continue
 		}
-		if _, err := m.childForProject(name); err == nil {
-			n--
+		if _, err := m.childForProject(name); err != nil {
+			if failed == nil {
+				failed = fmt.Errorf("building the storage of project %s: %w", name, err)
+			}
+			continue
 		}
+		n--
 	}
+	return failed
 }
 
 func (m *projectMux) hasChild(name string) bool {

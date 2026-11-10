@@ -36,6 +36,12 @@ var muxes = struct {
 func registerMux(gr schema.GroupResource, m *projectMux) {
 	muxes.Lock()
 	defer muxes.Unlock()
+	// apiextensions builds one storage per served version, under one
+	// GroupResource: a second would gate only its own version's children.
+	if old := muxes.byResource[gr]; old != nil && old != m {
+		klog.ErrorS(nil, "A second storage registered for a resource's readiness check; the check now reads the last",
+			"resource", gr.String())
+	}
 	muxes.byResource[gr] = m
 }
 
@@ -100,10 +106,14 @@ func (r *ChildrenReadiness) check() error {
 		return r.record("resource", r.askServed())
 	}
 	names := r.view.Names()
-	m.buildChildren(names, r.batch)
+	failed := m.buildChildren(names, r.batch)
 	cold := m.unready(names)
 	readinessChildren.WithLabelValues(r.gr.Group, r.gr.Resource, "ready").Set(float64(len(names) - len(cold)))
 	readinessChildren.WithLabelValues(r.gr.Group, r.gr.Resource, "cold").Set(float64(len(cold)))
+	if len(cold) > 0 && failed != nil {
+		return r.record("build", fmt.Errorf("%d of %d %s storages do not serve yet: %w",
+			len(cold), len(names), r.gr, failed))
+	}
 	if len(cold) > 0 {
 		return r.record("children", fmt.Errorf("%d of %d %s storages do not serve yet, the first in project %s",
 			len(cold), len(names), r.gr, cold[0]))
