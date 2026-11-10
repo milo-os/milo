@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/go-logr/logr"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -177,6 +179,14 @@ func (r *ResourceClaimController) updateOverallClaimCondition(ctx context.Contex
 	return nil
 }
 
+// claimControllerLogger keeps the controller's log lines as For gave them: the
+// builder adds controllerGroup and controllerKind only for a For type.
+func claimControllerLogger(base logr.Logger) func(*mcreconcile.Request) logr.Logger {
+	log := base.WithValues("controller", "resource-claim",
+		"controllerGroup", quotav1alpha1.GroupVersion.Group, "controllerKind", "ResourceClaim")
+	return func(*mcreconcile.Request) logr.Logger { return log }
+}
+
 // SetupWithManager sets up the controller with the Manager.
 // Watches ResourceClaims across all control planes (core and project control planes);
 // an undecided claim goes ahead of other work, since a create waits on it.
@@ -189,6 +199,7 @@ func (r *ResourceClaimController) SetupWithManager(mgr mcmanager.Manager) error 
 			},
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(true)).
+		WithLogConstructor(claimControllerLogger(mgr.GetLogger())).
 		WithOptions(mccontroller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		Complete(r)
 }

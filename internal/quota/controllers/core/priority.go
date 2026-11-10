@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -82,8 +81,10 @@ func queueFor(obj client.Object, q workqueue.TypedRateLimitingInterface[mcreconc
 
 // withPriority adds every item at its priority or higher. It differs from
 // controller-runtime's own default-priority queue, which fills in a missing
-// priority only: an undecided claim from the initial list, which a handler
-// marks low, must still go ahead.
+// priority only: an undecided claim from the initial list, or a resync of it,
+// which the map handler marks low, must still go ahead. The map handler adds
+// through Add and AddWithOpts only; a retry goes to the controller's own
+// queue at the priority its item was taken with.
 type withPriority struct {
 	priorityqueue.PriorityQueue[mcreconcile.Request]
 	priority int
@@ -91,14 +92,6 @@ type withPriority struct {
 
 func (w withPriority) Add(item mcreconcile.Request) {
 	w.AddWithOpts(priorityqueue.AddOpts{}, item)
-}
-
-func (w withPriority) AddAfter(item mcreconcile.Request, after time.Duration) {
-	w.AddWithOpts(priorityqueue.AddOpts{After: after}, item)
-}
-
-func (w withPriority) AddRateLimited(item mcreconcile.Request) {
-	w.AddWithOpts(priorityqueue.AddOpts{RateLimited: true}, item)
 }
 
 func (w withPriority) AddWithOpts(o priorityqueue.AddOpts, items ...mcreconcile.Request) {

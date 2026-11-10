@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -149,7 +150,9 @@ func TestAReplayedUndecidedClaimGoesAhead(t *testing.T) {
 }
 
 // A claim stuck undecided keeps its priority on a retry, but each retry waits out its backoff, so it cannot starve
-// the queue: the controller re-adds a failed item rate-limited at the priority it was taken with.
+// the queue. This pins controller-runtime's rule, not ours: its controller re-adds a failed item rate-limited at the
+// priority it was taken with (internal/controller/controller.go, reconcileHandler), and the priority queue holds a
+// rate-limited item until its backoff ends.
 func TestAStuckClaimsRetryWaitsOutItsBackoff(t *testing.T) {
 	q := priorityqueue.New[mcreconcile.Request]("test", func(o *priorityqueue.Opts[mcreconcile.Request]) {
 		o.RateLimiter = workqueue.NewTypedItemExponentialFailureRateLimiter[mcreconcile.Request](time.Hour, time.Hour)
@@ -223,4 +226,16 @@ func TestAClaimDecidedByTheUpdateAddsAtDefault(t *testing.T) {
 
 	_, priority := next(t, q)
 	assert.Equal(t, 0, priority)
+}
+
+// The resource-claim controller's log lines keep the controller group and kind that For gave them.
+func TestTheClaimControllerLogsItsGroupAndKind(t *testing.T) {
+	var line string
+	base := funcr.New(func(prefix, args string) { line = args }, funcr.Options{})
+	claimControllerLogger(base)(&mcreconcile.Request{}).Info("reconciling")
+
+	for _, want := range []string{`"controller"="resource-claim"`, `"controllerGroup"="quota.miloapis.com"`,
+		`"controllerKind"="ResourceClaim"`} {
+		assert.Contains(t, line, want)
+	}
 }
