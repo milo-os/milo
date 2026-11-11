@@ -295,16 +295,16 @@ rules:
 - apiGroups:
   - resourcemanager.miloapis.com
   resources:
-  - organizationmemberships
+  - organizationdomains
+  - projectsuspensions
   verbs:
-  - create
-  - delete
   - get
   - list
   - watch
 - apiGroups:
   - resourcemanager.miloapis.com
   resources:
+  - organizationdomains/status
   - organizationmemberships/status
   - organizations/status
   - projects/status
@@ -312,6 +312,16 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - resourcemanager.miloapis.com
+  resources:
+  - organizationmemberships
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
 - apiGroups:
   - resourcemanager.miloapis.com
   resources:
@@ -339,12 +349,4 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - resourcemanager.miloapis.com
-  resources:
-  - projectsuspensions
-  verbs:
-  - get
-  - list
   - watch

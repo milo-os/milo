@@ -7,6 +7,8 @@ metadata:
     kubernetes.io/description: View access to organizations and projects
 spec:
   launchStage: Beta
+  inheritedRoles:
+    - name: organizationdomain-reader
   includedPermissions:
     # Read-only permissions for ResourceManager resources
     - resourcemanager.miloapis.com/organizations.get

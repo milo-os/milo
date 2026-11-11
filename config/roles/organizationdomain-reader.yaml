@@ -1,0 +1,14 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: organizationdomain-reader
+  annotations:
+    kubernetes.io/display-name: Organization Domain Reader
+    kubernetes.io/description: "View an organization's domains and their verification records"
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - resourcemanager.miloapis.com/organizationdomains.get
+    - resourcemanager.miloapis.com/organizationdomains/status.get
+    - resourcemanager.miloapis.com/organizationdomains.list
+    - resourcemanager.miloapis.com/organizationdomains.watch

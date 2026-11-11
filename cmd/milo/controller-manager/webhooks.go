@@ -94,6 +94,9 @@ func registerCoreControlPlaneWebhooksWithoutNotes(mgr controllerruntime.Manager)
 	if err := resourcemanagerv1alpha1webhook.SetupOrganizationMembershipWebhooksWithManager(mgr, OrganizationOwnerRoleName, OrganizationOwnerRoleNamespace); err != nil {
 		return fmt.Errorf("setting up organizationmembership webhook: %w", err)
 	}
+	if err := resourcemanagerv1alpha1webhook.SetupOrganizationDomainWebhooksWithManager(mgr); err != nil {
+		return fmt.Errorf("setting up organizationdomain webhook: %w", err)
+	}
 	if err := iamv1alpha1webhook.SetupUserWebhooksWithManager(mgr, SystemNamespace, "iam-user-self-manage"); err != nil {
 		return fmt.Errorf("setting up user webhook: %w", err)
 	}

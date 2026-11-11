@@ -1,0 +1,27 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: resourcemanager.miloapis.com-organizationdomain
+spec:
+  serviceRef:
+    name: "resourcemanager.miloapis.com"
+  kind: OrganizationDomain
+  plural: organizationdomains
+  singular: organizationdomain
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
+  permissions:
+    - list
+    - get
+    - create
+    - update
+    - delete
+    - patch
+    - watch
+  parentResources:
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Organization

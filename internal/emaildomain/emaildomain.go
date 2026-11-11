@@ -77,10 +77,10 @@ func Covers(verified []string, emailDomain string) bool {
 // Instructions tells an owner how to verify the given email domains.
 func Instructions(domains []string) string {
 	return fmt.Sprintf(
-		"no project in this organization has a verified Domain for %s. "+
-			"Add the domain as a Domain in any project in this organization, "+
-			"verify it with the DNS TXT record or HTTP token shown on that Domain, "+
-			"and turn on email domain joining once the Domain shows as Verified",
+		"this organization hasn't verified %s. "+
+			"Add the domain to the organization's domains and add the DNS TXT record it shows, "+
+			"or verify it as a Domain in one of the organization's projects, "+
+			"then turn on email domain joining once the domain shows as Verified",
 		strings.Join(domains, ", "),
 	)
 }
@@ -126,12 +126,17 @@ func NewProjectDomainLister(base *rest.Config) DomainLister {
 	}
 }
 
-// VerifiedDomains returns the names of the verified Domains in the
-// organization's ready projects. A project without the Domain API has none.
-// A project that cannot be read is skipped, and its error is returned only
-// when no verified Domain was found, so one broken project can't hide another
-// project's verified Domain.
+// VerifiedDomains returns the names of the organization's verified
+// OrganizationDomains and of the verified Domains in its ready projects.
+// A project without the Domain API has none. A project that cannot be read is
+// skipped, and its error is returned only when no verified domain was found,
+// so one broken project can't hide another verified domain.
 func (v *Verifier) VerifiedDomains(ctx context.Context, organization string) ([]string, error) {
+	verified, err := v.verifiedOrganizationDomains(ctx, organization)
+	if err != nil {
+		return nil, err
+	}
+
 	var projects resourcemanagerv1alpha1.ProjectList
 	if err := v.Client.List(ctx, &projects, client.MatchingLabels{
 		resourcemanagerv1alpha1.OrganizationNameLabel: organization,
@@ -139,7 +144,6 @@ func (v *Verifier) VerifiedDomains(ctx context.Context, organization string) ([]
 		return nil, fmt.Errorf("list projects of organization %q: %w", organization, err)
 	}
 
-	var verified []string
 	var errs []error
 	for i := range projects.Items {
 		project := &projects.Items[i]
@@ -170,6 +174,31 @@ func (v *Verifier) VerifiedDomains(ctx context.Context, organization string) ([]
 
 	if len(verified) == 0 && len(errs) > 0 {
 		return nil, errors.Join(errs...)
+	}
+	return verified, nil
+}
+
+// verifiedOrganizationDomains returns the names of the organization's
+// verified OrganizationDomains.
+func (v *Verifier) verifiedOrganizationDomains(ctx context.Context, organization string) ([]string, error) {
+	var domains resourcemanagerv1alpha1.OrganizationDomainList
+	if err := v.Client.List(ctx, &domains,
+		client.InNamespace(resourcemanagerv1alpha1.OrganizationNamespace(organization)),
+	); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list OrganizationDomains of organization %q: %w", organization, err)
+	}
+
+	var verified []string
+	for i := range domains.Items {
+		d := &domains.Items[i]
+		if d.DeletionTimestamp != nil ||
+			!meta.IsStatusConditionTrue(d.Status.Conditions, resourcemanagerv1alpha1.OrganizationDomainConditionVerified) {
+			continue
+		}
+		verified = append(verified, strings.ToLower(d.Spec.DomainName))
 	}
 	return verified, nil
 }
