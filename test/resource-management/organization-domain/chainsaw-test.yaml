@@ -1,0 +1,223 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: organization-domain
+spec:
+  description: |
+    Tests OrganizationDomain end to end: an organization proving it controls a
+    domain without adding it to one of its projects, and email domain joining
+    accepting a domain verified that way.
+
+    The domain-manager steps run as test-user through the organization's
+    control plane, so the webhook sees the organization's parent context the
+    way an owner's request would. Setup and verification run as the admin.
+
+    This test verifies:
+    - The webhook rejects public email providers, public suffixes, and an
+      OrganizationDomain that isn't named after its domain.
+    - The controller publishes a TXT record to add and reports that the domain
+      isn't verified yet.
+    - spec.domainName can't be changed.
+    - Email domain joining rejects the domain while it's unverified.
+    - Once the domain is verified, email domain joining accepts it and offers
+      membership to a user at the domain, but not to a user elsewhere.
+    - Removing the domain pauses joining and withdraws the pending offer.
+
+    CI can't publish a real DNS record, so the admin marks the domain verified
+    through the status subresource. The controller never checks a verified
+    domain again, so it keeps that status. Unit tests cover finding the record.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    orgUser:
+      kubeconfig: kubeconfig-org-user
+
+  steps:
+    - name: setup-organization
+      description: Create the organization, wait for its namespace, and let test-user manage its domains
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-od-acme
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+        - apply:
+            file: 02-rbac-domain-manager.yaml
+
+    - name: reject-domains-an-organization-cannot-own
+      description: The webhook rejects a public email provider, a public suffix, and a name that isn't the domain
+      cluster: orgUser
+      try:
+        - create:
+            file: domain-public-provider.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'gmail.com is a public email provider')): true
+        - create:
+            file: domain-public-suffix.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'co.uk is a public suffix')): true
+        - create:
+            file: domain-wrong-name.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'name it od-acme.example.com')): true
+
+    - name: add-domain-and-publish-record
+      description: Adding a domain publishes the TXT record to add, and the domain stays unverified until it exists
+      cluster: orgUser
+      try:
+        - create:
+            file: domain-acme.yaml
+        - assert:
+            timeout: 60s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: OrganizationDomain
+              metadata:
+                name: od-acme.example.com
+                namespace: organization-od-acme
+              status:
+                verification:
+                  dnsRecord:
+                    name: _milo-verification.od-acme.example.com
+                    type: TXT
+                    (length(content)): 32
+                (conditions[?type == 'Verified']):
+                  - status: 'False'
+                    (contains(['RecordNotFound', 'LookupFailed'], reason)): true
+
+    - name: domain-name-is-immutable
+      description: Changing spec.domainName is rejected
+      cluster: orgUser
+      try:
+        - patch:
+            file: domain-acme-renamed.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'domainName is immutable')): true
+
+    - name: joining-rejects-unverified-domain
+      description: Email domain joining rejects a domain the organization hasn't verified
+      cluster: main
+      try:
+        - apply:
+            file: 03-organization-joining.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'verified od-acme.example.com')): true
+
+    - name: mark-domain-verified
+      description: Stand in for DNS by marking the domain verified through the status subresource
+      cluster: main
+      try:
+        - script:
+            content: |
+              kubectl --kubeconfig kubeconfig-main patch organizationdomain od-acme.example.com \
+                -n organization-od-acme --subresource=status --type=merge \
+                -p '{"status":{"verification":null,"conditions":[{"type":"Verified","status":"True","reason":"Verified","message":"Marked verified by the e2e test","lastTransitionTime":"2026-01-01T00:00:00Z"}]}}'
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: OrganizationDomain
+              metadata:
+                name: od-acme.example.com
+                namespace: organization-od-acme
+              status:
+                (conditions[?type == 'Verified']):
+                  - status: 'True'
+
+    - name: joining-accepts-verified-domain
+      description: Email domain joining accepts the verified domain and reports it as verified
+      cluster: main
+      try:
+        - apply:
+            file: 03-organization-joining.yaml
+        - assert:
+            timeout: 60s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              metadata:
+                name: od-acme
+              status:
+                (conditions[?type == 'EmailDomainsVerified']):
+                  - status: 'True'
+                    reason: Verified
+
+    - name: offer-membership-at-the-domain
+      description: A user at the domain gets an offer; a user elsewhere doesn't
+      cluster: main
+      try:
+        - apply:
+            file: 04-users.yaml
+        - assert:
+            timeout: 60s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: UserInvitation
+              metadata:
+                name: email-domain-od-acme-person
+                namespace: organization-od-acme
+                labels:
+                  iam.miloapis.com/join-method: EmailDomain
+                  iam.miloapis.com/email-domain: od-acme.example.com
+              spec:
+                email: person@od-acme.example.com
+                organizationRef:
+                  name: od-acme
+                state: Pending
+        - error:
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: UserInvitation
+              metadata:
+                name: email-domain-od-outsider
+                namespace: organization-od-acme
+
+    - name: remove-domain-withdraws-offer
+      description: Removing the domain pauses joining and withdraws the pending offer
+      cluster: orgUser
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: OrganizationDomain
+              name: od-acme.example.com
+              namespace: organization-od-acme
+        - assert:
+            cluster: main
+            timeout: 60s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Organization
+              metadata:
+                name: od-acme
+              status:
+                (conditions[?type == 'EmailDomainsVerified']):
+                  - status: 'False'
+                    reason: DomainNotVerified
+        - error:
+            cluster: main
+            timeout: 60s
+            resource:
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: UserInvitation
+              metadata:
+                name: email-domain-od-acme-person
+                namespace: organization-od-acme

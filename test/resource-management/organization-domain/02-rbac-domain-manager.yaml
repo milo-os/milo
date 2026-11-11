@@ -1,0 +1,28 @@
+# Lets test-user (system:authenticated, NOT system:masters) manage
+# OrganizationDomains through the organization's control plane, so the webhook
+# sees the organization's parent context the way an owner's request would.
+# This test environment authorizes with Kubernetes RBAC rather than Milo's IAM
+# roles, so it doesn't exercise which IAM roles grant these permissions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: organization-domain-manager
+  namespace: organization-od-acme
+rules:
+  - apiGroups: ["resourcemanager.miloapis.com"]
+    resources: ["organizationdomains"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: organization-domain-manager
+  namespace: organization-od-acme
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: organization-domain-manager
+  apiGroup: rbac.authorization.k8s.io

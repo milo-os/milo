@@ -1,0 +1,7 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: OrganizationDomain
+metadata:
+  name: company-domain
+  namespace: organization-od-acme
+spec:
+  domainName: od-acme.example.com
