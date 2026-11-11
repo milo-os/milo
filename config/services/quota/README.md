@@ -29,7 +29,7 @@ The quota system exports comprehensive metrics for monitoring quota usage and sy
 
 Metrics fall into two categories:
 
-**Operational Metrics**: Status conditions, generation lag, policy enablement, controller health
+**Operational Metrics**: Status conditions, generation lag, controller health
 **Business Metrics**: Quota limits/usage, capacity, allocation counts
 
 ### Exported Metrics
@@ -45,12 +45,6 @@ Metrics fall into two categories:
 - `milo_quota_bucket_observed_generation` - Observed generation
 - `milo_quota_bucket_current_generation` - Current generation
 
-#### ResourceRegistration
-- `milo_quota_registration_info` - Registration information
-- `milo_quota_registration_status_condition` - Status conditions (condition, reason, status labels)
-- `milo_quota_registration_observed_generation` - Observed generation
-- `milo_quota_registration_current_generation` - Current generation
-
 #### ResourceGrant
 - `milo_quota_grant_info` - Grant information
 - `milo_quota_grant_status_condition` - Status conditions (condition, reason, status labels)
@@ -63,19 +57,9 @@ Metrics fall into two categories:
 - `milo_quota_claim_observed_generation` - Observed generation
 - `milo_quota_claim_current_generation` - Current generation
 
-#### ClaimCreationPolicy
-- `milo_quota_claim_policy_info` - Policy information
-- `milo_quota_claim_policy_status_condition` - Status conditions (condition, reason, status labels)
-- `milo_quota_claim_policy_enabled` - Policy enabled status (1 = enabled, 0 = disabled)
-- `milo_quota_claim_policy_observed_generation` - Observed generation
-- `milo_quota_claim_policy_current_generation` - Current generation
-
-#### GrantCreationPolicy
-- `milo_quota_grant_policy_info` - Policy information
-- `milo_quota_grant_policy_status_condition` - Status conditions (condition, reason, status labels)
-- `milo_quota_grant_policy_enabled` - Policy enabled status (1 = enabled, 0 = disabled)
-- `milo_quota_grant_policy_observed_generation` - Observed generation
-- `milo_quota_grant_policy_current_generation` - Current generation
+The cluster-scoped quota resources (ResourceRegistration, ClaimCreationPolicy and GrantCreationPolicy) live on the root
+control plane. The resource metrics collector reads project control planes, and the root control plane only with
+`collectRootControlPlane` on, so this policy does not cover them.
 
 ### Metric Labels
 
@@ -88,18 +72,14 @@ when the status is True.
 **Info series** (`*_info`) alone carry each resource's identity and spec. To group another family by them, join on
 `name` (and `namespace`):
 - `uid` - every info series
-- `consumer_api_group`, `consumer_kind` - buckets, claims, grants and registrations; `consumer_name` - buckets, claims and grants
-- `resource_type` - buckets and registrations
+- `consumer_api_group`, `consumer_kind`, `consumer_name` - buckets, claims and grants
+- `resource_type` - buckets
 - `triggering_resource_api_group`, `triggering_resource_kind`, `triggering_resource_name`, `triggering_resource_namespace` - claims
-- `registration_type`, `base_unit`, `display_unit`, `description`, `unit_conversion_factor` - registrations
-- `target_api_version`, `target_kind`, `enabled` - claim creation policies
-- `trigger_api_version`, `trigger_kind`, `enabled`, `parent_context_api_group`, `parent_context_kind` - grant creation policies
 
 ### Monitoring
 
 **Recommended Alerts**:
 - Low quota: `milo_quota_bucket_available / milo_quota_bucket_limit < 0.2`
-- Policy failures: `milo_quota_*_policy_status_condition{condition="Ready", status="False"}`
 - High generation lag: `milo_quota_*_current_generation - milo_quota_*_observed_generation > 5`
 
 **Alerts**: Located in `config/telemetry/alerts/quota/`, deployed to the infrastructure cluster.
