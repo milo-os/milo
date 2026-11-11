@@ -2,6 +2,7 @@ package projectstorage
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
@@ -97,6 +99,16 @@ var (
 		[]string{"resource_group", "resource_kind"},
 	)
 
+	readinessChildren = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Name: "projectstorage_readiness_children",
+			Help: "Child storages of the Projects in the view, by resource type and by whether they serve, as the " +
+				"readiness check at the server's start last read them",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+		[]string{"resource_group", "resource_kind", "state"},
+	)
+
 	reinitErrors = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "projectstorage_reinitializing_errors_total",
@@ -109,7 +121,7 @@ var (
 
 func init() {
 	k8slegacy.MustRegister(childCreations, firstReady, childLockHold, namespaceBootstrapDuration,
-		unknownProjectWritesRefused, unknownProjectReadsRefused, childRemovals, reinitErrors)
+		unknownProjectWritesRefused, unknownProjectReadsRefused, childRemovals, reinitErrors, readinessChildren)
 }
 
 func isReinitErr(err error) bool {
@@ -333,6 +345,7 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 }
 
 func (m *projectMux) destroyAll() {
+	forgetMux(schema.GroupResource{Group: m.args.resourceGroup, Resource: m.args.resourceKind}, m)
 	if m.removeListener != nil {
 		m.removeListener()
 	}
@@ -344,6 +357,51 @@ func (m *projectMux) destroyAll() {
 		}
 		delete(m.children, k)
 	}
+}
+
+// buildChildren builds the missing children of the named Projects, at most n
+// of them, as a request into each would. It returns the first build that
+// failed, so the readiness check can say a build failed rather than a cache
+// being slow; the next call tries that Project again.
+func (m *projectMux) buildChildren(names []string, n int) error {
+	var failed error
+	for _, name := range names {
+		if n == 0 {
+			break
+		}
+		if m.hasChild(name) {
+			continue
+		}
+		if _, err := m.childForProject(name); err != nil {
+			if failed == nil {
+				failed = fmt.Errorf("building the storage of project %s: %w", name, err)
+			}
+			continue
+		}
+		n--
+	}
+	return failed
+}
+
+func (m *projectMux) hasChild(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.children[name]
+	return ok
+}
+
+// unready returns the named Projects whose child is missing or does not serve:
+// its own ReadinessCheck, the cacher's ready state that a watch is gated on.
+func (m *projectMux) unready(names []string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var cold []string
+	for _, name := range names {
+		if c, ok := m.children[name]; !ok || c.s.ReadinessCheck() != nil {
+			cold = append(cold, name)
+		}
+	}
+	return cold
 }
 
 // ProjectGone removes the named Project's child, so the next request into the
