@@ -114,7 +114,10 @@ func (r *AllowanceBucketController) Reconcile(ctx context.Context, req mcreconci
 	if result, err := r.updateStatusIfChanged(ctx, clusterClient, &bucket, originalStatus); err != nil {
 		return result, err
 	}
-	return ctrl.Result{RequeueAfter: wait.Jitter(bucketRecheckInterval, bucketRecheckJitter)}, nil
+	return ctrl.Result{
+		RequeueAfter: wait.Jitter(bucketRecheckInterval, bucketRecheckJitter),
+		Priority:     ptr.To(ordinaryPriority),
+	}, nil
 }
 
 // updateLimitsFromGrants calculates total quota limits from active ResourceGrants.

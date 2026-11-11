@@ -26,8 +26,15 @@ import (
 // past admission's claim wait.
 const undecidedClaimPriority = 100
 
+// ordinaryPriority is the priority of work no waiting create depends on. A
+// requeue keeps the priority its item was taken at, so work that comes back
+// on its own sets this; otherwise a bucket an undecided claim once raised
+// would come back ahead of other work for as long as this leader runs.
+const ordinaryPriority = 0
+
 // claimUndecided reports whether a create may still be waiting on the claim:
-// it has no Granted condition, or Granted=False for a reason other than Denied.
+// it has no Granted condition, or Granted=False for a reason other than
+// QuotaExceeded, the denial.
 // Admission's wait reads the condition the same way.
 func claimUndecided(claim *quotav1alpha1.ResourceClaim) bool {
 	cond := apimeta.FindStatusCondition(claim.Status.Conditions, quotav1alpha1.ResourceClaimGranted)
