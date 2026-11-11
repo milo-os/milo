@@ -40,16 +40,12 @@ spec:
       </head>
       <body>
         <div class="container">
-          <div class="header">
-            <h1>Welcome to {{.CompanyName}}!</h1>
-          </div>
-          
-          <p>Hello {{.UserName}},</p>
-          
-          <p>We're excited to have you join {{.CompanyName}}. To get started, please click the button below to activate your account:</p>
-          
+          <p>Hi {{.GivenName}}!</p>
+
+          <p>{{.inviteer.GivenName}} has invited you to join "{{.CompanyName}}" organization to collaborate with them. Use the button below to set up your account and get started:<p>
+        
           <div style="text-align: center;">
-            <a href="{{.InviteLink}}" class="button">Activate Your Account</a>
+            <a href="{{.InviteLink}}" class="button">Accept invitation</a>
           </div>
           
           <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
@@ -59,17 +55,15 @@ spec:
           
           <div class="footer">
             <p>This is an automated message, please do not reply to this email.</p>
-            <p>&copy; {{.CompanyName}}. All rights reserved.</p>
+            <p>&copy; Datum. All rights reserved.</p>
           </div>
         </div>
       </body>
     </html>
   textBody: |
-    Welcome to {{.CompanyName}}!
+    Hi {{.GivenName}}!
     
-    Hello {{.UserName}},
-    
-    We're excited to have you join {{.CompanyName}}. To get started, please visit the following link to activate your account:
+    {{.inviteer.GivenName}} has invited you to join "{{.CompanyName}}" organization to collaborate with them. Use the button below to set up your account and get started:
     
     {{.InviteLink}}
     
@@ -77,7 +71,7 @@ spec:
     
     Note: This is an automated message, please do not reply to this email.
     
-    © {{.CompanyName}}. All rights reserved.
+    © Datum. All rights reserved.
   variables:
   - name: "UserName"
     required: true
