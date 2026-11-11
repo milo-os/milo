@@ -1,0 +1,14 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-workload-identity-issuers-viewer
+  annotations:
+    kubernetes.io/display-name: IAM Workload Identity Issuers Viewer
+    kubernetes.io/description: "Allows viewing workload identity issuers and their verified key sets."
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - iam.miloapis.com/workloadidentityissuers.get
+    - iam.miloapis.com/workloadidentityissuers/status.get
+    - iam.miloapis.com/workloadidentityissuers.list
+    - iam.miloapis.com/workloadidentityissuers.watch

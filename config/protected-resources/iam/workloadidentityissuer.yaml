@@ -1,0 +1,30 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ProtectedResource
+metadata:
+  name: iam.miloapis.com-workloadidentityissuer
+spec:
+  serviceRef:
+    name: "iam.miloapis.com"
+  kind: WorkloadIdentityIssuer
+  plural: workloadidentityissuers
+  singular: workloadidentityissuer
+  # Status holds the verified key set consumers trust, so it is authorized on
+  # its own: every role may read it, and only the controller that verifies
+  # key sets writes it.
+  subresources:
+    - name: status
+      permissions:
+        - get
+        - update
+        - patch
+  permissions:
+    - list
+    - get
+    - create
+    - update
+    - delete
+    - patch
+    - watch
+  parentResources:
+    - apiGroup: resourcemanager.miloapis.com
+      kind: Project

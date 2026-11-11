@@ -16,4 +16,5 @@ resources:
   - platformaccessrejection.yaml
   - platforminvitation.yaml
   - serviceaccount.yaml
+  - workloadidentityissuer.yaml
 
