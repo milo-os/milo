@@ -1,0 +1,10 @@
+# An organization proves it controls acme.com. Milo publishes the TXT record to
+# add in status.verification.dnsRecord and sets the Verified condition once it
+# finds the record.
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: OrganizationDomain
+metadata:
+  name: acme.com
+  namespace: organization-acme-corp
+spec:
+  domainName: acme.com

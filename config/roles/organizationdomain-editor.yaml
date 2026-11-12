@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: organizationdomain-editor
+  annotations:
+    kubernetes.io/display-name: Organization Domain Editor
+    kubernetes.io/description: "Add and remove an organization's domains"
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: organizationdomain-reader
+  includedPermissions:
+    - resourcemanager.miloapis.com/organizationdomains.create
+    - resourcemanager.miloapis.com/organizationdomains.update
+    - resourcemanager.miloapis.com/organizationdomains.patch
+    - resourcemanager.miloapis.com/organizationdomains.delete

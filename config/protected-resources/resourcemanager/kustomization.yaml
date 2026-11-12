@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - organization.yaml
+  - organizationdomain.yaml
   - organizationmembership.yaml
   - project.yaml
   - projectsuspension.yaml

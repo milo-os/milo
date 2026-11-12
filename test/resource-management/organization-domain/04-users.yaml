@@ -1,0 +1,21 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: od-acme-person
+  labels:
+    test.miloapis.com/scenario: "organization-domain"
+spec:
+  email: person@od-acme.example.com
+  givenName: Person
+  familyName: Acme
+---
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: od-outsider
+  labels:
+    test.miloapis.com/scenario: "organization-domain"
+spec:
+  email: outsider@od-elsewhere.example.org
+  givenName: Outsider
+  familyName: Elsewhere

@@ -141,6 +141,23 @@ func TestVerifiedDomains(t *testing.T) {
 			want:     []string{"example.com"},
 		},
 		{
+			name: "includes the organization's verified OrganizationDomains",
+			projects: []client.Object{
+				organizationDomain("acme.com", "organization-org", metav1.ConditionTrue),
+				organizationDomain("pending.com", "organization-org", metav1.ConditionFalse),
+				organizationDomain("theirs.com", "organization-other", metav1.ConditionTrue),
+				project("p1", "org", true),
+			},
+			domains: map[string][]unstructured.Unstructured{"p1": {domain("example.com", metav1.ConditionTrue)}},
+			want:    []string{"acme.com", "example.com"},
+		},
+		{
+			name:     "a verified OrganizationDomain doesn't depend on any project being readable",
+			projects: []client.Object{organizationDomain("acme.com", "organization-org", metav1.ConditionTrue), project("broken", "org", true)},
+			failures: map[string]error{"broken": errors.New("connection refused")},
+			want:     []string{"acme.com"},
+		},
+		{
 			name:     "an unreadable project is an error when nothing is verified",
 			projects: []client.Object{project("broken", "org", true)},
 			failures: map[string]error{"broken": errors.New("connection refused")},
@@ -166,5 +183,18 @@ func TestVerifiedDomains(t *testing.T) {
 				t.Errorf("VerifiedDomains = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func organizationDomain(name, namespace string, verified metav1.ConditionStatus) *resourcemanagerv1alpha1.OrganizationDomain {
+	return &resourcemanagerv1alpha1.OrganizationDomain{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec:       resourcemanagerv1alpha1.OrganizationDomainSpec{DomainName: name},
+		Status: resourcemanagerv1alpha1.OrganizationDomainStatus{
+			Conditions: []metav1.Condition{{
+				Type:   resourcemanagerv1alpha1.OrganizationDomainConditionVerified,
+				Status: verified,
+			}},
+		},
 	}
 }

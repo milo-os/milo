@@ -37,8 +37,9 @@ const (
 
 // EmailDomainJoiningController offers membership of an organization to every
 // User at one of its spec.emailDomainJoining domains, as UserInvitations
-// labelled emaildomain.JoinMethodLabel. It offers only domains that a
-// verified Domain in one of the organization's projects covers, reports that
+// labelled emaildomain.JoinMethodLabel. It offers only domains that one of
+// the organization's verified OrganizationDomains, or a verified Domain in one
+// of its projects, covers, reports that
 // in the EmailDomainsVerified condition, and removes pending offers for
 // domains that are no longer listed or verified.
 //
@@ -59,6 +60,7 @@ type EmailDomainJoiningController struct {
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=get;list;watch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationdomains,verbs=get;list;watch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=users,verbs=get;list;watch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=userinvitations,verbs=get;list;watch;create;delete
 
@@ -270,6 +272,11 @@ func (r *EmailDomainJoiningController) SetupWithManager(mgr ctrl.Manager) error 
 			handler.EnqueueRequestsFromMapFunc(r.findOrganizationsForUser),
 			builder.WithPredicates(userEmailChangedPredicate),
 		).
+		Watches(
+			&resourcemanagerv1alpha1.OrganizationDomain{},
+			handler.EnqueueRequestsFromMapFunc(organizationForDomain),
+			builder.WithPredicates(organizationDomainVerifiedChangedPredicate),
+		).
 		Named("emaildomainjoining").
 		Complete(r)
 }
@@ -296,6 +303,34 @@ func (r *EmailDomainJoiningController) findOrganizationsForUser(ctx context.Cont
 		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{Name: org.Name}})
 	}
 	return requests
+}
+
+// organizationForDomain enqueues the organization whose namespace holds the
+// OrganizationDomain.
+func organizationForDomain(_ context.Context, obj client.Object) []reconcile.Request {
+	org, ok := strings.CutPrefix(obj.GetNamespace(), "organization-")
+	if !ok || org == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{Name: org}}}
+}
+
+// organizationDomainVerifiedChangedPredicate passes OrganizationDomains that
+// are created or deleted, or whose Verified condition changed.
+var organizationDomainVerifiedChangedPredicate = predicate.Funcs{
+	CreateFunc: func(e event.CreateEvent) bool { return true },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldDomain, okOld := e.ObjectOld.(*resourcemanagerv1alpha1.OrganizationDomain)
+		newDomain, okNew := e.ObjectNew.(*resourcemanagerv1alpha1.OrganizationDomain)
+		if !okOld || !okNew {
+			return false
+		}
+		return meta.IsStatusConditionTrue(oldDomain.Status.Conditions, resourcemanagerv1alpha1.OrganizationDomainConditionVerified) !=
+			meta.IsStatusConditionTrue(newDomain.Status.Conditions, resourcemanagerv1alpha1.OrganizationDomainConditionVerified) ||
+			(oldDomain.DeletionTimestamp == nil) != (newDomain.DeletionTimestamp == nil)
+	},
+	DeleteFunc:  func(e event.DeleteEvent) bool { return true },
+	GenericFunc: func(e event.GenericEvent) bool { return false },
 }
 
 // userEmailChangedPredicate passes new Users and Users whose email changed.

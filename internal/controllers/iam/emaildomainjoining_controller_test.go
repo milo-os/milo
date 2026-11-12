@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"go.miloapis.com/milo/internal/emaildomain"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
@@ -297,5 +298,47 @@ func TestEmailDomainJoiningController_GateOff(t *testing.T) {
 	}
 	if len(listOffers(t, c)) != 0 {
 		t.Error("offer created with the feature gate off")
+	}
+}
+
+func TestOrganizationForDomain(t *testing.T) {
+	for namespace, want := range map[string]string{
+		"organization-acme": "acme",
+		"organization-":     "",
+		"default":           "",
+	} {
+		domain := &resourcemanagerv1alpha1.OrganizationDomain{ObjectMeta: metav1.ObjectMeta{Name: "acme.com", Namespace: namespace}}
+		requests := organizationForDomain(context.Background(), domain)
+		got := ""
+		if len(requests) == 1 {
+			got = requests[0].Name
+		}
+		if got != want || len(requests) > 1 {
+			t.Errorf("organizationForDomain(%q) = %v, want %q", namespace, requests, want)
+		}
+	}
+}
+
+func TestOrganizationDomainVerifiedChangedPredicate(t *testing.T) {
+	domain := func(verified metav1.ConditionStatus) *resourcemanagerv1alpha1.OrganizationDomain {
+		return &resourcemanagerv1alpha1.OrganizationDomain{
+			Status: resourcemanagerv1alpha1.OrganizationDomainStatus{Conditions: []metav1.Condition{{
+				Type:   resourcemanagerv1alpha1.OrganizationDomainConditionVerified,
+				Status: verified,
+			}}},
+		}
+	}
+	if !organizationDomainVerifiedChangedPredicate.Update(event.UpdateEvent{
+		ObjectOld: domain(metav1.ConditionFalse), ObjectNew: domain(metav1.ConditionTrue),
+	}) {
+		t.Error("a domain becoming verified should reconcile its organization")
+	}
+	if organizationDomainVerifiedChangedPredicate.Update(event.UpdateEvent{
+		ObjectOld: domain(metav1.ConditionFalse), ObjectNew: domain(metav1.ConditionFalse),
+	}) {
+		t.Error("another failed lookup shouldn't reconcile the organization")
+	}
+	if !organizationDomainVerifiedChangedPredicate.Delete(event.DeleteEvent{Object: domain(metav1.ConditionTrue)}) {
+		t.Error("removing a domain should reconcile its organization")
 	}
 }

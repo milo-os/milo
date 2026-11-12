@@ -2,3 +2,4 @@ resources:
 - resourcemanager.miloapis.com_organizations.yaml
 - resourcemanager.miloapis.com_projects.yaml
 - resourcemanager.miloapis.com_organizationmemberships.yaml
+- resourcemanager.miloapis.com_organizationdomains.yaml

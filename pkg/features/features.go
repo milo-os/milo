@@ -93,9 +93,11 @@ const (
 	MemberJoinedEmails featuregate.Feature = "MemberJoinedEmails"
 
 	// EmailDomainJoining lets organization owners offer membership to everyone
-	// at an email domain that a Domain in one of the organization's projects
-	// verifies (Organization spec.emailDomainJoining). Offers are
-	// UserInvitations, and accepting one requires a verified email address.
+	// at an email domain the organization has verified, either as an
+	// OrganizationDomain or as a Domain in one of its projects (Organization
+	// spec.emailDomainJoining). Offers are UserInvitations, and accepting one
+	// requires a verified email address. The gate also turns on verifying
+	// OrganizationDomains.
 	//
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0

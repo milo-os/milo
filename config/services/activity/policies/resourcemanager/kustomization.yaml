@@ -15,4 +15,5 @@ resources:
   - organization-policy.yaml
   - project-policy.yaml
   - organizationmembership-policy.yaml
+  - organizationdomain-policy.yaml
   - projectsuspension-policy.yaml

@@ -1,0 +1,16 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: od-acme
+  labels:
+    test.miloapis.com/scenario: "organization-domain"
+  annotations:
+    kubernetes.io/display-name: "Organization Domain Test Organization"
+spec:
+  type: Standard
+  emailDomainJoining:
+    domains:
+      - od-acme.example.com
+    roles:
+      - name: resourcemanager.miloapis.com-organization-viewer
+        namespace: milo-system

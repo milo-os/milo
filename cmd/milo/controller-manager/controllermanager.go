@@ -143,6 +143,9 @@ var (
 	// EmailDomainJoiningRecheckInterval is how often an organization offering
 	// membership by email domain has its project Domains checked again.
 	EmailDomainJoiningRecheckInterval time.Duration
+	// OrganizationDomainRecordPrefix is the label in front of the domain in the
+	// TXT record name an OrganizationDomain asks its owners to add.
+	OrganizationDomainRecordPrefix string
 
 	// UserWaitlistPendingEmailTemplate is the template for the waitlist pending email.
 	UserWaitlistPendingEmailTemplate string
@@ -334,6 +337,7 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&AcceptInvitationRoleName, "accept-invitation-role-name", "iam.miloapis.com-acceptinvitation", "The name of the role that will be used to grant accept invitation permissions.")
 	fs.StringVar(&UserInvitationEmailTemplate, "user-invitation-email-template", "emailtemplates.notification.miloapis.com-userinvitationemailtemplate", "The name of the template that will be used to send the user invitation email.")
 	fs.DurationVar(&EmailDomainJoiningRecheckInterval, "email-domain-joining-recheck-interval", 10*time.Minute, "How often an organization that offers membership by email domain has its project Domains checked again. Only used when the EmailDomainJoining feature gate is enabled.")
+	fs.StringVar(&OrganizationDomainRecordPrefix, "organization-domain-record-prefix", resourcemanagercontroller.DefaultOrganizationDomainRecordPrefix, "The label in front of the domain in the DNS TXT record name that verifies an OrganizationDomain, such as _milo-verification for _milo-verification.acme.com. Only used when the EmailDomainJoining feature gate is enabled.")
 	fs.StringVar(&OrganizationMemberJoinedEmailTemplate, "organization-member-joined-email-template", "emailtemplates.notification.miloapis.com-organizationmemberjoinedemailtemplate", "The name of the template that will be used to tell organization owners that someone joined. Only used when the MemberJoinedEmails feature gate is enabled; set to an empty string to send no such emails.")
 	fs.StringVar(&UserWaitlistPendingEmailTemplate, "user-waitlist-pending-email-template", "emailtemplates.notification.miloapis.com-userwaitlistemailtemplate", "The name of the template that will be used to send the waitlist pending email.")
 	fs.StringVar(&UserWaitlistApprovedEmailTemplate, "user-waitlist-approved-email-template", "emailtemplates.notification.miloapis.com-userwelcomeemailtemplate", "The name of the template that will be used to send the waitlist approved email.")
@@ -806,6 +810,15 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 			if err := emailDomainJoiningCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up email domain joining controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
+			organizationDomainCtrl := resourcemanagercontroller.OrganizationDomainController{
+				Client:       ctrl.GetClient(),
+				RecordPrefix: OrganizationDomainRecordPrefix,
+			}
+			if err := organizationDomainCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up organization domain controller")
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 

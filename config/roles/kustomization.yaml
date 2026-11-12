@@ -49,6 +49,9 @@ resources:
   - notification-contact-group-enrollment-policy-reader.yaml
   - notification-contact-group-enrollment-policy-editor.yaml
   - notification-contact-group-enrollment-policy-admin.yaml
+  - organizationdomain-reader.yaml
+  - organizationdomain-editor.yaml
+  - organizationdomain-admin.yaml
   - organizationmembership-reader.yaml
   - organizationmembership-editor.yaml
   - organizationmembership-admin.yaml

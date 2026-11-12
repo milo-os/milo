@@ -34,6 +34,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&OrganizationList{},
 		&OrganizationMembership{},
 		&OrganizationMembershipList{},
+		&OrganizationDomain{},
+		&OrganizationDomainList{},
 		&ProjectSuspension{},
 		&ProjectSuspensionList{},
 	)

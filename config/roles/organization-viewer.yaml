@@ -9,6 +9,7 @@ spec:
   launchStage: Beta
   inheritedRoles:
     - name: organizationmembership-reader
+    - name: organizationdomain-reader
   includedPermissions:
     - resourcemanager.miloapis.com/organizations.get
     - resourcemanager.miloapis.com/organizations/status.get
