@@ -20,7 +20,7 @@
   - [Resource Claiming Flow](#resource-claiming-flow)
 - [Resource Cleanup](#resource-cleanup)
 - [Operational Visibility](#operational-visibility)
-  - [kube-state-metrics Integration](#kube-state-metrics-integration)
+  - [Resource state metrics](#resource-state-metrics)
   - [Quota System Implementation Metrics](#quota-system-implementation-metrics)
   - [Monitoring and Alerting](#monitoring-and-alerting)
 
@@ -539,47 +539,22 @@ creation requests.
 ## Operational Visibility
 
 The quota system provides operational visibility through two complementary metric
-systems: kube-state-metrics tracks resource state, and application-level metrics
+systems: the resource metrics collector tracks resource state, and application-level metrics
 monitor runtime behavior.
 
-### kube-state-metrics Integration
+### Resource state metrics
 
-The quota system integrates with [kube-state-metrics](https://github.com/kubernetes/kube-state-metrics)
-to expose resource state as Prometheus metrics. [Custom resource state metrics](https://github.com/kubernetes/kube-state-metrics/blob/main/docs/customresourcestate-metrics.md)
-configure all quota resources to provide visibility into quota configuration and
-status.
-
-**ResourceRegistration Metrics**:
-- `milo_quota_registration_info`: Registration metadata including consumer type, resource type, registration type, units
-  - Labels: `uid`, `name`, `description`, `consumer_api_group`, `consumer_kind`, `resource_type`, `registration_type`, `base_unit`, `display_unit`, `unit_conversion_factor`
-- `milo_quota_registration_status_condition`: Ready/Active status conditions
-  - Labels: `type`, `status`
-- `milo_quota_registration_observed_generation`: Controller processing progress
-- `milo_quota_registration_current_generation`: Resource specification version
-
-**ClaimCreationPolicy Metrics**:
-- `milo_quota_claim_policy_info`: Policy metadata and configuration
-  - Labels: `uid`, `name`, `target_api_version`, `target_kind`, `enabled`
-- `milo_quota_claim_policy_status_condition`: Ready status conditions
-  - Labels: `type`, `status`
-- `milo_quota_claim_policy_enabled`: Policy enablement state (1=enabled, 0=disabled)
-- `milo_quota_claim_policy_observed_generation`: Controller processing progress
-- `milo_quota_claim_policy_current_generation`: Policy specification version
-
-**GrantCreationPolicy Metrics**:
-- `milo_quota_grant_policy_info`: Policy metadata and target configuration
-  - Labels: `uid`, `name`, `trigger_api_version`, `trigger_kind`, `parent_context_api_group`, `parent_context_kind`, `enabled`
-- `milo_quota_grant_policy_status_condition`: Ready status conditions
-  - Labels: `type`, `status`
-- `milo_quota_grant_policy_enabled`: Policy enablement state (1=enabled, 0=disabled)
-- `milo_quota_grant_policy_observed_generation`: Controller processing progress
-- `milo_quota_grant_policy_current_generation`: Policy specification version
+The quota `ResourceMetricsPolicy` (`config/services/quota/telemetry/metrics/policy.yaml`) tells the resource metrics
+collector which quota resources to read and how to turn their state into metrics. The collector reads project control
+planes, so the policy covers the namespaced quota resources: allowance buckets, claims and grants. The cluster-scoped
+ones (ResourceRegistration, ClaimCreationPolicy and GrantCreationPolicy) live on the root control plane, which the
+collector reads only with `collectRootControlPlane` on, so the policy does not cover them.
 
 **ResourceGrant Metrics**:
 - `milo_quota_grant_info`: Grant metadata and consumer references
   - Labels: `uid`, `name`, `namespace`, `consumer_api_group`, `consumer_kind`, `consumer_name`
 - `milo_quota_grant_status_condition`: Active status conditions
-  - Labels: `type`, `status`
+  - Labels: `condition`, `reason`, `status`
 - `milo_quota_grant_observed_generation`: Controller processing progress
 - `milo_quota_grant_current_generation`: Grant specification version
 
@@ -587,7 +562,7 @@ status.
 - `milo_quota_claim_info`: Claim metadata with consumer and triggering resource references
   - Labels: `uid`, `name`, `namespace`, `consumer_api_group`, `consumer_kind`, `consumer_name`, `triggering_resource_api_group`, `triggering_resource_kind`, `triggering_resource_name`, `triggering_resource_namespace`
 - `milo_quota_claim_status_condition`: Granted/Denied status conditions
-  - Labels: `type`, `status`
+  - Labels: `condition`, `reason`, `status`
 - `milo_quota_claim_observed_generation`: Controller processing progress
 - `milo_quota_claim_current_generation`: Claim specification version
 
@@ -603,9 +578,9 @@ status.
 - `milo_quota_bucket_observed_generation`: Controller processing progress
 - `milo_quota_bucket_current_generation`: Bucket specification version
 
-All metrics include `component: quota_system` and `resource_type` labels for filtering and aggregation.
-
-**Configuration Location**: `/Users/scotwells/repos/datum-cloud/milo/config/services/quota/telemetry/metrics/control-plane/`
+Every series carries `name` and `namespace`, and the collector adds labels for where it read the resource, such as
+`milo.project.name`. Only the `*_info` series carry the other labels above; join on `name` and `namespace` to group
+another family by them.
 
 ### Quota System Implementation Metrics
 
@@ -712,10 +687,7 @@ rate(milo_quota_policy_load_total[5m])
 *Resource State Tracking*:
 ```promql
 # Claims in pending state (condition status != True|False)
-milo_quota_claim_status_condition{type="Granted", status="Unknown"}
-
-# Policies not ready
-milo_quota_claim_policy_status_condition{type="Ready", status="False"}
+milo_quota_claim_status_condition{condition="Granted", status="Unknown"}
 ```
 
 **Dashboard Recommendations**:
