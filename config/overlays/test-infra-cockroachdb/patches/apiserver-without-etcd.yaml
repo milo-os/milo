@@ -1,0 +1,13 @@
+# The API server reaches no etcd in this environment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milo-apiserver
+spec:
+  template:
+    spec:
+      containers:
+        - name: milo-apiserver
+          env:
+            - name: ETCD_SERVERS
+              value: ""

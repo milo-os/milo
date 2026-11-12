@@ -102,7 +102,7 @@ task kubectl -- apply -k config/dev
 
 ### Test Infrastructure
 ```bash
-# Deploy complete test infrastructure with etcd, API server, and controller manager
+# Deploy complete test infrastructure with storage, API server, and controller manager
 task dev:setup
 
 # Deploy test infrastructure with OpenFGA authorization provider

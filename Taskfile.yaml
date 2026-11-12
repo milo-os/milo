@@ -14,7 +14,10 @@ vars:
   MILO_IMAGE_TAG: "dev"
   TEST_INFRA_CLUSTER_NAME: "test-infra"
   # The overlay dev:deploy applies. test-infra-discovery-context-filter is the
-  # same environment with the DiscoveryContextFilter feature gate on.
+  # same environment with the DiscoveryContextFilter feature gate on;
+  # test-infra-cockroachdb keeps the API server's resources in CockroachDB.
+  # Deploying another overlay leaves the previous one's resources in place, so
+  # switch overlays on a fresh cluster.
   TEST_INFRA_OVERLAY: "config/overlays/test-infra/"
   # The Chainsaw label selector test:end-to-end runs. The default leaves out the
   # suites that need another environment.
@@ -44,6 +47,25 @@ tasks:
     silent: true
     cmds:
       - KUBECONFIG=.milo/kubeconfig kubectl {{.CLI_ARGS}}
+
+  cockroachdb:sql:
+    desc: Open a SQL shell on the test-infra cluster's CockroachDB, from the test-infra-cockroachdb overlay
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        pod=$(task test-infra:kubectl -- get pods -n milo-system -l app=cockroachdb -o name | head -1)
+        task test-infra:kubectl -- exec -it -n milo-system "$pod" -c cockroachdb -- cockroach sql --certs-dir=/cockroach/cockroach-certs --database=milo
+
+  cockroachdb:ui:
+    desc: Serve the test-infra cluster's CockroachDB console on https://localhost:PORT (8090 by default), from the test-infra-cockroachdb overlay
+    interactive: true
+    silent: true
+    vars:
+      PORT: '{{.PORT | default "8090"}}'
+    cmds:
+      - echo "CockroachDB console at https://localhost:{{.PORT}}. Sign in as miloadmin with password miloadmin. Its certificate is self-signed. Ctrl-C stops it."
+      - task test-infra:kubectl -- port-forward -n milo-system svc/cockroachdb-public {{.PORT}}:8080
 
   dev:build:
     desc: Build the Milo container image for development
@@ -95,7 +117,7 @@ tasks:
         echo "Successfully loaded image into kind cluster"
 
   dev:deploy:
-    desc: Deploy complete Milo control plane (etcd + API server + controller manager) to test-infra cluster
+    desc: Deploy complete Milo control plane (storage + API server + controller manager) to test-infra cluster
     silent: true
     deps:
       - generate:code
@@ -104,17 +126,16 @@ tasks:
         set -e
         echo "🚀 Deploying complete Milo control plane to test-infra cluster..."
 
-        echo "📋 Deploying Milo control plane with etcd storage backend..."
+        echo "📋 Deploying Milo control plane from {{.TEST_INFRA_OVERLAY}}..."
         task test-infra:kubectl -- apply -k {{.TEST_INFRA_OVERLAY}}
 
-        echo "⏳ Waiting for etcd Helm release to be ready..."
-        task test-infra:kubectl -- wait --for=condition=Ready helmrelease/etcd -n milo-system --timeout=300s
-
-        echo "⏳ Waiting for etcd pod to be ready..."
-        task test-infra:kubectl -- wait --for=condition=Ready pod -l app.kubernetes.io/component=etcd -n milo-system --timeout=180s
-
+        # The API server is ready only once it can use its storage, whichever
+        # one the overlay deploys. It restarts until that storage is up.
         echo "⏳ Waiting for API server to be ready..."
-        task test-infra:kubectl -- wait --for=condition=Ready pod -l app.kubernetes.io/name=milo-apiserver -n milo-system --timeout=180s
+        if ! task test-infra:kubectl -- rollout status deployment/milo-apiserver -n milo-system --timeout=600s; then
+          task test-infra:kubectl -- get helmrelease,pods -n milo-system
+          exit 1
+        fi
 
         echo "✅ Verifying CRDs were bootstrapped..."
         CRD_COUNT=$(task kubectl -- get crd --no-headers 2>/dev/null | grep miloapis | wc -l || echo "0")
@@ -171,7 +192,13 @@ tasks:
         echo "✅ Milo API server and storage deployed successfully!"
         echo ""
         echo "📊 Status:"
-        echo "  etcd: task test-infra:kubectl -- get pods -n milo-system -l app.kubernetes.io/component=etcd"
+        if task test-infra:kubectl -- get helmrelease/cockroachdb -n milo-system >/dev/null 2>&1; then
+          echo "  CockroachDB: task test-infra:kubectl -- get pods -n milo-system -l app=cockroachdb"
+          echo "  CockroachDB SQL shell: task cockroachdb:sql"
+          echo "  CockroachDB console: task cockroachdb:ui"
+        else
+          echo "  etcd: task test-infra:kubectl -- get pods -n milo-system -l app.kubernetes.io/component=etcd"
+        fi
         echo "  API server: task test-infra:kubectl -- get pods -n milo-system -l app.kubernetes.io/name=milo-apiserver"
         echo "  Controller manager: task test-infra:kubectl -- get pods -n milo-system -l app.kubernetes.io/name=milo-controller-manager"
         echo ""
