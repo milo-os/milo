@@ -96,7 +96,7 @@ func (s *store) getState(ctx context.Context, live *row, key string, v reflect.V
 
 func (s *store) getCurrentState(ctx context.Context, key string, v reflect.Value, ignoreNotFound, expectCorrupt bool) func() (*objState, error) {
 	return func() (*objState, error) {
-		live, _, err := s.readKey(ctx, key)
+		live, _, err := s.readKey(ctx, key, false)
 		if err != nil {
 			return nil, err
 		}
