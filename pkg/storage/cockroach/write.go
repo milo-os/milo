@@ -245,6 +245,10 @@ func currentRevision(ctx context.Context, q querier, project string) (int64, err
 // keysSQL selects the rows of the keys, the counter's "" among them.
 const keysSQL = `SELECT key, rv, deleted, value FROM objects WHERE project = $1 AND key = ANY($2)`
 
+// keySQL selects the row of one key. A direct comparison returns sooner than
+// keysSQL's array.
+const keySQL = `SELECT key, rv, deleted, value FROM objects WHERE project = $1 AND key = $2`
+
 // collectKeys reads keysSQL's rows and returns the project's current revision
 // and its live rows.
 func collectKeys(rows pgx.Rows) (int64, map[string]*row, error) {
