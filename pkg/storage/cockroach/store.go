@@ -114,12 +114,17 @@ func (s *store) prepareKey(key string, recursive bool) (string, error) {
 
 func (s *store) Versioner() storage.Versioner { return s.versioner }
 
-// readKey returns key's live row, or nil, and the project's current revision.
-func (s *store) readKey(ctx context.Context, key string) (*row, int64, error) {
+// readKey returns key's live row, or nil, and, with withRevision, the
+// project's current revision.
+func (s *store) readKey(ctx context.Context, key string, withRevision bool) (*row, int64, error) {
 	start := time.Now()
+	keys := []string{key}
+	if withRevision {
+		keys = append(keys, "")
+	}
 	var current int64
 	var live map[string]*row
-	rows, err := s.b.pool.Query(ctx, keysSQL, s.project, []string{"", key})
+	rows, err := s.b.pool.Query(ctx, keysSQL, s.project, keys)
 	if err == nil {
 		current, live, err = collectKeys(rows)
 	}
@@ -132,7 +137,9 @@ func (s *store) Get(ctx context.Context, key string, opts storage.GetOptions, ou
 	if err != nil {
 		return err
 	}
-	live, current, err := s.readKey(ctx, preparedKey)
+	// A resource version of "" or "0" asks for no minimum.
+	minimum := opts.ResourceVersion != "" && opts.ResourceVersion != "0"
+	live, current, err := s.readKey(ctx, preparedKey, minimum)
 	if err != nil {
 		return err
 	}
