@@ -62,6 +62,20 @@ var (
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 	)
+	queuedTombstones = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_queued_tombstones",
+			Help:           "Tombstones this process wrote and will remove once their retention passes",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
+	droppedTombstones = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Name:           "cockroachstorage_dropped_tombstones_total",
+			Help:           "Tombstones this process didn't queue because the queue was full, left for the backstop scan",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
 	writeAdmissions = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name: "cockroachstorage_write_admissions_total",
@@ -167,7 +181,7 @@ var (
 )
 
 func init() {
-	legacyregistry.MustRegister(feedLag, delivery, batchSize, batchWait, expiredObjects, purgedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
+	legacyregistry.MustRegister(feedLag, delivery, batchSize, batchWait, expiredObjects, purgedTombstones, queuedTombstones, droppedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
 		recentEventBytes, dbOperations, dbErrors, retries, openWatchers, closedWatchers, bookmarks, feedWaits)
 	legacyregistry.CustomMustRegister(poolMetrics)
 }

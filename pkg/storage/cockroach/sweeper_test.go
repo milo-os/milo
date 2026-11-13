@@ -2,9 +2,10 @@ package cockroach
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,29 +14,107 @@ import (
 	"k8s.io/apiserver/pkg/storage"
 )
 
-// Tombstones go once their retention passes, and the feed and watches carry
-// on past the removal, because the hub ignores a row that is removed rather
-// than written.
+// A replica removes the tombstones it wrote once their retention passes, and
+// the feed and watches carry on past the removal, because the hub ignores a
+// row that is removed rather than written.
 func TestTombstonesArePurged(t *testing.T) {
 	ctx, s := testSetup(t)
-	w := watchFrom(ctx, t, s, createPod(ctx, t, s, "foo").ResourceVersion)
-	require.NoError(t, s.Delete(ctx, "/pods/test-ns/foo", &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
+	r := otherReplica(t, s)
+	// An object created again keeps its new row.
+	createPod(ctx, t, r, "bar")
+	require.NoError(t, r.Delete(ctx, "/pods/test-ns/bar", &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
+	createPod(ctx, t, r, "bar")
+
+	w := watchFrom(ctx, t, s, createPod(ctx, t, r, "foo").ResourceVersion)
+	require.NoError(t, r.Delete(ctx, "/pods/test-ns/foo", &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
 	require.Equal(t, watch.Deleted, nextEvent(t, w).Type)
 
-	tombstone := func() error {
-		var deleted bool
-		return s.b.pool.QueryRow(ctx, `SELECT deleted FROM objects WHERE project = $1 AND key = '/pods/test-ns/foo'`, s.project).Scan(&deleted)
-	}
-	require.NoError(t, s.b.sweeper.purge(ctx))
-	require.NoError(t, tombstone(), "a fresh tombstone was purged")
-
-	_, err := s.b.pool.Exec(ctx, `UPDATE objects SET deleted_at = now() - INTERVAL '1 day'
-		WHERE project = $1 AND key = '/pods/test-ns/foo'`, s.project)
-	require.NoError(t, err)
-	require.NoError(t, s.b.sweeper.purge(ctx))
-	require.ErrorIs(t, tombstone(), pgx.ErrNoRows)
+	require.NoError(t, r.b.sweeper.purge(ctx, time.Now().Add(-time.Hour)))
+	require.Equal(t, 1, tombstones(ctx, t, s), "a fresh tombstone was purged")
+	require.NoError(t, r.b.sweeper.purge(ctx, time.Now().Add(time.Hour)))
+	require.Zero(t, tombstones(ctx, t, s))
+	require.NoError(t, s.Get(ctx, "/pods/test-ns/bar", storage.GetOptions{}, &example.Pod{}))
 
 	requireAdded(t, w, createPod(ctx, t, s, "foo").ResourceVersion)
+}
+
+// A backlog of tombstones larger than a batch goes in one sweep.
+func TestTombstoneBacklogIsPurged(t *testing.T) {
+	ctx, s := testSetup(t)
+	r := otherReplica(t, s)
+	for i := range sweepBatch + 1 {
+		name := fmt.Sprintf("pod-%d", i)
+		createPod(ctx, t, r, name)
+		require.NoError(t, r.Delete(ctx, "/pods/test-ns/"+name, &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
+	}
+	require.NoError(t, r.b.sweeper.purge(ctx, time.Now().Add(time.Hour)))
+	require.Zero(t, tombstones(ctx, t, s))
+}
+
+// The backstop removes tombstones that no replica remembers, and leaves live
+// objects alone.
+func TestBackstopRemovesUnqueuedTombstones(t *testing.T) {
+	ctx, s := testSetup(t)
+	r := otherReplica(t, s)
+	createPod(ctx, t, r, "gone")
+	require.NoError(t, r.Delete(ctx, "/pods/test-ns/gone", &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
+	createPod(ctx, t, r, "back")
+	_, err := s.b.pool.Exec(ctx, `UPDATE objects SET deleted_at = now() - INTERVAL '1 day' WHERE project = $1 AND deleted`, s.project)
+	require.NoError(t, err)
+
+	// The backstop reads a follower-read snapshot, a few seconds behind, which
+	// can predate the test's database.
+	other := otherReplica(t, s)
+	require.Eventually(t, func() bool {
+		return other.b.sweeper.backstop(ctx, time.Now().Add(-time.Hour)) == nil && tombstones(ctx, t, s) == 0
+	}, 30*time.Second, 500*time.Millisecond)
+	require.NoError(t, s.Get(ctx, "/pods/test-ns/back", storage.GetOptions{}, &example.Pod{}))
+}
+
+// A tombstone queued by an earlier delete doesn't remove the tombstone of a
+// later delete of the same key.
+func TestPurgeChecksTheRevision(t *testing.T) {
+	ctx, s := testSetup(t)
+	r := otherReplica(t, s)
+	rev := func() int64 {
+		var rv int64
+		require.NoError(t, s.b.pool.QueryRow(ctx, `SELECT rv FROM objects WHERE project = $1 AND key = '/pods/test-ns/foo'`, s.project).Scan(&rv))
+		return rv
+	}
+	createPod(ctx, t, r, "foo")
+	require.NoError(t, r.Delete(ctx, "/pods/test-ns/foo", &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
+	first := rev()
+	createPod(ctx, t, r, "foo")
+	require.NoError(t, r.Delete(ctx, "/pods/test-ns/foo", &example.Pod{}, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
+	require.NotEqual(t, first, rev())
+
+	require.NoError(t, r.b.sweeper.remove(ctx, []tombstone{{project: s.project, key: "/pods/test-ns/foo", rev: first}}))
+	require.Equal(t, 1, tombstones(ctx, t, s))
+	require.NoError(t, r.b.sweeper.purge(ctx, time.Now().Add(time.Hour)))
+	require.Zero(t, tombstones(ctx, t, s))
+}
+
+// The queue hands out its oldest tombstones first, at most n at a time, and
+// lets go of its array once empty.
+func TestTombstoneQueue(t *testing.T) {
+	var q tombstoneQueue
+	start := time.Now()
+	for i := range 3 {
+		q.push(tombstone{key: fmt.Sprint(i), at: start.Add(time.Duration(i) * time.Second)})
+	}
+	require.Empty(t, q.popBefore(start, 10))
+	due := q.popBefore(start.Add(time.Hour), 2)
+	require.Equal(t, []string{"0", "1"}, []string{due[0].key, due[1].key})
+	require.Equal(t, "2", q.popBefore(start.Add(time.Hour), 2)[0].key)
+	require.Nil(t, q.items)
+}
+
+// tombstones counts s's project's tombstones.
+func tombstones(ctx context.Context, t *testing.T, s testStore) int {
+	t.Helper()
+	var n int
+	require.NoError(t, s.b.pool.QueryRow(ctx, `SELECT count(*) FROM objects WHERE project = $1 AND deleted`, s.project).Scan(&n))
+	return n
 }
 
 // createExpiring creates a pod with a TTL of an hour, then moves its expiry

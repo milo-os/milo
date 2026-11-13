@@ -148,6 +148,7 @@ func testOptions() Option {
 		// way of the rest, so tests sweep only when they mean to.
 		o.projectWrites, o.transactions = 1<<16, 1<<16
 		o.sweepInterval = time.Hour
+		o.backstopInterval = 0
 	}
 }
 
