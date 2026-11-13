@@ -79,16 +79,19 @@ type writeOutcome struct {
 //     batches. Otherwise unbatched gives each write a batch of its own.
 //  3. admittedBatches holds one of the server's slots for each transaction,
 //     which keeps the transactions in flight below the pool's connections.
-//  4. retryingBatches reruns a transaction that aborted on a conflict. It sits
+//  4. queuedDeletes queues the tombstone of each delete that commits, for the
+//     sweeper to remove.
+//  5. retryingBatches reruns a transaction that aborted on a conflict. It sits
 //     below the server's slots and group commit, so a retry reruns the same
 //     batch in the slot it already holds.
-//  5. observedBatches times each attempt in the operation metrics.
-//  6. attempt runs one transaction.
+//  6. observedBatches times each attempt in the operation metrics.
+//  7. attempt runs one transaction.
 //
 // It also returns what stops the stack when the backend closes.
-func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission, groupCommit bool) (committer, func()) {
+func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission, tombstones *tombstoneQueue, groupCommit bool) (committer, func()) {
 	var txn batchCommitter = observedBatches{attempt}
 	txn = retryingBatches{txn}
+	txn = queuedDeletes{txn, tombstones}
 	txn = admittedBatches{serverSlots, txn}
 	var perProject committer = unbatched{txn}
 	stop := func() {}

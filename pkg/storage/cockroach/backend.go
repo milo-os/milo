@@ -47,6 +47,7 @@ type options struct {
 	hub                         hubConfig
 	feedRetry                   time.Duration
 	sweepInterval               time.Duration
+	backstopInterval            time.Duration
 	migrate                     bool
 }
 
@@ -57,6 +58,9 @@ func defaultOptions() options {
 		hub:           defaultHubConfig(),
 		feedRetry:     time.Second,
 		sweepInterval: time.Second,
+		// Tombstones no process remembers are rare, and each scan reads the
+		// whole objects table.
+		backstopInterval: time.Hour,
 	}
 }
 
@@ -137,7 +141,7 @@ const (
 )
 
 func (o options) validate() error {
-	if o.maxConns < 0 || o.projectWrites < 0 || o.transactions < 0 || o.lagReadiness < 0 {
+	if o.maxConns < 0 || o.projectWrites < 0 || o.transactions < 0 || o.lagReadiness < 0 || o.backstopInterval < 0 {
 		return errors.New("cockroach storage: connection and write limits and the lag limit cannot be negative")
 	}
 	if o.admissionWait < 0 || o.hub.replay.window < 0 || o.hub.replay.events < 0 {
@@ -200,15 +204,16 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 		projectWrites = defaultProjectWritesGroupCommit
 	}
 	var stopWrites func()
+	tombstones := &tombstoneQueue{}
 	b.committer, stopWrites = newCommitter(b.tryCommitBatch,
 		newAdmission("project", cmp.Or(o.projectWrites, projectWrites), o.admissionWait),
 		newAdmission("server", cmp.Or(o.transactions, int(cfg.MaxConns)*3/4), o.admissionWait),
-		o.groupCommit)
+		tombstones, o.groupCommit)
 	b.onClose(stopWrites)
 
 	// A tombstone outlasts the events that replay its delete, so a feed that
 	// resumes from its cursor still finds it.
-	b.sweeper = &sweeper{pool: pool, committer: b.committer, tombstoneRetention: 2 * o.hub.replay.window}
+	b.sweeper = &sweeper{pool: pool, committer: b.committer, tombstones: tombstones, tombstoneRetention: 2 * o.hub.replay.window}
 
 	// The background work stops first, because the sweeps write through the
 	// committers.
@@ -221,7 +226,14 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	running.Go(func() { b.feed.run(bg) })
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.feed.reportLag) })
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.hub.tick) })
-	running.Go(func() { every(bg, jittered(o.sweepInterval), func(time.Time) { b.sweeper.sweep(bg) }) })
+	running.Go(func() { every(bg, jittered(o.sweepInterval), func(now time.Time) { b.sweeper.sweep(bg, now) }) })
+	// The first backstop waits an interval too, so a restart stays cheap and
+	// replicas that start together scan at different times.
+	if o.backstopInterval > 0 {
+		running.Go(func() {
+			every(bg, jittered(o.backstopInterval), func(now time.Time) { b.sweeper.sweepUnqueued(bg, now) })
+		})
+	}
 	return b, nil
 }
 
