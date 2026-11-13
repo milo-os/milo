@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -118,13 +120,15 @@ func (s *store) Versioner() storage.Versioner { return s.versioner }
 // project's current revision.
 func (s *store) readKey(ctx context.Context, key string, withRevision bool) (*row, int64, error) {
 	start := time.Now()
-	keys := []string{key}
-	if withRevision {
-		keys = append(keys, "")
-	}
 	var current int64
 	var live map[string]*row
-	rows, err := s.b.pool.Query(ctx, keysSQL, s.project, keys)
+	var rows pgx.Rows
+	var err error
+	if withRevision {
+		rows, err = s.b.pool.Query(ctx, keysSQL, s.project, []string{"", key})
+	} else {
+		rows, err = s.b.pool.Query(ctx, keySQL, s.project, key)
+	}
 	if err == nil {
 		current, live, err = collectKeys(rows)
 	}
