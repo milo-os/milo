@@ -301,6 +301,7 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	}
 	results := make([]writeResult, len(batch.writes))
 	var rows upsertRows
+	var expiring expiringRows
 	for i, w := range batch.writes {
 		l := live[w.key]
 		results[i].live = l
@@ -313,7 +314,10 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 			value = l.value
 		}
 		results[i].rev, results[i].written = counter+int64(len(rows.keys))+1, true
-		rows.add(w.key, results[i].rev, w.deleted, value, w.ttlSeconds)
+		rows.add(w.key, results[i].rev, w.deleted, value)
+		if w.ttlSeconds > 0 {
+			expiring.add(w.key, results[i].rev, w.ttlSeconds)
+		}
 	}
 	if len(rows.keys) == 0 {
 		return results, nil
@@ -322,7 +326,10 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	// here would fix the transaction's timestamp, so CockroachDB could no longer
 	// refresh it past concurrent reads and would abort it instead.
 	var commit pgx.Batch
-	commit.Queue(upsertSQL, project, rows.keys, rows.revs, rows.deleted, rows.values, rows.ttls, counter+int64(len(rows.keys)))
+	commit.Queue(upsertSQL, project, rows.keys, rows.revs, rows.deleted, rows.values, counter+int64(len(rows.keys)))
+	if len(expiring.keys) > 0 {
+		commit.Queue(expirationsSQL, project, expiring.keys, expiring.revs, expiring.ttls)
+	}
 	commit.Queue(`COMMIT`)
 	if err := conn.SendBatch(ctx, &commit).Close(); err != nil {
 		return nil, err
@@ -345,11 +352,17 @@ func endTransaction(ctx context.Context, conn *pgx.Conn) {
 // upsertSQL writes a batch's rows, passed as one array per column, and moves
 // the project's counter to the batch's last revision. Its text is the same
 // for every batch, so every connection prepares it once.
-const upsertSQL = `UPSERT INTO objects (project, key, rv, deleted, value, expires_at, deleted_at)
-	SELECT $1, k, r, d, v, CASE WHEN t > 0 THEN now() + t * INTERVAL '1 second' END, CASE WHEN d THEN now() END
-	FROM unnest($2::STRING[], $3::INT8[], $4::BOOL[], $5::BYTES[], $6::INT8[]) AS w (k, r, d, v, t)
+const upsertSQL = `UPSERT INTO objects (project, key, rv, deleted, value, deleted_at)
+	SELECT $1, k, r, d, v, CASE WHEN d THEN now() END
+	FROM unnest($2::STRING[], $3::INT8[], $4::BOOL[], $5::BYTES[]) AS w (k, r, d, v)
 	UNION ALL
-	SELECT $1, '', $7, false, ''::BYTES, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ`
+	SELECT $1, '', $6, false, ''::BYTES, NULL::TIMESTAMPTZ`
+
+// expirationsSQL records when a batch's writes with a TTL expire, passed as
+// one array per column.
+const expirationsSQL = `UPSERT INTO expirations (expires_at, project, key, rv)
+	SELECT now() + t * INTERVAL '1 second', $1, k, r
+	FROM unnest($2::STRING[], $3::INT8[], $4::INT8[]) AS w (k, r, t)`
 
 // upsertRows is a batch's rows, by column.
 type upsertRows struct {
@@ -357,13 +370,24 @@ type upsertRows struct {
 	revs    []int64
 	deleted []bool
 	values  [][]byte
-	ttls    []int64
 }
 
-func (u *upsertRows) add(key string, rev int64, deleted bool, value []byte, ttl uint64) {
+func (u *upsertRows) add(key string, rev int64, deleted bool, value []byte) {
 	u.keys = append(u.keys, key)
 	u.revs = append(u.revs, rev)
 	u.deleted = append(u.deleted, deleted)
 	u.values = append(u.values, value)
-	u.ttls = append(u.ttls, int64(ttl))
+}
+
+// expiringRows is a batch's writes with a TTL, by column.
+type expiringRows struct {
+	keys []string
+	revs []int64
+	ttls []int64
+}
+
+func (e *expiringRows) add(key string, rev int64, ttl uint64) {
+	e.keys = append(e.keys, key)
+	e.revs = append(e.revs, rev)
+	e.ttls = append(e.ttls, int64(ttl))
 }
