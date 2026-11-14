@@ -62,23 +62,21 @@ func (s *sweeper) sweepUnqueued(ctx context.Context, now time.Time) {
 	}
 }
 
-// expire deletes the objects whose TTL has passed. Each delete requires the
-// revision the object expired at, and expires_at only changes with a write,
-// so a delete never removes an object that was written again.
+// expire deletes the objects whose TTL has passed, from the expirations
+// their writes recorded. Each delete requires the revision the object was
+// written at with that TTL, so an object written or deleted since stays as it
+// is, and its record goes either way.
 func (s *sweeper) expire(ctx context.Context) error {
-	rows, err := s.pool.Query(ctx, `SELECT project, key, rv FROM objects
-		WHERE expires_at IS NOT NULL AND NOT deleted AND expires_at <= now()
-		ORDER BY expires_at LIMIT $1`, sweepBatch)
+	rows, err := s.pool.Query(ctx, `SELECT expires_at, project, key, rv FROM expirations
+		WHERE expires_at <= now() ORDER BY expires_at LIMIT $1`, sweepBatch)
 	if err != nil {
 		return err
 	}
-	due, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
-		Project, Key string
-		Rev          int64
-	}])
+	due, err := pgx.CollectRows(rows, pgx.RowToStructByPos[expiration])
 	if err != nil {
 		return err
 	}
+	var done []expiration
 	for _, e := range due {
 		res, err := s.committer.commit(ctx, e.Project, deleteWrite(e.Key, e.Rev))
 		switch {
@@ -86,11 +84,37 @@ func (s *sweeper) expire(ctx context.Context) error {
 			return ctx.Err()
 		case err != nil:
 			klog.ErrorS(err, "Failed to delete an expired object from CockroachDB storage", "project", e.Project, "key", e.Key)
+			continue
 		case res.written:
 			expiredObjects.Inc()
 		}
+		done = append(done, e)
 	}
-	return nil
+	return s.forget(ctx, done)
+}
+
+// expiration is one row of the expirations table.
+type expiration struct {
+	At           time.Time
+	Project, Key string
+	Rev          int64
+}
+
+// forget removes the expirations records of handled objects.
+func (s *sweeper) forget(ctx context.Context, done []expiration) error {
+	if len(done) == 0 {
+		return nil
+	}
+	at := make([]time.Time, len(done))
+	projects := make([]string, len(done))
+	keys := make([]string, len(done))
+	for i, e := range done {
+		at[i], projects[i], keys[i] = e.At, e.Project, e.Key
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM expirations
+		WHERE (expires_at, project, key) IN (SELECT * FROM unnest($1::TIMESTAMPTZ[], $2::STRING[], $3::STRING[]))`,
+		at, projects, keys)
+	return err
 }
 
 // purge removes the queued tombstones written before cutoff. A batch that

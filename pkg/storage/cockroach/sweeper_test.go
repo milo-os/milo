@@ -126,9 +126,9 @@ func createExpiring(ctx context.Context, t *testing.T, s testStore, name string)
 	require.NoError(t, s.Create(ctx, key, newPod(name), created, 3600))
 	var remaining float64
 	require.NoError(t, s.b.pool.QueryRow(ctx, `SELECT extract(epoch FROM expires_at - now())::FLOAT8
-		FROM objects WHERE project = $1 AND key = $2`, s.project, key).Scan(&remaining))
+		FROM expirations WHERE project = $1 AND key = $2`, s.project, key).Scan(&remaining))
 	require.InDelta(t, 3600, remaining, 10)
-	_, err := s.b.pool.Exec(ctx, `UPDATE objects SET expires_at = now() - INTERVAL '1 hour'
+	_, err := s.b.pool.Exec(ctx, `UPDATE expirations SET expires_at = now() - INTERVAL '1 hour'
 		WHERE project = $1 AND key = $2`, s.project, key)
 	require.NoError(t, err)
 	return created
