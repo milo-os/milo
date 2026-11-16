@@ -4,13 +4,17 @@
 # Defines how UserInvitation API operations appear in activity timelines.
 #
 # Audit rules handle CRUD operations captured by the Kubernetes API server audit log.
-# No eventRules — the controller sets conditions but does not emit Kubernetes Events.
+# Event rules handle the InvitationExpired event the controller records when an
+# invitation runs out.
 #
 # Design principles:
 # - Surface the invitee's email where available (spec.email at Request audit level)
 # - Include the organization name where available (spec.organizationRef.name or status.organization.displayName)
 # - State-specific rules (accepted/declined) are evaluated before the generic update rule
 # - "Cancelled" phrasing for user-initiated deletes
+# - "Resent" phrasing for creates carrying the iam.miloapis.com/resent-from
+#   annotation. Clients resend by deleting the old invitation and creating a new
+#   one, so a resend shows as "cancelled" followed by "resent".
 # - Exclude system actors to reduce reconciliation noise
 #
 # Note: spec.email and spec.organizationRef.name are available when the audit level is Request or higher.
@@ -29,6 +33,16 @@ spec:
   # All rules exclude system components (!audit.user.username.startsWith('system:'))
   # so controller reconciliation doesn't generate activity noise.
   auditRules:
+    # Resend (create replacing an earlier invitation) with email and organization
+    - name: resend-with-email-and-org
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.metadata.annotations) && 'iam.miloapis.com/resent-from' in audit.requestObject.metadata.annotations && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.requestObject.spec.organizationRef.name)"
+      summary: "{{ actor }} resent the invitation for {{ audit.requestObject.spec.email }} to {{ link(audit.requestObject.spec.organizationRef.name, audit.objectRef) }}"
+
+    # Resend with email only
+    - name: resend-with-email
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.metadata.annotations) && 'iam.miloapis.com/resent-from' in audit.requestObject.metadata.annotations && has(audit.requestObject.spec) && has(audit.requestObject.spec.email)"
+      summary: "{{ actor }} resent the invitation for {{ audit.requestObject.spec.email }}"
+
     # Create with email and organization available
     - name: create-with-email-and-org
       match: "!audit.user.username.startsWith('system:') && audit.verb == 'create' && has(audit.requestObject.spec) && has(audit.requestObject.spec.email) && has(audit.requestObject.spec.organizationRef.name)"
@@ -78,3 +92,11 @@ spec:
     - name: delete
       match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete'"
       summary: "{{ actor }} cancelled the invitation for {{ audit.objectRef.name }}"
+
+  # Controller events.
+  eventRules:
+    # Invitation ran out before it was accepted. The note names the invitee and
+    # organization: "The invitation for <email> to <organization> expired".
+    - name: expired
+      match: "event.reason == 'InvitationExpired'"
+      summary: "{{ event.note }}"
