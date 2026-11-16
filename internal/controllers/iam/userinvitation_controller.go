@@ -4,16 +4,19 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.miloapis.com/milo/internal/emaildomain"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"go.miloapis.com/milo/pkg/features"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -35,10 +38,25 @@ const (
 
 const (
 	inviteeUserStatusUpdateConditionType = "InviteeUserStatusUpdate"
+
+	// invitationExpiredEventReason is the reason on the Event recorded when an
+	// invitation runs out. The UserInvitation ActivityPolicy matches on it.
+	invitationExpiredEventReason = "InvitationExpired"
+
+	// invitationExpiredEventWindow bounds how long after its expiration an
+	// invitation still gets an InvitationExpired event. The controller requeues
+	// at the expiration time, so a live invitation is flagged within seconds;
+	// this keeps invitations that expired long ago, before the controller
+	// requeued at expiry, from all reporting as expiring now.
+	invitationExpiredEventWindow = 24 * time.Hour
 )
 
 type UserInvitationController struct {
-	Client                          client.Client
+	Client client.Client
+	// EventRecorder records an InvitationExpired event when an invitation runs
+	// out, which the activity service turns into an activity. SetupWithManager
+	// fills it in when it is left empty.
+	EventRecorder                   record.EventRecorder
 	finalizer                       finalizer.Finalizers
 	SystemNamespace                 string
 	GetInvitationRoleName           string
@@ -253,6 +271,7 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, fmt.Errorf("failed to update expired UserInvitation status: %w", err)
 		}
 		log.Info("ExpiredUserInvitation status updated", "name", ui.Name)
+		r.recordInvitationExpired(ui, organizationDisplayName)
 		return ctrl.Result{}, nil
 	}
 
@@ -275,7 +294,7 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if user == nil {
 		log.Info("Invitee User not found, skipping reconciliation. Reconciliation will be triggered again when the User is created.")
-		return ctrl.Result{}, nil
+		return requeueAtExpiry(ui), nil
 	}
 
 	if isUserInvitationDeclined(ui) {
@@ -306,7 +325,7 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 	// Check if the UserInvitation is pending
 	if meta.IsStatusConditionTrue(ui.Status.Conditions, string(iamv1alpha1.UserInvitationPendingCondition)) {
 		log.Info("UserInvitation is pending, skipping reconciliation")
-		return ctrl.Result{}, nil
+		return requeueAtExpiry(ui), nil
 	}
 
 	// Grant permissions to the invitee user so they can accept the invitation
@@ -333,7 +352,34 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	log.Info("UserInvitation reconciled", "userInvitation", ui.GetName())
 
-	return ctrl.Result{}, nil
+	return requeueAtExpiry(ui), nil
+}
+
+// requeueAtExpiry brings an open invitation back to the controller just after
+// it expires, so it is flagged Expired (and the expiry recorded) on time rather
+// than whenever something else happens to touch it.
+func requeueAtExpiry(ui *iamv1alpha1.UserInvitation) ctrl.Result {
+	if ui.Spec.ExpirationDate == nil {
+		return ctrl.Result{}
+	}
+	return ctrl.Result{RequeueAfter: max(time.Until(ui.Spec.ExpirationDate.Time), 0) + time.Second}
+}
+
+// recordInvitationExpired records the event the activity service shows as
+// "The invitation for <email> to <organization> expired".
+func (r *UserInvitationController) recordInvitationExpired(ui *iamv1alpha1.UserInvitation, organizationDisplayName string) {
+	if r.EventRecorder == nil || ui.Spec.ExpirationDate == nil {
+		return
+	}
+	if time.Since(ui.Spec.ExpirationDate.Time) > invitationExpiredEventWindow {
+		return
+	}
+	organization := organizationDisplayName
+	if organization == "" {
+		organization = ui.Spec.OrganizationRef.Name
+	}
+	r.EventRecorder.Eventf(ui, corev1.EventTypeNormal, invitationExpiredEventReason,
+		"The invitation for %s to %s expired", ui.Spec.Email, organization)
 }
 
 func (r *UserInvitationController) SetupWithManager(mgr ctrl.Manager) error {
@@ -347,6 +393,10 @@ func (r *UserInvitationController) SetupWithManager(mgr ctrl.Manager) error {
 		Name:      r.AcceptInvitationRoleName,
 		Namespace: r.SystemNamespace,
 	})
+
+	if r.EventRecorder == nil {
+		r.EventRecorder = mgr.GetEventRecorderFor("userinvitation-controller")
+	}
 
 	r.finalizer = finalizer.NewFinalizers()
 	if err := r.finalizer.Register(userInvitationFinalizerKey, &userInvitationFinalizer{
