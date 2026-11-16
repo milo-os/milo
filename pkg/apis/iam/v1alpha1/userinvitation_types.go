@@ -24,6 +24,13 @@ const (
 	UserInvitationStatePendingReason  UserInvitationReasonType = "Pending"
 )
 
+// UserInvitationResentFromAnnotation marks an invitation created to replace an
+// earlier one, and names the invitation it replaces. Clients resend by deleting
+// the old invitation and creating a new one (only one pending invitation per
+// email is allowed); this annotation lets the activity timeline show the new
+// one as a resend instead of a fresh invitation.
+const UserInvitationResentFromAnnotation = "iam.miloapis.com/resent-from"
+
 const (
 	UserInvitationReadyCondition   UserInvitationConditionType = "Ready"
 	UserInvitationExpiredCondition UserInvitationConditionType = "Expired"
