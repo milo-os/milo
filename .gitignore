@@ -13,3 +13,6 @@ vendor/
 # Files used by the taskfile.
 .task
 
+# Scale test pprof profiles
+dev/profiles/
+
