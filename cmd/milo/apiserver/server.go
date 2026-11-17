@@ -388,6 +388,15 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	// reuse it rather than spinning up a parallel informer.
 	reg := config.DiscoveryRegistry
 	informers := apiExtensionsServer.Informers
+	accessRules := config.AccessRules
+	apiExtensionsServer.GenericAPIServer.AddPostStartHookOrDie("milo-access-rules", func(hookCtx genericapiserver.PostStartHookContext) error {
+		go func() {
+			if err := accessRules.Run(hookCtx, informers); err != nil {
+				klog.ErrorS(err, "access rules stopped")
+			}
+		}()
+		return nil
+	})
 	apiExtensionsServer.GenericAPIServer.AddPostStartHookOrDie("milo-discovery-context-registry", func(hookCtx genericapiserver.PostStartHookContext) error {
 		go func() {
 			if err := reg.Run(hookCtx, informers); err != nil {
