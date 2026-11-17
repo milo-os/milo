@@ -56,6 +56,7 @@ synced, and while it hasn't, user-context requests answer
 
 - Rules apply to platform storage. Requests in a project context pass
   through unchanged.
-- The hidden-field rule checks permission once per request with the caller's
-  identity and parent context. A role that grants `get` on `<resource>/hidden`
-  in the platform context doesn't carry into the user context.
+- The hidden-field rule asks the authorizer once per request, with the
+  caller's identity and parent context, like any other authorization check.
+  Grant `get` on `<resource>/hidden` in each context where staff should see
+  hidden objects.
