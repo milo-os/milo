@@ -1,0 +1,23 @@
+# test-user may do anything to notes and bulletins, but has no get on
+# bulletins/hidden, so it is an ordinary user, not staff.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: access-rules-test-user
+rules:
+  - apiGroups: ["access-rules-test.example.com"]
+    resources: ["notes", "bulletins"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: access-rules-test-user
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: access-rules-test-user
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io

@@ -20,6 +20,7 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
 	genericfilters "k8s.io/apiserver/pkg/server/filters"
+	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/routine"
 	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
@@ -61,6 +62,7 @@ import (
 	quotaapi "go.miloapis.com/milo/pkg/apis/quota"
 	"go.miloapis.com/milo/pkg/features"
 	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
+	"go.miloapis.com/milo/pkg/server/access"
 	discoveryctx "go.miloapis.com/milo/pkg/server/discovery"
 	datumfilters "go.miloapis.com/milo/pkg/server/filters"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -79,6 +81,11 @@ type Config struct {
 	// whatever the gates say, populated from CRDs and policies by post-start
 	// hooks in CreateServerChain.
 	DiscoveryRegistry *discoveryctx.Registry
+
+	// AccessRules are the owner and hidden-field rules CRDs declare with
+	// annotations. Created in NewConfig, populated from CRDs by a post-start
+	// hook in CreateServerChain, and enforced by the handler chain.
+	AccessRules *access.Rules
 
 	// ProjectStates is the server's one view of Projects. Created in
 	// NewConfig, injected into admission plugins, started by a post-start
@@ -159,6 +166,8 @@ type completedConfig struct {
 	APIExtensions apiextensionsapiserver.CompletedConfig
 
 	DiscoveryRegistry *discoveryctx.Registry
+
+	AccessRules *access.Rules
 
 	ProjectStates *projectstate.Cache
 
@@ -381,6 +390,8 @@ func (c *Config) Complete() (CompletedConfig, error) {
 
 		DiscoveryRegistry: c.DiscoveryRegistry,
 
+		AccessRules: c.AccessRules,
+
 		ProjectStates: c.ProjectStates,
 
 		ExtraConfig: c.ExtraConfig,
@@ -389,10 +400,12 @@ func (c *Config) Complete() (CompletedConfig, error) {
 
 func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	registry := discoveryctx.NewRegistry()
+	accessRules := access.NewRules()
 
 	c := &Config{
 		Options:           opts,
 		DiscoveryRegistry: registry,
+		AccessRules:       accessRules,
 	}
 
 	miloScheme := runtime.NewScheme()
@@ -428,7 +441,14 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 	loopbackClientConfig := genericConfig.LoopbackClientConfig
 
-	buildHandlerChain := projectRouterChain(registry, loopbackClientConfig)
+	// Named requests for resources with access rules read the stored object
+	// through the loopback client, which has full access and so isn't
+	// narrowed by the rules itself.
+	accessClient, err := dynamic.NewForConfig(rest.CopyConfig(loopbackClientConfig))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access rule client: %w", err)
+	}
+	buildHandlerChain := projectRouterChain(registry, accessRules, accessClient, loopbackClientConfig)
 	genericConfig.BuildHandlerChainFunc = buildHandlerChain
 
 	serviceResolver := webhook.NewDefaultServiceResolver()
@@ -452,8 +472,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	projectStates := projectstate.NewCache(projectClient)
 	c.ProjectStates = projectStates
 	projectStatesInit := initializer.ProjectStatesInitializer{States: projectStates}
+	accessRulesInit := initializer.AccessRulesInitializer{Rules: accessRules}
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit})
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit, accessRulesInit})
 	if err != nil {
 		return nil, err
 	}
@@ -481,6 +502,15 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	kubeAPIs.Generic.AddPostStartHookOrDie("start-project-state-cache", projectStates.PostStartHook())
 	kubeAPIs.Generic.AddReadyzChecks(projectStates.ReadinessCheck())
 
+	// Hold traffic until every CRD's access rules are known, so no request
+	// for an annotated resource is served without them.
+	kubeAPIs.Generic.AddReadyzChecks(healthz.NamedCheck("milo-access-rules", func(*http.Request) error {
+		if !accessRules.HasSynced() {
+			return fmt.Errorf("access rules not synced")
+		}
+		return nil
+	}))
+
 	// Add post-start hook to bootstrap CRDs from embedded filesystem
 	// This installs all CRDs EXCEPT infrastructure.miloapis.com group, which should remain in the infrastructure cluster
 	kubeAPIs.Generic.AddPostStartHookOrDie("bootstrap-crds", func(ctx server.PostStartHookContext) error {
@@ -503,11 +533,12 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 // projectRouterChain builds the handler chain each server in the chain uses: the stock chain with Milo's filters,
 // wrapped by the project router, with the registry's filters innermost. Build it once: the servers share its filters.
-func projectRouterChain(registry *discoveryctx.Registry, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
+func projectRouterChain(registry *discoveryctx.Registry, accessRules *access.Rules, accessClient dynamic.Interface, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
 	registryFilters := discoveryctx.NewFilters(registry, utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter))
 	return func(h http.Handler, c *server.Config) http.Handler {
+		accessFilter := &access.Filter{Rules: accessRules, Authorizer: c.Authorization.Authorizer, Client: accessClient, Serializer: c.Serializer}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(registryFilters(h), c, loopbackClientConfig), // build stock chain first
+			DefaultBuildHandlerChain(accessFilter.Wrap(registryFilters(h)), c, loopbackClientConfig), // build stock chain first
 			c.RequestInfoResolver, // then wrap with router
 		)
 	}

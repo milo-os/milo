@@ -1,0 +1,37 @@
+apiVersion: access-rules-test.example.com/v1alpha1
+kind: Note
+metadata:
+  name: note-mine
+spec:
+  owner: test-user
+  text: mine
+---
+apiVersion: access-rules-test.example.com/v1alpha1
+kind: Note
+metadata:
+  name: note-theirs
+spec:
+  owner: other-user
+  text: theirs
+---
+apiVersion: access-rules-test.example.com/v1alpha1
+kind: Note
+metadata:
+  name: note-theirs-2
+spec:
+  owner: other-user
+  text: theirs too
+---
+apiVersion: access-rules-test.example.com/v1alpha1
+kind: Bulletin
+metadata:
+  name: bulletin-shown
+spec:
+  hidden: false
+---
+apiVersion: access-rules-test.example.com/v1alpha1
+kind: Bulletin
+metadata:
+  name: bulletin-hidden
+spec:
+  hidden: true

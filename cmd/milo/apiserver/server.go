@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	crd "go.miloapis.com/milo/config/crd"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/accessowner"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
@@ -247,6 +248,7 @@ func NewOptions() *options.Options {
 	// No AddReadyzChecks counterpart: this plugin holds no cache and makes no
 	// API calls, so it has nothing to be ready for.
 	emailverification.Register(s.Admission.GenericAdmission.Plugins)
+	accessowner.Register(s.Admission.GenericAdmission.Plugins)
 
 	s.Admission.GenericAdmission.RecommendedPluginOrder = GetMiloOrderedPlugins()
 
@@ -388,6 +390,15 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	// reuse it rather than spinning up a parallel informer.
 	reg := config.DiscoveryRegistry
 	informers := apiExtensionsServer.Informers
+	accessRules := config.AccessRules
+	apiExtensionsServer.GenericAPIServer.AddPostStartHookOrDie("milo-access-rules", func(hookCtx genericapiserver.PostStartHookContext) error {
+		go func() {
+			if err := accessRules.Run(hookCtx, informers); err != nil {
+				klog.ErrorS(err, "access rules stopped")
+			}
+		}()
+		return nil
+	})
 	apiExtensionsServer.GenericAPIServer.AddPostStartHookOrDie("milo-discovery-context-registry", func(hookCtx genericapiserver.PostStartHookContext) error {
 		go func() {
 			if err := reg.Run(hookCtx, informers); err != nil {
