@@ -7,6 +7,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
+	"go.miloapis.com/milo/pkg/server/access"
 )
 
 // Local duck-typed interface: any plugin with this method will match.
@@ -58,5 +59,22 @@ type ProjectStatesInitializer struct {
 func (i ProjectStatesInitializer) Initialize(p admission.Interface) {
 	if w, ok := p.(wantsProjectStates); ok && i.States != nil {
 		w.SetProjectStates(i.States)
+	}
+}
+
+// Local duck-typed interface: any plugin with this method will match.
+type wantsAccessRules interface {
+	SetAccessRules(*access.Rules)
+}
+
+// AccessRulesInitializer injects the API server's access rules into
+// admission plugins that want them.
+type AccessRulesInitializer struct {
+	Rules *access.Rules
+}
+
+func (i AccessRulesInitializer) Initialize(p admission.Interface) {
+	if w, ok := p.(wantsAccessRules); ok && i.Rules != nil {
+		w.SetAccessRules(i.Rules)
 	}
 }

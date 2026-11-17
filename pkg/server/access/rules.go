@@ -9,8 +9,10 @@
 // every request for that resource:
 //
 //   - iam.miloapis.com/owner-field (e.g. "spec.userRef.name"): in the user
-//     context, lists and watches only return objects owned by the user, and
-//     named requests for another user's object answer NotFound.
+//     and organization contexts, lists and watches only return objects owned
+//     by the user (see RequestOwner), and named requests for another user's
+//     object answer NotFound. The AccessRuleOwnerEnforcement admission plugin
+//     checks the field on writes.
 //   - iam.miloapis.com/hidden-field (e.g. "spec.hidden"): lists and watches
 //     leave out objects whose field is true, and named requests for them
 //     answer NotFound, unless the caller may get the subresource named by
@@ -24,6 +26,7 @@ package access
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -36,6 +39,8 @@ import (
 
 // Annotations a CRD sets to limit which of its objects callers see.
 const (
+	annotationPrefix = "iam.miloapis.com/"
+
 	OwnerFieldAnnotation        = "iam.miloapis.com/owner-field"
 	HiddenFieldAnnotation       = "iam.miloapis.com/hidden-field"
 	HiddenSubresourceAnnotation = "iam.miloapis.com/hidden-subresource"
@@ -108,14 +113,7 @@ func (r *Rules) Run(ctx context.Context, factory apiextensionsinformers.SharedIn
 	handler, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { r.upsert(obj) },
 		UpdateFunc: func(_, obj any) { r.upsert(obj) },
-		DeleteFunc: func(obj any) {
-			if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-				obj = d.Obj
-			}
-			if crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
-				r.Set(groupResource(crd), Rule{})
-			}
-		},
+		DeleteFunc: func(obj any) { r.remove(obj) },
 	})
 	if err != nil {
 		return fmt.Errorf("registering CRD event handler: %w", err)
@@ -138,6 +136,9 @@ func (r *Rules) upsert(obj any) {
 		return
 	}
 	rule := RuleFor(crd)
+	for _, msg := range AnnotationProblems(crd) {
+		klog.ErrorS(nil, "Access rule annotation on CRD has no effect", "crd", crd.Name, "problem", msg)
+	}
 	for _, f := range []string{rule.OwnerField, rule.HiddenField} {
 		if f != "" && !selectable(crd, f) {
 			// Lists will fail with a field selector error, which is safe; named
@@ -147,6 +148,15 @@ func (r *Rules) upsert(obj any) {
 		}
 	}
 	r.Set(groupResource(crd), rule)
+}
+
+func (r *Rules) remove(obj any) {
+	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = d.Obj
+	}
+	if crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
+		r.Set(groupResource(crd), Rule{})
+	}
 }
 
 // RuleFor reads a CRD's rule from its annotations.
@@ -163,6 +173,33 @@ func RuleFor(crd *apiextensionsv1.CustomResourceDefinition) Rule {
 		}
 	}
 	return rule
+}
+
+// AnnotationProblems lists annotations on crd that look like access rules
+// but don't make one: a rule annotation whose value is blank, or another
+// iam.miloapis.com/ key, such as a misspelt one. Either way the CRD's objects
+// aren't restricted the way its author meant.
+func AnnotationProblems(crd *apiextensionsv1.CustomResourceDefinition) []string {
+	var problems []string
+	for k, v := range crd.Annotations {
+		switch k {
+		case OwnerFieldAnnotation, HiddenFieldAnnotation:
+			if fieldPath(v) == "" {
+				problems = append(problems, fmt.Sprintf("%s is blank, so the CRD has no such rule", k))
+			}
+		case HiddenSubresourceAnnotation:
+			if fieldPath(crd.Annotations[HiddenFieldAnnotation]) == "" {
+				problems = append(problems, fmt.Sprintf("%s has no effect without %s", k, HiddenFieldAnnotation))
+			}
+		default:
+			if strings.HasPrefix(k, annotationPrefix) {
+				problems = append(problems, fmt.Sprintf("%s is not an access rule annotation; known ones are %s, %s and %s",
+					k, OwnerFieldAnnotation, HiddenFieldAnnotation, HiddenSubresourceAnnotation))
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
 }
 
 // fieldPath normalises "spec.x" and ".spec.x" to "spec.x".

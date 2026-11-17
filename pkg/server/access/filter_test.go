@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -240,5 +241,89 @@ func TestRuleFor(t *testing.T) {
 	}
 	if !RuleFor(&apiextensionsv1.CustomResourceDefinition{}).IsZero() {
 		t.Error("a CRD without annotations has a rule")
+	}
+}
+
+// inOrg puts the request in an organization context, made by a caller with
+// the given user ID.
+func inOrg(callerUID string) func(context.Context) context.Context {
+	return func(ctx context.Context) context.Context {
+		ctx = milorequest.WithOrganization(ctx, "o")
+		return request.WithUser(ctx, &user.DefaultInfo{Name: "someone@example.com", UID: callerUID})
+	}
+}
+
+func TestDeleteCollectionIsLimited(t *testing.T) {
+	f := newFilter(t, false)
+	got, _ := serve(t, f, votes, "deletecollection", "", "spec.postRef.name=p1", asUser("u1"))
+	if want := "spec.postRef.name=p1,spec.userRef.name=u1"; got.selector != want || got.infoSel != want {
+		t.Errorf("owner selector = %q (request info %q), want %q", got.selector, got.infoSel, want)
+	}
+	got, _ = serve(t, f, posts, "deletecollection", "", "", nil)
+	if want := "spec.hidden!=true"; got.selector != want || got.infoSel != want {
+		t.Errorf("hidden selector = %q (request info %q), want %q", got.selector, got.infoSel, want)
+	}
+}
+
+func TestOwnerRuleAppliesInAnOrganizationContext(t *testing.T) {
+	f := newFilter(t, false)
+	got, _ := serve(t, f, votes, "list", "", "spec.userRef.name=u2", inOrg("u1"))
+	if want := "spec.userRef.name=u1"; got.selector != want {
+		t.Errorf("selector = %q, want %q", got.selector, want)
+	}
+	if _, code := serve(t, f, votes, "get", "theirs", "", inOrg("u1")); code != http.StatusNotFound {
+		t.Errorf("get theirs = %d, want 404", code)
+	}
+	if _, code := serve(t, f, votes, "get", "mine", "", inOrg("u1")); code != http.StatusOK {
+		t.Errorf("get mine = %d", code)
+	}
+	// A caller with no user ID can't own anything, and an empty owner
+	// selector would match objects with no owner.
+	if got, code := serve(t, f, votes, "list", "", "", inOrg("")); code != http.StatusForbidden || got.served {
+		t.Errorf("no caller ID: code %d served %v, want 403", code, got.served)
+	}
+	f.Rules.synced = false
+	if _, code := serve(t, f, votes, "list", "", "", inOrg("u1")); code != http.StatusServiceUnavailable {
+		t.Errorf("not synced = %d, want 503", code)
+	}
+}
+
+// TestLoopbackReadsAreNotNarrowed covers the named-request check's reliance
+// on its own reads: allowsNamed treats NotFound as "doesn't exist", which is
+// only safe if the loopback client sees hidden objects. Its identity is in
+// system:masters, which the server's privileged-groups authorizer allows.
+func TestLoopbackReadsAreNotNarrowed(t *testing.T) {
+	f := newFilter(t, false)
+	f.Authorizer = authorizerfactory.NewPrivilegedGroups(user.SystemPrivilegedGroup)
+	loopback := func(ctx context.Context) context.Context {
+		return request.WithUser(ctx, &user.DefaultInfo{Name: user.APIServerUser, Groups: []string{user.SystemPrivilegedGroup}})
+	}
+	if got, code := serve(t, f, posts, "get", "hidden", "", loopback); code != http.StatusOK || !got.served {
+		t.Errorf("loopback get hidden: code %d served %v", code, got.served)
+	}
+	if got, _ := serve(t, f, posts, "list", "", "", loopback); got.selector != "" {
+		t.Errorf("loopback list selector = %q", got.selector)
+	}
+	if got, _ := serve(t, f, votes, "list", "", "", loopback); got.selector != "" {
+		t.Errorf("loopback vote list selector = %q", got.selector)
+	}
+}
+
+func TestAnnotationProblems(t *testing.T) {
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		OwnerFieldAnnotation:           " ",
+		HiddenSubresourceAnnotation:    "staff",
+		"iam.miloapis.com/owner-feild": "spec.userRef.name",
+		"example.com/unrelated":        "x",
+	}}}
+	got := AnnotationProblems(crd)
+	if len(got) != 3 {
+		t.Fatalf("problems = %q, want 3", got)
+	}
+	ok := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		OwnerFieldAnnotation: "spec.userRef.name", HiddenFieldAnnotation: "spec.hidden", HiddenSubresourceAnnotation: "staff",
+	}}}
+	if got := AnnotationProblems(ok); len(got) != 0 {
+		t.Errorf("problems for valid annotations = %q", got)
 	}
 }

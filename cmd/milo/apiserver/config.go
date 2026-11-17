@@ -472,8 +472,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	projectStates := projectstate.NewCache(projectClient)
 	c.ProjectStates = projectStates
 	projectStatesInit := initializer.ProjectStatesInitializer{States: projectStates}
+	accessRulesInit := initializer.AccessRulesInitializer{Rules: accessRules}
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit})
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit, accessRulesInit})
 	if err != nil {
 		return nil, err
 	}

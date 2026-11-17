@@ -50,12 +50,13 @@ func (f *Filter) Wrap(next http.Handler) http.Handler {
 		}
 		gr := schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}
 		gv := schema.GroupVersion{Group: info.APIGroup, Version: info.APIVersion}
-		userID, inUser := filters.UserID(ctx)
+		owner, ownerApplies := RequestOwner(ctx)
 
 		if !f.Rules.HasSynced() {
 			// Rules may be missing until the informer syncs; readiness keeps
-			// traffic away, and user-context requests fail closed meanwhile.
-			if inUser {
+			// traffic away, and user- and organization-context requests fail
+			// closed meanwhile.
+			if ownerApplies {
 				responsewriters.ErrorNegotiated(apierrors.NewServiceUnavailable("the API server is starting"), f.Serializer, gv, w, req)
 				return
 			}
@@ -69,8 +70,13 @@ func (f *Filter) Wrap(next http.Handler) http.Handler {
 		}
 
 		c := constraint{}
-		if rule.OwnerField != "" && inUser {
-			c.ownerField, c.owner = rule.OwnerField, userID
+		if rule.OwnerField != "" && ownerApplies {
+			if owner == "" {
+				responsewriters.ErrorNegotiated(apierrors.NewForbidden(gr, info.Name,
+					fmt.Errorf("%s belong to users, and the request doesn't identify one", gr)), f.Serializer, gv, w, req)
+				return
+			}
+			c.ownerField, c.owner = rule.OwnerField, owner
 		}
 		if rule.HiddenField != "" {
 			if !f.canSeeHidden(ctx, info, rule) {
@@ -110,6 +116,34 @@ func (f *Filter) Wrap(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// RequestOwner returns the user whose objects an owner rule limits a request
+// to, and whether the rule applies to it at all.
+//
+// In the user context the owner is the user named in the path, which
+// authorization has already let the caller act as. In an organization
+// context it is the caller: user-owned objects share one collection for the
+// whole platform, so an organization role that grants a resource must still
+// not show other users' objects. Elsewhere, in the platform context where
+// staff and services work, and in a project context, the rule doesn't
+// apply. An empty owner with
+// applies true means the caller can't be identified and must be refused.
+func RequestOwner(ctx context.Context) (owner string, applies bool) {
+	if _, inProject := milorequest.ProjectID(ctx); inProject {
+		// Projects have their own storage, so rules don't apply.
+		return "", false
+	}
+	if id, ok := filters.UserID(ctx); ok {
+		return id, true
+	}
+	if _, ok := milorequest.OrganizationID(ctx); ok {
+		if u, ok := request.UserFrom(ctx); ok {
+			return u.GetUID(), true
+		}
+		return "", true
+	}
+	return "", false
 }
 
 // canSeeHidden reports whether the caller may get the rule's hidden
@@ -197,20 +231,21 @@ func (c constraint) selector(clientSelector string) (string, error) {
 // allows reports whether obj passes the constraint.
 func (c constraint) allows(obj *unstructured.Unstructured) bool {
 	if c.ownerField != "" {
-		v, ok := field(obj, c.ownerField)
+		v, ok := Field(obj, c.ownerField)
 		if !ok || fmt.Sprint(v) != c.owner {
 			return false
 		}
 	}
 	if c.hiddenField != "" {
-		if v, ok := field(obj, c.hiddenField); ok && (v == true || v == "true") {
+		if v, ok := Field(obj, c.hiddenField); ok && (v == true || v == "true") {
 			return false
 		}
 	}
 	return true
 }
 
-func field(obj *unstructured.Unstructured, path string) (any, bool) {
+// Field returns the value at a dotted field path of obj.
+func Field(obj *unstructured.Unstructured, path string) (any, bool) {
 	v, ok, err := unstructured.NestedFieldNoCopy(obj.Object, strings.Split(path, ".")...)
 	if err != nil || !ok {
 		return nil, false
