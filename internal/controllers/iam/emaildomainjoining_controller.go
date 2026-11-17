@@ -10,10 +10,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -32,7 +34,22 @@ const (
 
 	emailDomainOfferNamePrefix = "email-domain-"
 
-	defaultEmailDomainRecheckInterval = 10 * time.Minute
+	// DefaultEmailDomainRecheckInterval is how often an organization's Domains
+	// are checked again by default. Domains rarely stop being verified, and new
+	// Users and changes to an organization are handled straight away, so this
+	// only catches what those miss.
+	DefaultEmailDomainRecheckInterval = 30 * time.Minute
+
+	// emailDomainRecheckJitter spreads rechecks over up to a fifth more than
+	// the interval, so organizations reconciled together, such as at startup,
+	// don't all come back at once.
+	emailDomainRecheckJitter = 0.2
+
+	// DefaultEmailDomainJoiningMaxConcurrentReconciles is how many
+	// organizations are reconciled at once by default. Each reconcile lists
+	// Domains in every one of the organization's projects over the network, so
+	// one worker falls behind once many organizations offer joining.
+	DefaultEmailDomainJoiningMaxConcurrentReconciles = 10
 )
 
 // EmailDomainJoiningController offers membership of an organization to every
@@ -51,8 +68,12 @@ type EmailDomainJoiningController struct {
 	Verifier *emaildomain.Verifier
 
 	// RecheckInterval is how often an organization's Domains are checked
-	// again, since Milo doesn't watch Domains in project control planes.
+	// again, since Milo doesn't watch Domains in project control planes. Each
+	// recheck is jittered by up to a fifth of it.
 	RecheckInterval time.Duration
+
+	// MaxConcurrentReconciles is how many organizations are reconciled at once.
+	MaxConcurrentReconciles int
 }
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizations,verbs=get;list;watch
@@ -136,7 +157,7 @@ func (r *EmailDomainJoiningController) Reconcile(ctx context.Context, req ctrl.R
 	if org.Spec.EmailDomainJoining == nil {
 		return ctrl.Result{}, nil
 	}
-	return ctrl.Result{RequeueAfter: r.recheckInterval()}, nil
+	return ctrl.Result{RequeueAfter: wait.Jitter(r.recheckInterval(), emailDomainRecheckJitter)}, nil
 }
 
 // reconcileCondition checks the organization's Domains, records the result in
@@ -237,7 +258,14 @@ func (r *EmailDomainJoiningController) recheckInterval() time.Duration {
 	if r.RecheckInterval > 0 {
 		return r.RecheckInterval
 	}
-	return defaultEmailDomainRecheckInterval
+	return DefaultEmailDomainRecheckInterval
+}
+
+func (r *EmailDomainJoiningController) maxConcurrentReconciles() int {
+	if r.MaxConcurrentReconciles > 0 {
+		return r.MaxConcurrentReconciles
+	}
+	return DefaultEmailDomainJoiningMaxConcurrentReconciles
 }
 
 func (r *EmailDomainJoiningController) SetupWithManager(mgr ctrl.Manager) error {
@@ -270,6 +298,7 @@ func (r *EmailDomainJoiningController) SetupWithManager(mgr ctrl.Manager) error 
 			handler.EnqueueRequestsFromMapFunc(r.findOrganizationsForUser),
 			builder.WithPredicates(userEmailChangedPredicate),
 		).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.maxConcurrentReconciles()}).
 		Named("emaildomainjoining").
 		Complete(r)
 }
