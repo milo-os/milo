@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -52,22 +53,24 @@ func (f *Filter) Wrap(next http.Handler) http.Handler {
 		gv := schema.GroupVersion{Group: info.APIGroup, Version: info.APIVersion}
 		owner, ownerApplies := RequestOwner(ctx)
 
-		if !f.Rules.HasSynced() {
-			// Rules may be missing until the informer syncs; readiness keeps
-			// traffic away, and user- and organization-context requests fail
-			// closed meanwhile.
-			if ownerApplies {
-				responsewriters.ErrorNegotiated(apierrors.NewServiceUnavailable("the API server is starting"), f.Serializer, gv, w, req)
+		lookup := f.Rules.Lookup(gr)
+		switch lookup.State {
+		case Unrestricted:
+			next.ServeHTTP(w, req)
+			return
+		case Refused:
+			// The rule is invalid or can't be trusted yet, so serving the
+			// resource could show objects it should hide. system:masters,
+			// which includes the loopback client, still passes, so operators
+			// can read and repair it and startup hooks work.
+			if IsPrivileged(ctx) {
+				next.ServeHTTP(w, req)
 				return
 			}
-			next.ServeHTTP(w, req)
+			responsewriters.ErrorNegotiated(lookup.Err, f.Serializer, gv, w, req)
 			return
 		}
-		rule, ok := f.Rules.Get(gr)
-		if !ok {
-			next.ServeHTTP(w, req)
-			return
-		}
+		rule := lookup.Rule
 
 		c := constraint{}
 		if rule.OwnerField != "" && ownerApplies {
@@ -236,12 +239,52 @@ func (c constraint) allows(obj *unstructured.Unstructured) bool {
 			return false
 		}
 	}
-	if c.hiddenField != "" {
-		if v, ok := Field(obj, c.hiddenField); ok && (v == true || v == "true") {
-			return false
-		}
+	if c.hiddenField != "" && hidden(obj, c.hiddenField) {
+		return false
 	}
 	return true
+}
+
+// hidden reports whether obj's hidden field hides it, the way storage's
+// spec.hidden!=true selector decides for lists: a missing or null field
+// reads as "" and shows the object, and a scalar hides it when it prints as
+// "true". A value storage can't select on, such as an object, or a path
+// that runs through a list or a scalar, can't be read, so it hides the
+// object.
+func hidden(obj *unstructured.Unstructured, path string) bool {
+	v, found, err := unstructured.NestedFieldNoCopy(obj.Object, strings.Split(path, ".")...)
+	if err != nil {
+		return true
+	}
+	if !found || v == nil {
+		return false
+	}
+	switch v.(type) {
+	case bool, string, int64, float64:
+		return fmt.Sprint(v) == "true"
+	default:
+		return true
+	}
+}
+
+// IsPrivileged reports whether the request's caller is in system:masters,
+// which includes the API server's loopback client.
+func IsPrivileged(ctx context.Context) bool {
+	u, ok := request.UserFrom(ctx)
+	return ok && InPrivilegedGroup(u)
+}
+
+// InPrivilegedGroup reports whether u is in system:masters.
+func InPrivilegedGroup(u user.Info) bool {
+	if u == nil {
+		return false
+	}
+	for _, g := range u.GetGroups() {
+		if g == user.SystemPrivilegedGroup {
+			return true
+		}
+	}
+	return false
 }
 
 // Field returns the value at a dotted field path of obj.

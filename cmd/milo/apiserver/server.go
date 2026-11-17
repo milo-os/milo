@@ -32,6 +32,7 @@ import (
 	"k8s.io/apiserver/pkg/util/notfoundhandler"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
@@ -51,6 +52,7 @@ import (
 	"k8s.io/kubernetes/pkg/controlplane/apiserver/options"
 
 	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
+	"go.miloapis.com/milo/pkg/server/access"
 
 	// Import features package to register Milo feature gates via init()
 	_ "go.miloapis.com/milo/pkg/features"
@@ -390,13 +392,18 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	// reuse it rather than spinning up a parallel informer.
 	reg := config.DiscoveryRegistry
 	informers := apiExtensionsServer.Informers
+	// Access rules read the same CRD cache the CRD handler serves custom
+	// resources from, and check it keeps up with storage.
 	accessRules := config.AccessRules
+	if err := accessRules.Attach(informers); err != nil {
+		return nil, fmt.Errorf("failed to attach access rules: %w", err)
+	}
+	crdMetadata, err := metadata.NewForConfig(rest.CopyConfig(config.ControlPlane.Generic.LoopbackClientConfig))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access rule staleness client: %w", err)
+	}
 	apiExtensionsServer.GenericAPIServer.AddPostStartHookOrDie("milo-access-rules", func(hookCtx genericapiserver.PostStartHookContext) error {
-		go func() {
-			if err := accessRules.Run(hookCtx, informers); err != nil {
-				klog.ErrorS(err, "access rules stopped")
-			}
-		}()
+		go accessRules.Run(hookCtx, crdVersions(crdMetadata), accessRulesCheckInterval, accessRulesCheckGrace)
 		return nil
 	})
 	apiExtensionsServer.GenericAPIServer.AddPostStartHookOrDie("milo-discovery-context-registry", func(hookCtx genericapiserver.PostStartHookContext) error {
@@ -515,5 +522,29 @@ func rootList(cfg *rest.Config, gvr schema.GroupVersionResource) func() error {
 		defer cancel()
 		_, err = client.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
 		return err
+	}
+}
+
+// How often the access rules compare the CRD cache with storage, and how long
+// a difference may last before the rules count as stale. A CRD change
+// normally reaches the cache within a second.
+const (
+	accessRulesCheckInterval = 30 * time.Second
+	accessRulesCheckGrace    = 10 * time.Second
+)
+
+// crdVersions lists the resource version of every CRD in storage.
+func crdVersions(client metadata.Interface) access.ListCRDVersions {
+	return func(ctx context.Context) (map[string]string, error) {
+		list, err := client.Resource(apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions")).
+			List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		versions := make(map[string]string, len(list.Items))
+		for _, item := range list.Items {
+			versions[item.Name] = item.ResourceVersion
+		}
+		return versions, nil
 	}
 }

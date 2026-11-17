@@ -6,3 +6,4 @@ components:
   - ./controller-manager
   - ./iam
   - ./quota
+  - ./access-rules

@@ -10,6 +10,14 @@
 //     field to the request's owner: the user in the path, or the caller.
 //   - Update and patch must not change the owner field.
 //
+// In every context outside projects, a write to a resource whose rule is
+// invalid or not trusted yet is refused unless the caller is in
+// system:masters, like the access filter does for every request.
+//
+// It also validates the access-rule annotations of CustomResourceDefinitions
+// on create and update (see validateCRD), so an invalid declaration is
+// refused when it is written rather than found when it is served.
+//
 // The plugin validates and doesn't mutate, so it runs after mutating
 // webhooks: a service's webhook can still fill the owner field in from the
 // request, and this plugin checks the result. The platform context, where
@@ -26,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
 
+	milorequest "go.miloapis.com/milo/pkg/request"
 	"go.miloapis.com/milo/pkg/server/access"
 )
 
@@ -63,19 +72,32 @@ func (p *Plugin) ValidateInitialization() error {
 // Validate implements admission.ValidationInterface.
 func (p *Plugin) Validate(ctx context.Context, attrs admission.Attributes, _ admission.ObjectInterfaces) error {
 	if attrs.GetSubresource() != "" {
-		// Status and other subresources can't change spec.
+		// Status and other subresources can't change spec. A CRD whose owner
+		// field a subresource could write is refused (see access.Declare).
 		return nil
 	}
-	owner, applies := access.RequestOwner(ctx)
-	if !applies {
+	if attrs.GetResource().GroupResource() == crdResource {
+		return validateCRD(ctx, attrs)
+	}
+	if _, inProject := milorequest.ProjectID(ctx); inProject {
 		return nil
 	}
 	gr := attrs.GetResource().GroupResource()
-	if !p.rules.HasSynced() {
-		return apierrors.NewServiceUnavailable("the API server is starting")
+	lookup := p.rules.Lookup(gr)
+	switch lookup.State {
+	case access.Unrestricted:
+		return nil
+	case access.Refused:
+		// Like the access filter: an invalid or not-yet-trusted rule refuses
+		// everyone but system:masters, who may repair the resource.
+		if access.InPrivilegedGroup(attrs.GetUserInfo()) {
+			return nil
+		}
+		return lookup.Err
 	}
-	rule, ok := p.rules.Get(gr)
-	if !ok || rule.OwnerField == "" {
+	rule := lookup.Rule
+	owner, applies := access.RequestOwner(ctx)
+	if !applies || rule.OwnerField == "" {
 		return nil
 	}
 	if owner == "" {

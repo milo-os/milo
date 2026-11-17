@@ -1,0 +1,58 @@
+rule_files:
+  - ../../../config/telemetry/alerts/access-rules/access-rules.yaml
+
+evaluation_interval: 30s
+
+# MiloAccessRuleInvalid fires per CRD and reason that has been invalid for 5 minutes, on any pod.
+# MiloAccessRulesStale fires per API server pod whose CRD cache has lagged storage for 5 minutes.
+tests:
+  # votes is invalid on two pods from the start: pending until 5m, then one alert for the CRD. posts was invalid
+  # for 3 minutes only and never fires.
+  - interval: 1m
+    input_series:
+      - series: 'milo_access_rule_invalid{pod="a",group="feedback.miloapis.com",resource="votes",reason="unknown_annotation"}'
+        values: '1+0x10'
+      - series: 'milo_access_rule_invalid{pod="b",group="feedback.miloapis.com",resource="votes",reason="unknown_annotation"}'
+        values: '1+0x10'
+      - series: 'milo_access_rule_invalid{pod="a",group="feedback.miloapis.com",resource="posts",reason="not_selectable"}'
+        values: '1+0x2 _x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MiloAccessRuleInvalid
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MiloAccessRuleInvalid
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: milo
+              team: platform
+              group: feedback.miloapis.com
+              resource: votes
+              reason: unknown_annotation
+            exp_annotations:
+              summary: "Requests for votes.feedback.miloapis.com are refused: its access rules are invalid (unknown_annotation)"
+              description: "The CustomResourceDefinition votes.feedback.miloapis.com declares access rules Milo can't apply, so Milo refuses its requests outside system:masters rather than serve it unprotected. The API server log names the annotation and problem; fix the CRD's iam.miloapis.com/ annotations."
+
+  # Pod a's cache lags for 10 minutes; pod b's for 2. Only a fires.
+  - interval: 1m
+    input_series:
+      - series: 'milo_access_rules_stale{pod="a"}'
+        values: '1+0x10'
+      - series: 'milo_access_rules_stale{pod="b"}'
+        values: '1+0x1 0+0x9'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MiloAccessRulesStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MiloAccessRulesStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: milo
+              team: platform
+              pod: a
+            exp_annotations:
+              summary: "Milo API server a has refused custom resources for 5 minutes: its CRD cache lags storage"
+              description: "The pod's CustomResourceDefinition cache has not caught up with storage, so its access rules may be out of date. It refuses custom resources outside system:masters and fails its milo-access-rules readiness check until the cache catches up. Check the pod's log and its watch of customresourcedefinitions; restarting the pod rebuilds the cache."

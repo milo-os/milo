@@ -21,211 +21,336 @@
 // Both fields must be selectableFields of the CRD, so storage can filter on
 // them. Rules apply to platform storage only; requests in a project context
 // pass through unchanged.
+//
+// The rules fail closed. A CRD whose declaration is invalid (see Declare),
+// and every resource while the rules can't be trusted (before the CRD cache
+// syncs, or while it lags storage), is refused to every caller outside
+// system:masters, rather than served without its rule.
 package access
 
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"sync"
+	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
 
-// Annotations a CRD sets to limit which of its objects callers see.
+// State says how to treat a request for a resource.
+type State int
+
 const (
-	annotationPrefix = "iam.miloapis.com/"
-
-	OwnerFieldAnnotation        = "iam.miloapis.com/owner-field"
-	HiddenFieldAnnotation       = "iam.miloapis.com/hidden-field"
-	HiddenSubresourceAnnotation = "iam.miloapis.com/hidden-subresource"
-
-	// DefaultHiddenSubresource is the subresource whose get permission lets a
-	// caller see hidden objects, when the CRD doesn't name one.
-	DefaultHiddenSubresource = "hidden"
+	// Unrestricted means the resource has no rule: serve it as usual.
+	Unrestricted State = iota
+	// Enforced means apply the lookup's Rule.
+	Enforced
+	// Refused means refuse every caller outside system:masters with the
+	// lookup's Err: the resource's rule is invalid or can't be trusted yet.
+	Refused
 )
 
-// Rule is what a CRD's annotations ask for. A zero field means no rule.
-type Rule struct {
-	// OwnerField is the field selector path of the owner's user ID.
-	OwnerField string
-	// HiddenField is the field selector path of a boolean that hides the
-	// object.
-	HiddenField string
-	// HiddenSubresource is the subresource a caller needs get on to see
-	// hidden objects.
-	HiddenSubresource string
+// Lookup is how a request for one resource must be treated.
+type Lookup struct {
+	State State
+	// Rule is the rule to apply when State is Enforced.
+	Rule Rule
+	// Err is the error to answer with when State is Refused.
+	Err *apierrors.StatusError
 }
 
-// IsZero reports whether the rule restricts nothing.
-func (r Rule) IsZero() bool { return r.OwnerField == "" && r.HiddenField == "" }
-
-// Rules holds the rule of every annotated CRD, kept current from a CRD
-// informer.
+// Rules holds the rule of every annotated CRD.
+//
+// It reads CRDs from the same informer cache the CRD handler serves custom
+// resources from, at request time. A custom resource is only served once its
+// CRD is in that cache, and then its rule is too, so no resource is served
+// before its rule is known, however recently the CRD was written.
 type Rules struct {
-	mu     sync.RWMutex
-	rules  map[schema.GroupResource]Rule
-	synced bool
+	mu      sync.RWMutex
+	crds    cache.Store
+	synced  func() bool
+	decls   map[string]cachedDeclaration // by CRD name
+	invalid map[schema.GroupResource][]string
+	stale   error // non-nil while the CRD cache lags storage
 }
 
-// NewRules returns an empty set of rules.
+// cachedDeclaration is a CRD's declaration, read from that exact object. The
+// cache replaces the object on every change, so a pointer match means the
+// declaration is current.
+type cachedDeclaration struct {
+	crd  *apiextensionsv1.CustomResourceDefinition
+	decl Declaration
+}
+
+// NewRules returns rules that aren't attached to a CRD informer yet, and so
+// refuse everything until Attach.
 func NewRules() *Rules {
-	return &Rules{rules: map[schema.GroupResource]Rule{}}
+	return &Rules{decls: map[string]cachedDeclaration{}, invalid: map[schema.GroupResource][]string{}}
 }
 
-// Get returns the rule for gr, if it has one.
-func (r *Rules) Get(gr schema.GroupResource) (Rule, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	rule, ok := r.rules[gr]
-	return rule, ok
-}
-
-// HasSynced reports whether every CRD that existed at startup has been read.
-// Until then a resource's rule may be missing, so the server must not take
-// traffic.
-func (r *Rules) HasSynced() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.synced
-}
-
-// Set records gr's rule, or forgets it when the rule is zero.
-func (r *Rules) Set(gr schema.GroupResource, rule Rule) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if rule.IsZero() {
-		delete(r.rules, gr)
-		return
-	}
-	r.rules[gr] = rule
-}
-
-// Run keeps the rules current from the CRD informer in factory until ctx is
-// cancelled. The caller starts the factory.
-func (r *Rules) Run(ctx context.Context, factory apiextensionsinformers.SharedInformerFactory) error {
+// Attach reads the rules from the CRD informer in factory: the one the CRD
+// handler serves custom resources from. The caller starts the factory.
+func (r *Rules) Attach(factory apiextensionsinformers.SharedInformerFactory) error {
 	informer := factory.Apiextensions().V1().CustomResourceDefinitions().Informer()
+	// The handler only reports invalid declarations; requests read the cache.
 	handler, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { r.upsert(obj) },
-		UpdateFunc: func(_, obj any) { r.upsert(obj) },
-		DeleteFunc: func(obj any) { r.remove(obj) },
+		AddFunc:    func(obj any) { r.observe(obj) },
+		UpdateFunc: func(_, obj any) { r.observe(obj) },
+		DeleteFunc: func(obj any) { r.forget(obj) },
 	})
 	if err != nil {
 		return fmt.Errorf("registering CRD event handler: %w", err)
 	}
-	if !cache.WaitForCacheSync(ctx.Done(), handler.HasSynced) {
-		return fmt.Errorf("CRD informer cache failed to sync")
-	}
 	r.mu.Lock()
-	r.synced = true
-	n := len(r.rules)
-	r.mu.Unlock()
-	klog.InfoS("Access rules synced", "resources", n)
-	<-ctx.Done()
+	defer r.mu.Unlock()
+	r.crds = informer.GetStore()
+	r.synced = func() bool { return informer.HasSynced() && handler.HasSynced() }
 	return nil
 }
 
-func (r *Rules) upsert(obj any) {
+// HasSynced reports whether every CRD that existed at startup has been read.
+func (r *Rules) HasSynced() bool {
+	r.mu.RLock()
+	synced := r.synced
+	r.mu.RUnlock()
+	return synced != nil && synced()
+}
+
+// Check reports why the rules can't be trusted, or nil when they can: the
+// milo-access-rules readiness check.
+func (r *Rules) Check() error {
+	if !r.HasSynced() {
+		return fmt.Errorf("access rules not synced")
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.stale
+}
+
+// Lookup returns how to treat a request for gr.
+func (r *Rules) Lookup(gr schema.GroupResource) Lookup {
+	if !r.HasSynced() {
+		// Until every CRD is read, any resource may be one with a rule.
+		return refused(apierrors.NewServiceUnavailable(
+			"the API server is starting: access rules for custom resources aren't loaded yet"))
+	}
+	r.mu.RLock()
+	store, stale := r.crds, r.stale
+	r.mu.RUnlock()
+
+	// A CRD's name is always <plural>.<group>.
+	obj, exists, err := store.GetByKey(gr.Resource + "." + gr.Group)
+	if err != nil {
+		return refused(apierrors.NewServiceUnavailable(fmt.Sprintf("reading the access rules of %s: %v", gr, err)))
+	}
+	if !exists {
+		// Not a custom resource, or one the CRD handler doesn't serve either.
+		return Lookup{State: Unrestricted}
+	}
+	crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
+	if !ok {
+		return refused(apierrors.NewServiceUnavailable(fmt.Sprintf("reading the access rules of %s: unexpected %T", gr, obj)))
+	}
+	if stale != nil {
+		return refused(apierrors.NewServiceUnavailable(fmt.Sprintf(
+			"access rules for %s may be out of date: %v", gr, stale)))
+	}
+	d := r.declaration(crd)
+	if !d.Valid() {
+		return refused(apierrors.NewServiceUnavailable(fmt.Sprintf(
+			"%s can't be served: CustomResourceDefinition %s declares access rules Milo can't apply: %s. "+
+				"Fix its annotations; until then only system:masters may use it", gr, crd.Name, d.Error())))
+	}
+	if d.Rule.IsZero() {
+		return Lookup{State: Unrestricted}
+	}
+	return Lookup{State: Enforced, Rule: d.Rule}
+}
+
+func refused(err *apierrors.StatusError) Lookup { return Lookup{State: Refused, Err: err} }
+
+// declaration returns crd's declaration, read once per cached object.
+func (r *Rules) declaration(crd *apiextensionsv1.CustomResourceDefinition) Declaration {
+	r.mu.RLock()
+	c, ok := r.decls[crd.Name]
+	r.mu.RUnlock()
+	if ok && c.crd == crd {
+		return c.decl
+	}
+	d := Declare(crd)
+	r.mu.Lock()
+	r.decls[crd.Name] = cachedDeclaration{crd: crd, decl: d}
+	r.mu.Unlock()
+	return d
+}
+
+// observe reports a CRD's invalid declaration, as a metric and, when it
+// changes, a log line.
+func (r *Rules) observe(obj any) {
 	crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
 	if !ok {
 		return
 	}
-	rule := RuleFor(crd)
-	for _, msg := range AnnotationProblems(crd) {
-		klog.ErrorS(nil, "Access rule annotation on CRD has no effect", "crd", crd.Name, "problem", msg)
-	}
-	for _, f := range []string{rule.OwnerField, rule.HiddenField} {
-		if f != "" && !selectable(crd, f) {
-			// Lists will fail with a field selector error, which is safe; named
-			// requests are still checked.
-			klog.ErrorS(nil, "Access rule field is not a selectable field of the CRD; lists of it will fail",
-				"crd", crd.Name, "field", f)
+	d := r.declaration(crd)
+	if r.report(groupResource(crd), d) {
+		for _, p := range d.Problems {
+			klog.ErrorS(nil, "CRD declares an access rule Milo can't apply; requests for it are refused",
+				"crd", crd.Name, "annotation", p.Annotation, "reason", p.Reason, "problem", p.Message)
 		}
 	}
-	r.Set(groupResource(crd), rule)
 }
 
-func (r *Rules) remove(obj any) {
+func (r *Rules) forget(obj any) {
 	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 		obj = d.Obj
 	}
-	if crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
-		r.Set(groupResource(crd), Rule{})
+	crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
+	if !ok {
+		return
 	}
+	r.mu.Lock()
+	delete(r.decls, crd.Name)
+	r.mu.Unlock()
+	r.report(groupResource(crd), Declaration{})
 }
 
-// RuleFor reads a CRD's rule from its annotations.
-func RuleFor(crd *apiextensionsv1.CustomResourceDefinition) Rule {
-	a := crd.Annotations
-	rule := Rule{
-		OwnerField:  fieldPath(a[OwnerFieldAnnotation]),
-		HiddenField: fieldPath(a[HiddenFieldAnnotation]),
+// report sets the invalid-declaration metric for gr, and reports whether its
+// problems changed.
+func (r *Rules) report(gr schema.GroupResource, d Declaration) bool {
+	var reasons []string
+	for _, p := range d.Problems {
+		reasons = append(reasons, p.Reason)
 	}
-	if rule.HiddenField != "" {
-		rule.HiddenSubresource = strings.TrimSpace(a[HiddenSubresourceAnnotation])
-		if rule.HiddenSubresource == "" {
-			rule.HiddenSubresource = DefaultHiddenSubresource
-		}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	prev := r.invalid[gr]
+	if equalStrings(prev, reasons) {
+		return false
 	}
-	return rule
+	for _, reason := range prev {
+		invalidDeclarations.DeleteLabelValues(gr.Group, gr.Resource, reason)
+	}
+	for _, reason := range reasons {
+		invalidDeclarations.WithLabelValues(gr.Group, gr.Resource, reason).Set(1)
+	}
+	if len(reasons) == 0 {
+		delete(r.invalid, gr)
+	} else {
+		r.invalid[gr] = reasons
+	}
+	return true
 }
 
-// AnnotationProblems lists annotations on crd that look like access rules
-// but don't make one: a rule annotation whose value is blank, or another
-// iam.miloapis.com/ key, such as a misspelt one. Either way the CRD's objects
-// aren't restricted the way its author meant.
-func AnnotationProblems(crd *apiextensionsv1.CustomResourceDefinition) []string {
-	var problems []string
-	for k, v := range crd.Annotations {
-		switch k {
-		case OwnerFieldAnnotation, HiddenFieldAnnotation:
-			if fieldPath(v) == "" {
-				problems = append(problems, fmt.Sprintf("%s is blank, so the CRD has no such rule", k))
-			}
-		case HiddenSubresourceAnnotation:
-			if fieldPath(crd.Annotations[HiddenFieldAnnotation]) == "" {
-				problems = append(problems, fmt.Sprintf("%s has no effect without %s", k, HiddenFieldAnnotation))
-			}
-		default:
-			if strings.HasPrefix(k, annotationPrefix) {
-				problems = append(problems, fmt.Sprintf("%s is not an access rule annotation; known ones are %s, %s and %s",
-					k, OwnerFieldAnnotation, HiddenFieldAnnotation, HiddenSubresourceAnnotation))
-			}
-		}
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	sort.Strings(problems)
-	return problems
-}
-
-// fieldPath normalises "spec.x" and ".spec.x" to "spec.x".
-func fieldPath(s string) string {
-	return strings.TrimPrefix(strings.TrimSpace(s), ".")
-}
-
-// selectable reports whether field is a selectable field of every served
-// version.
-func selectable(crd *apiextensionsv1.CustomResourceDefinition, field string) bool {
-	for _, v := range crd.Spec.Versions {
-		if !v.Served {
-			continue
-		}
-		found := false
-		for _, sf := range v.SelectableFields {
-			if fieldPath(sf.JSONPath) == field {
-				found = true
-				break
-			}
-		}
-		if !found {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}
 	return true
+}
+
+// ListCRDVersions returns the resource version of every CRD in storage, by
+// name.
+type ListCRDVersions func(ctx context.Context) (map[string]string, error)
+
+// Run checks every interval that the CRD cache keeps up with storage, until
+// ctx is cancelled. When a CRD in storage differs from the cache and the
+// cache hasn't moved after grace, the rules are stale: every custom resource
+// is refused, and the readiness check fails, until the cache catches up.
+func (r *Rules) Run(ctx context.Context, list ListCRDVersions, interval, grace time.Duration) {
+	logged := false
+	var lagging map[string]string // name -> cached resource version when the lag was seen
+	for {
+		wait := interval
+		if len(lagging) > 0 {
+			wait = grace
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if !r.HasSynced() {
+			continue
+		}
+		if !logged {
+			klog.InfoS("Access rules synced")
+			logged = true
+		}
+		lagging = r.checkStaleness(ctx, list, lagging)
+	}
+}
+
+// checkStaleness compares the cache with storage once. lagging is what the
+// previous check found; it returns what this one found.
+func (r *Rules) checkStaleness(ctx context.Context, list ListCRDVersions, lagging map[string]string) map[string]string {
+	live, err := list(ctx)
+	if err != nil {
+		// Without storage nothing is served anyway; keep the last verdict.
+		klog.V(2).InfoS("Checking the CRD cache against storage failed", "err", err)
+		return lagging
+	}
+	r.mu.RLock()
+	store := r.crds
+	r.mu.RUnlock()
+	cached := map[string]string{}
+	for _, obj := range store.List() {
+		if crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
+			cached[crd.Name] = crd.ResourceVersion
+		}
+	}
+
+	found := map[string]string{}
+	for name, rv := range live {
+		if cached[name] != rv {
+			found[name] = cached[name]
+		}
+	}
+	for name, rv := range cached {
+		if _, ok := live[name]; !ok {
+			found[name] = rv
+		}
+	}
+
+	// A CRD that lagged last time and still has the same cached version
+	// hasn't moved for a whole grace period.
+	var stuck string
+	for name, rv := range found {
+		if prev, ok := lagging[name]; ok && prev == rv {
+			stuck = name
+			break
+		}
+	}
+	var staleErr error
+	if stuck != "" {
+		staleErr = fmt.Errorf("the API server's CustomResourceDefinition cache has not caught up with storage (%s differs)", stuck)
+	}
+	r.setStale(staleErr)
+	return found
+}
+
+func (r *Rules) setStale(err error) {
+	r.mu.Lock()
+	was := r.stale
+	r.stale = err
+	r.mu.Unlock()
+	switch {
+	case err != nil && was == nil:
+		staleCache.Set(1)
+		klog.ErrorS(err, "Access rules are stale; refusing custom resources outside system:masters until the CRD cache catches up")
+	case err == nil && was != nil:
+		staleCache.Set(0)
+		klog.InfoS("Access rules caught up with storage")
+	}
 }
 
 func groupResource(crd *apiextensionsv1.CustomResourceDefinition) schema.GroupResource {

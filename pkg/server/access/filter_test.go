@@ -2,12 +2,12 @@ package access
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -43,16 +43,21 @@ func object(kind, name string, fields map[string]any) *unstructured.Unstructured
 
 func newFilter(t *testing.T, canSeeHidden bool) *Filter {
 	t.Helper()
-	rules := NewRules()
-	rules.Set(votes.GroupResource(), Rule{OwnerField: "spec.userRef.name"})
-	rules.Set(posts.GroupResource(), Rule{HiddenField: "spec.hidden", HiddenSubresource: "hidden"})
-	rules.synced = true
+	rules, _ := staticRules(
+		crd("votes", map[string]string{OwnerFieldAnnotation: "spec.userRef.name"}),
+		crd("posts", map[string]string{HiddenFieldAnnotation: "spec.hidden"}),
+		crd("broken", map[string]string{"iam.miloapis.com/owner-feild": "spec.userRef.name"}),
+	)
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{votes: "VoteList", posts: "PostList"},
 		object("Vote", "mine", map[string]any{"spec": map[string]any{"userRef": map[string]any{"name": "u1"}}}),
 		object("Vote", "theirs", map[string]any{"spec": map[string]any{"userRef": map[string]any{"name": "u2"}}}),
 		object("Post", "shown", map[string]any{"spec": map[string]any{"hidden": false}}),
 		object("Post", "hidden", map[string]any{"spec": map[string]any{"hidden": true}}),
+		object("Post", "unset", map[string]any{"spec": map[string]any{}}),
+		object("Post", "hidden-string", map[string]any{"spec": map[string]any{"hidden": "true"}}),
+		object("Post", "spec-not-an-object", map[string]any{"spec": "x"}),
+		object("Post", "hidden-not-a-scalar", map[string]any{"spec": map[string]any{"hidden": map[string]any{"value": false}}}),
 	)
 	return &Filter{
 		Rules:  rules,
@@ -77,6 +82,11 @@ type call struct {
 // handler.
 func serve(t *testing.T, f *Filter, gvr schema.GroupVersionResource, verb, name, selector string, ctxFn func(context.Context) context.Context) (call, int) {
 	t.Helper()
+	return serveTo(t, httptest.NewRecorder(), f, gvr, verb, name, selector, ctxFn)
+}
+
+func serveTo(t *testing.T, rec *httptest.ResponseRecorder, f *Filter, gvr schema.GroupVersionResource, verb, name, selector string, ctxFn func(context.Context) context.Context) (call, int) {
+	t.Helper()
 	path := "/apis/" + gvr.Group + "/" + gvr.Version + "/" + gvr.Resource
 	if name != "" {
 		path += "/" + name
@@ -96,7 +106,6 @@ func serve(t *testing.T, f *Filter, gvr schema.GroupVersionResource, verb, name,
 	req = req.WithContext(ctx)
 
 	var got call
-	rec := httptest.NewRecorder()
 	f.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got.served = true
 		got.selector = r.URL.Query().Get("fieldSelector")
@@ -202,14 +211,69 @@ func TestPassThrough(t *testing.T) {
 	}
 }
 
-func TestNotSyncedFailsClosedInTheUserContext(t *testing.T) {
+func TestNotSyncedRefusesAllButSystemMasters(t *testing.T) {
 	f := newFilter(t, false)
-	f.Rules.synced = false
+	f.Rules.synced = func() bool { return false }
 	if _, code := serve(t, f, votes, "list", "", "", asUser("u1")); code != http.StatusServiceUnavailable {
 		t.Errorf("user context = %d, want 503", code)
 	}
-	if _, code := serve(t, f, votes, "list", "", "", nil); code != http.StatusOK {
-		t.Errorf("platform context = %d", code)
+	if _, code := serve(t, f, posts, "get", "hidden", "", nil); code != http.StatusServiceUnavailable {
+		t.Errorf("platform context = %d, want 503", code)
+	}
+	other := schema.GroupVersionResource{Group: "other.example.com", Version: "v1", Resource: "things"}
+	if _, code := serve(t, f, other, "list", "", "", nil); code != http.StatusServiceUnavailable {
+		t.Errorf("resource without a known CRD = %d, want 503: until sync any resource may have a rule", code)
+	}
+	if got, code := serve(t, f, posts, "get", "hidden", "", asMasters); code != http.StatusOK || !got.served {
+		t.Errorf("system:masters = %d served %v", code, got.served)
+	}
+	if got, _ := serve(t, f, votes, "list", "", "", func(ctx context.Context) context.Context { return milorequest.WithProject(ctx, "p") }); !got.served {
+		t.Error("project context refused")
+	}
+}
+
+func TestInvalidDeclarationIsRefused(t *testing.T) {
+	f := newFilter(t, false)
+	broken := schema.GroupVersionResource{Group: group, Version: "v1alpha1", Resource: "broken"}
+	for _, ctxFn := range []func(context.Context) context.Context{nil, asUser("u1"), inOrg("u1")} {
+		rec := httptest.NewRecorder()
+		got, code := serveTo(t, rec, f, broken, "list", "", "", ctxFn)
+		if code != http.StatusServiceUnavailable || got.served {
+			t.Errorf("code %d served %v, want 503", code, got.served)
+		}
+		if body := rec.Body.String(); !strings.Contains(body, "broken."+group) || !strings.Contains(body, "owner-feild") {
+			t.Errorf("error doesn't name the CRD and problem: %s", body)
+		}
+	}
+	if got, code := serve(t, f, broken, "get", "x", "", asMasters); code != http.StatusOK || !got.served {
+		t.Errorf("system:masters = %d served %v", code, got.served)
+	}
+}
+
+func TestStaleRulesRefuseCustomResources(t *testing.T) {
+	f := newFilter(t, false)
+	f.Rules.stale = fmt.Errorf("cache behind")
+	if _, code := serve(t, f, posts, "list", "", "", nil); code != http.StatusServiceUnavailable {
+		t.Errorf("stale = %d, want 503", code)
+	}
+	if _, code := serve(t, f, posts, "list", "", "", asMasters); code != http.StatusOK {
+		t.Errorf("stale, system:masters = %d", code)
+	}
+}
+
+func TestHiddenFieldValues(t *testing.T) {
+	f := newFilter(t, false)
+	for name, want := range map[string]int{
+		"shown":               http.StatusOK,
+		"unset":               http.StatusOK, // storage selects a missing field as "", which lists show
+		"hidden":              http.StatusNotFound,
+		"hidden-string":       http.StatusNotFound,
+		"spec-not-an-object":  http.StatusNotFound, // can't be read, so hidden
+		"hidden-not-a-scalar": http.StatusNotFound,
+	} {
+		if _, code := serve(t, f, posts, "get", name, "", nil); code != want {
+			t.Errorf("get %s = %d, want %d", name, code, want)
+		}
 	}
 }
 
@@ -217,30 +281,6 @@ func TestBadSelectorIsRejected(t *testing.T) {
 	f := newFilter(t, false)
 	if _, code := serve(t, f, votes, "list", "", "a%3Db%3Dc", asUser("u1")); code != http.StatusBadRequest {
 		t.Errorf("code = %d, want 400", code)
-	}
-}
-
-func TestRuleFor(t *testing.T) {
-	crd := &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-			OwnerFieldAnnotation:  ".spec.userRef.name",
-			HiddenFieldAnnotation: "spec.hidden",
-		}},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
-			Name: "v1alpha1", Served: true,
-			SelectableFields: []apiextensionsv1.SelectableField{{JSONPath: ".spec.userRef.name"}},
-		}}},
-	}
-	got := RuleFor(crd)
-	want := Rule{OwnerField: "spec.userRef.name", HiddenField: "spec.hidden", HiddenSubresource: DefaultHiddenSubresource}
-	if got != want {
-		t.Errorf("RuleFor = %+v, want %+v", got, want)
-	}
-	if !selectable(crd, "spec.userRef.name") || selectable(crd, "spec.hidden") {
-		t.Error("selectable reports the wrong fields")
-	}
-	if !RuleFor(&apiextensionsv1.CustomResourceDefinition{}).IsZero() {
-		t.Error("a CRD without annotations has a rule")
 	}
 }
 
@@ -282,7 +322,7 @@ func TestOwnerRuleAppliesInAnOrganizationContext(t *testing.T) {
 	if got, code := serve(t, f, votes, "list", "", "", inOrg("")); code != http.StatusForbidden || got.served {
 		t.Errorf("no caller ID: code %d served %v, want 403", code, got.served)
 	}
-	f.Rules.synced = false
+	f.Rules.synced = func() bool { return false }
 	if _, code := serve(t, f, votes, "list", "", "", inOrg("u1")); code != http.StatusServiceUnavailable {
 		t.Errorf("not synced = %d, want 503", code)
 	}
@@ -309,21 +349,31 @@ func TestLoopbackReadsAreNotNarrowed(t *testing.T) {
 	}
 }
 
-func TestAnnotationProblems(t *testing.T) {
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-		OwnerFieldAnnotation:           " ",
-		HiddenSubresourceAnnotation:    "staff",
-		"iam.miloapis.com/owner-feild": "spec.userRef.name",
-		"example.com/unrelated":        "x",
-	}}}
-	got := AnnotationProblems(crd)
-	if len(got) != 3 {
-		t.Fatalf("problems = %q, want 3", got)
+// TestServiceAccountInAnOrganizationContext pins down the owner rule's
+// effect on controllers working in an organization: a service account is a
+// caller like any other, so without a user ID it is refused, and with one it
+// only sees objects that ID owns. Controllers that manage users' objects
+// work in the platform context instead.
+func TestServiceAccountInAnOrganizationContext(t *testing.T) {
+	f := newFilter(t, false)
+	asServiceAccount := func(uid string) func(context.Context) context.Context {
+		return func(ctx context.Context) context.Context {
+			ctx = milorequest.WithOrganization(ctx, "o")
+			return request.WithUser(ctx, &user.DefaultInfo{Name: "system:serviceaccount:o:controller", UID: uid,
+				Groups: []string{"system:serviceaccounts", user.AllAuthenticated}})
+		}
 	}
-	ok := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-		OwnerFieldAnnotation: "spec.userRef.name", HiddenFieldAnnotation: "spec.hidden", HiddenSubresourceAnnotation: "staff",
-	}}}
-	if got := AnnotationProblems(ok); len(got) != 0 {
-		t.Errorf("problems for valid annotations = %q", got)
+	if got, code := serve(t, f, votes, "list", "", "", asServiceAccount("")); code != http.StatusForbidden || got.served {
+		t.Errorf("service account without a UID: code %d served %v, want 403", code, got.served)
 	}
+	if _, code := serve(t, f, votes, "get", "mine", "", asServiceAccount("")); code != http.StatusForbidden {
+		t.Errorf("service account without a UID, get = %d, want 403", code)
+	}
+	if got, _ := serve(t, f, votes, "list", "", "", asServiceAccount("sa-uid")); got.selector != "spec.userRef.name=sa-uid" {
+		t.Errorf("service account with a UID: selector %q", got.selector)
+	}
+}
+
+func asMasters(ctx context.Context) context.Context {
+	return request.WithUser(ctx, &user.DefaultInfo{Name: "admin", Groups: []string{user.SystemPrivilegedGroup}})
 }

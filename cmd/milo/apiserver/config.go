@@ -485,7 +485,7 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		kubeAPIs.Generic.LoopbackClientConfig.Wrap(tracing.WrapperFor(kubeAPIs.Generic.TracerProvider))
 	}
 
-	combinedInits := append(upstreamInits, loopbackInit, convertorInit, projectStatesInit)
+	combinedInits := append(upstreamInits, loopbackInit, convertorInit, projectStatesInit, accessRulesInit)
 
 	authInfoResolver := webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIs.ProxyTransport, kubeAPIs.Generic.EgressSelector, kubeAPIs.Generic.LoopbackClientConfig, kubeAPIs.Generic.TracerProvider)
 	apiExtensions, err := controlplaneapiserver.CreateAPIExtensionsConfig(*kubeAPIs.Generic, kubeAPIs.VersionedInformers, combinedInits, opts, 3, serviceResolver, authInfoResolver)
@@ -502,13 +502,11 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	kubeAPIs.Generic.AddPostStartHookOrDie("start-project-state-cache", projectStates.PostStartHook())
 	kubeAPIs.Generic.AddReadyzChecks(projectStates.ReadinessCheck())
 
-	// Hold traffic until every CRD's access rules are known, so no request
-	// for an annotated resource is served without them.
+	// Hold traffic until every CRD's access rules are known, and while the
+	// CRD cache they're read from lags storage. Requests that arrive anyway
+	// are refused by the access filter rather than served without rules.
 	kubeAPIs.Generic.AddReadyzChecks(healthz.NamedCheck("milo-access-rules", func(*http.Request) error {
-		if !accessRules.HasSynced() {
-			return fmt.Errorf("access rules not synced")
-		}
-		return nil
+		return accessRules.Check()
 	}))
 
 	// Add post-start hook to bootstrap CRDs from embedded filesystem

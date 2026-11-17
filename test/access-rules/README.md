@@ -21,19 +21,23 @@ Covers:
     owner;
   - the platform context passing owner rules through but still hiding
     bulletins, and staff seeing hidden bulletins;
-  - the milo-access-rules readiness check.
+  - the milo-access-rules readiness check;
+  - CRD writes that declare access rules Milo can't apply (a misspelt or
+    blank annotation, a field that isn't selectable) being refused, so a
+    resource is never served with its rule silently off.
 
 
 ## Steps
 
 | # | Name | Bindings | Try | Catch | Finally | Cleanup |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|
-| 1 | [install-crds](#step-install-crds) | 0 | 6 | 0 | 0 | 0 |
+| 1 | [install-crds](#step-install-crds) | 0 | 5 | 0 | 0 | 0 |
 | 2 | [readiness-check](#step-readiness-check) | 0 | 1 | 0 | 0 | 0 |
 | 3 | [user-context](#step-user-context) | 0 | 2 | 0 | 0 | 0 |
 | 4 | [organization-context](#step-organization-context) | 0 | 2 | 0 | 0 | 0 |
 | 5 | [platform-context](#step-platform-context) | 0 | 1 | 0 | 0 | 0 |
 | 6 | [staff](#step-staff) | 0 | 2 | 0 | 0 | 0 |
+| 7 | [invalid-declaration](#step-invalid-declaration) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `install-crds`
 
@@ -48,7 +52,6 @@ Covers:
 | 3 | `wait` | 0 | 0 | *No description* |
 | 4 | `apply` | 0 | 0 | *No description* |
 | 5 | `apply` | 0 | 0 | *No description* |
-| 6 | `sleep` | 0 | 0 | *No description* |
 
 ### Step: `readiness-check`
 
@@ -102,6 +105,16 @@ With get on bulletins/hidden, test-user sees hidden bulletins.
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `script` | 0 | 0 | *No description* |
+
+### Step: `invalid-declaration`
+
+A CRD write whose access-rule annotations Milo can't apply is refused.
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `script` | 0 | 0 | *No description* |
 
 ---
 
