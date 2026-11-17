@@ -310,8 +310,9 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 		}
 		value := w.value
 		if w.deleted {
-			// The tombstone keeps the last value, the delete's before-image.
-			value = l.value
+			// A tombstone holds no value. Watches read the deleted object from
+			// the feed's before-image.
+			value = []byte{}
 		}
 		results[i].rev, results[i].written = counter+int64(len(rows.keys))+1, true
 		rows.add(w.key, results[i].rev, w.deleted, value)
