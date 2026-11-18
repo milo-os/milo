@@ -23,6 +23,7 @@ import (
 	factory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/component-base/metrics/testutil"
+	"k8s.io/utils/clock"
 
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/internal/apiserver/projectstate/projectstatetest"
@@ -62,6 +63,7 @@ func newTestMux(b *NamespaceBootstrapper, projects ProjectLookup) *projectMux {
 		projects:     projects,
 		bootstrapper: b,
 		refusalLog:   rate.NewLimiter(rate.Every(refusalLogInterval), 1),
+		clock:        clock.RealClock{},
 	}
 }
 

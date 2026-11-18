@@ -149,9 +149,22 @@ func (r *ChildrenReadiness) record(reason string, err error) error {
 }
 
 // RegisterChildrenReadiness registers r with the hook under gvr, unless the
-// operator turned the check off.
+// operator turned the check off. The idle sweep then keeps the resource's
+// children too: the server went ready only once they served.
 func RegisterChildrenReadiness(reg ReadinessRegistrar, enabled bool, gvr metav1.GroupVersionResource, r *ChildrenReadiness) {
 	if enabled {
 		reg.RegisterStorage(gvr, r)
+		heldWarm.Store(r.gr, struct{}{})
 	}
+}
+
+// heldWarm holds the resources whose children a readiness check waits for at
+// the server's start. Quota admission watches a ResourceClaim right after its
+// create, and a cache that is still starting refuses that watch with a
+// Retry-After of up to 30 s, so the idle sweep never retires these children.
+var heldWarm sync.Map // schema.GroupResource to struct{}
+
+func isHeldWarm(gr schema.GroupResource) bool {
+	_, ok := heldWarm.Load(gr)
+	return ok
 }

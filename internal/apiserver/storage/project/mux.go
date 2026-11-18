@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
@@ -15,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
@@ -27,6 +29,7 @@ import (
 
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 )
 
 // -------------------- metrics --------------------
@@ -92,11 +95,12 @@ var (
 	childRemovals = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name: "projectstorage_child_removals_total",
-			Help: "Child storages removed because their Project left the API server's view, by resource type; " +
+			Help: "Child storages removed, by resource type and by reason: project_gone when their Project left " +
+				"the API server's view, idle when no request and no watch used them for the idle time; " +
 				"each is destroyed once in-flight requests drain",
 			StabilityLevel: k8smetrics.ALPHA,
 		},
-		[]string{"resource_group", "resource_kind"},
+		[]string{"resource_group", "resource_kind", "reason"},
 	)
 
 	readinessChildren = k8smetrics.NewGaugeVec(
@@ -146,6 +150,38 @@ type child struct {
 	destroy   factory.DestroyFunc
 	created   time.Time
 	readyOnce sync.Once
+
+	// lastUsed is the last time, in Unix nanoseconds, that a request picked
+	// the child or a watch on it ended; watches counts its open watches. The
+	// idle sweep retires a child with no open watch and no use for the idle
+	// time.
+	lastUsed atomic.Int64
+	watches  atomic.Int32
+}
+
+func (c *child) touch(now time.Time) { c.lastUsed.Store(now.UnixNano()) }
+
+// idle says whether no watch is open on the child and nothing used it for d.
+func (c *child) idle(now time.Time, d time.Duration) bool {
+	return c.watches.Load() == 0 && now.Sub(time.Unix(0, c.lastUsed.Load())) >= d
+}
+
+// countedWatch ends its child's count of open watches once, at Stop. The
+// API server's watch handler stops every watch it serves when the watch ends
+// (k8s.io/apiserver v0.37.1, pkg/endpoints/handlers/get.go line 299).
+type countedWatch struct {
+	watch.Interface
+	child *child
+	clock clock.PassiveClock
+	once  sync.Once
+}
+
+func (w *countedWatch) Stop() {
+	w.once.Do(func() {
+		w.child.touch(w.clock.Now())
+		w.child.watches.Add(-1)
+	})
+	w.Interface.Stop()
 }
 
 type decoratorArgs struct {
@@ -168,6 +204,7 @@ type decoratorArgs struct {
 type instrumentedStorage struct {
 	inner storage.Interface
 	child *child
+	clock clock.PassiveClock // ends a watch's use of the child
 
 	// normalized labels
 	group string // API group ("" => "core" when you query; we keep "" here)
@@ -203,12 +240,14 @@ func (i *instrumentedStorage) Delete(ctx context.Context, key string, out runtim
 	return nil
 }
 func (i *instrumentedStorage) Watch(ctx context.Context, key string, opts storage.ListOptions) (watch.Interface, error) {
+	i.child.watches.Add(1)
 	w, err := i.inner.Watch(ctx, key, opts)
 	if err != nil {
+		i.child.watches.Add(-1)
 		return nil, i.markReinit("watch", err)
 	}
 	i.markSuccess()
-	return w, nil
+	return &countedWatch{Interface: w, child: i.child, clock: i.clock}, nil
 }
 func (i *instrumentedStorage) Get(ctx context.Context, key string, opts storage.GetOptions, objPtr runtime.Object) error {
 	if err := i.inner.Get(ctx, key, opts, objPtr); err != nil {
@@ -256,6 +295,36 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 // volume. A writer that retries a refused write in a loop would otherwise log at its own rate.
 const refusalLogInterval = 10 * time.Second
 
+// Reasons a child storage is removed, the reason label of childRemovals.
+const (
+	removedProjectGone = "project_gone"
+	removedIdle        = "idle"
+)
+
+// DefaultChildIdleTimeout is --project-storage-idle-timeout's default.
+const DefaultChildIdleTimeout = 15 * time.Minute
+
+// childIdleTimeout is how long a Project's child storage is kept with no
+// request and no open watch; zero keeps every child until its Project goes.
+// SetChildIdleTimeout sets it at start, before the first storage is built.
+var childIdleTimeout time.Duration
+
+// SetChildIdleTimeout sets how long a Project's child storage is kept with no
+// request and no open watch, for every storage built after the call. Zero
+// turns the idle retire off.
+func SetChildIdleTimeout(d time.Duration) {
+	childIdleTimeout = d
+}
+
+// ChildIdleTimeout returns the idle time SetChildIdleTimeout set.
+func ChildIdleTimeout() time.Duration { return childIdleTimeout }
+
+// maxIdleSweepPeriod bounds how often each mux looks for idle children, as the
+// kubelet's watch-based object cache sweeps its idle watches once a minute
+// (k8s.io/kubernetes v1.37.1, pkg/kubelet/util/manager/watch_based_manager.go
+// line 207).
+const maxIdleSweepPeriod = time.Minute
+
 // ProjectLookup tells the storage about Projects: Lookup says which Project a
 // name refers to now, reading storage when the view cannot answer; Project
 // says whether the view holds a name; AddListener reports Projects that leave
@@ -283,13 +352,24 @@ type projectMux struct {
 	// before its storage stops; removeListener stops the view's reports.
 	drain          time.Duration
 	removeListener func()
+
+	// idle is how long a child is kept with no request and no open watch;
+	// zero keeps it until its Project goes. clock tells the time of each use
+	// and of each sweep; stopSweep ends the sweep.
+	idle      time.Duration
+	clock     clock.PassiveClock
+	stopSweep chan struct{}
 }
 
 func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
 
+// childForProject returns the project's child, built on the first request.
+// It marks the child used under the mux's lock, so the idle sweep, which
+// holds the lock to remove a child, never retires one a request just picked.
 func (m *projectMux) childForProject(project string) (storage.Interface, error) {
 	m.mu.RLock()
 	if c, ok := m.children[project]; ok {
+		c.touch(m.clock.Now())
 		m.mu.RUnlock()
 		return c.s, nil
 	}
@@ -298,6 +378,7 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.children[project]; ok {
+		c.touch(m.clock.Now())
 		return c.s, nil
 	}
 	start := time.Now()
@@ -330,9 +411,11 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 
 	// Wrap the child once with instrumentation.
 	c := &child{s: s, destroy: destroy, created: time.Now()}
+	c.touch(m.clock.Now())
 	wrapped := &instrumentedStorage{
 		inner: s,
 		child: c,
+		clock: m.clock,
 		group: m.args.resourceGroup,
 		kind:  m.args.resourceKind,
 	}
@@ -348,6 +431,9 @@ func (m *projectMux) destroyAll() {
 	forgetMux(schema.GroupResource{Group: m.args.resourceGroup, Resource: m.args.resourceKind}, m)
 	if m.removeListener != nil {
 		m.removeListener()
+	}
+	if m.stopSweep != nil {
+		close(m.stopSweep)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -415,7 +501,7 @@ func (m *projectMux) ProjectGone(name string) {
 	delete(m.children, name)
 	m.mu.Unlock()
 	if ok {
-		m.retire(c)
+		m.retire(c, removedProjectGone)
 	}
 }
 
@@ -433,15 +519,52 @@ func (m *projectMux) ViewResynced() {
 	}
 	m.mu.Unlock()
 	for _, c := range gone {
-		m.retire(c)
+		m.retire(c, removedProjectGone)
+	}
+}
+
+// startIdleSweep retires idle children every sweep period until destroyAll,
+// when m.idle is set.
+func (m *projectMux) startIdleSweep() {
+	if m.idle <= 0 {
+		return
+	}
+	m.stopSweep = make(chan struct{})
+	go wait.Until(m.retireIdle, min(m.idle, maxIdleSweepPeriod), m.stopSweep)
+}
+
+// retireIdle removes and retires every Project's child that no request and no
+// watch used for the idle time, as ProjectGone retires a gone Project's; the next request
+// into the Project builds it again. The root plane's child stays, and so does
+// a child whose cache has not served yet, as the kubelet stops only a synced
+// idle watch (k8s.io/kubernetes v1.37.1,
+// pkg/kubelet/util/manager/watch_based_manager.go line 106): its first list
+// is still running, and a request is waiting for it. A resource that a
+// readiness check holds warm keeps every child.
+func (m *projectMux) retireIdle() {
+	if isHeldWarm(schema.GroupResource{Group: m.args.resourceGroup, Resource: m.args.resourceKind}) {
+		return
+	}
+	now := m.clock.Now()
+	m.mu.Lock()
+	var idle []*child
+	for name, c := range m.children {
+		if name != "" && c.idle(now, m.idle) && c.s.ReadinessCheck() == nil {
+			idle = append(idle, c)
+			delete(m.children, name)
+		}
+	}
+	m.mu.Unlock()
+	for _, c := range idle {
+		m.retire(c, removedIdle)
 	}
 }
 
 // retire destroys a removed child after drain. A request that picked the child
 // before its removal ends within the server's request timeout, and a watch on
 // it ends when its cacher stops.
-func (m *projectMux) retire(c *child) {
-	childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Inc()
+func (m *projectMux) retire(c *child, reason string) {
+	childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, reason).Inc()
 	if c.destroy != nil {
 		time.AfterFunc(m.drain, c.destroy)
 	}

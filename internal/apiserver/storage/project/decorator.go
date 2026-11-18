@@ -13,11 +13,13 @@ import (
 	factory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
 
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/clock"
 )
 
 // ProjectAwareDecorator builds per-project storage isolation using etcd prefix separation.
-// Every request into a project's control plane looks its Project up in projects, and a child whose
-// Project leaves the view is destroyed after drain. When bootstrapper is non-nil, it ensures the
+// Every request into a project's control plane looks its Project up in projects. A child whose
+// Project leaves the view, or that no request and no watch used for the idle time
+// (SetChildIdleTimeout), is destroyed after drain. When bootstrapper is non-nil, it ensures the
 // milo-system namespace exists in project control planes.
 func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, projects ProjectLookup,
 	bootstrapper *NamespaceBootstrapper, drain time.Duration) generic.StorageDecorator {
@@ -64,9 +66,12 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 			},
 			versioner: defS.Versioner(),
 			drain:     drain,
+			idle:      childIdleTimeout,
+			clock:     clock.RealClock{},
 		}
 		mux.removeListener = projects.AddListener(mux)
 		registerMux(gr, mux)
+		mux.startIdleSweep()
 		return mux, mux.destroyAll, nil
 	}
 }
