@@ -161,8 +161,8 @@ type child struct {
 
 func (c *child) touch(now time.Time) { c.lastUsed.Store(now.UnixNano()) }
 
-// idle says whether no watch is open on the child and nothing used it for d.
-func (c *child) idle(now time.Time, d time.Duration) bool {
+// unusedFor says whether no watch is open on the child and nothing used it for d.
+func (c *child) unusedFor(now time.Time, d time.Duration) bool {
 	return c.watches.Load() == 0 && now.Sub(time.Unix(0, c.lastUsed.Load())) >= d
 }
 
@@ -341,12 +341,12 @@ type projectMux struct {
 	drain          time.Duration
 	removeListener func()
 
-	// idle is how long a child is kept with no request and no open watch;
-	// zero keeps it until its Project goes. clock tells the time of each use
-	// and of each sweep; stopSweep ends the sweep.
-	idle      time.Duration
-	clock     clock.PassiveClock
-	stopSweep chan struct{}
+	// idleTimeout is how long a child is kept with no request and no open
+	// watch; zero keeps it until its Project goes. clock tells the time of
+	// each use and of each sweep; stopSweep ends the sweep.
+	idleTimeout time.Duration
+	clock       clock.PassiveClock
+	stopSweep   chan struct{}
 }
 
 func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
@@ -517,13 +517,13 @@ func (m *projectMux) ViewResynced() {
 }
 
 // startIdleSweep retires idle children every sweep period until destroyAll,
-// when m.idle is set.
+// when m.idleTimeout is set.
 func (m *projectMux) startIdleSweep() {
-	if m.idle <= 0 {
+	if m.idleTimeout <= 0 {
 		return
 	}
 	m.stopSweep = make(chan struct{})
-	go wait.Until(m.retireIdle, min(m.idle, maxIdleSweepPeriod), m.stopSweep)
+	go wait.Until(m.retireIdle, min(m.idleTimeout, maxIdleSweepPeriod), m.stopSweep)
 }
 
 // retireIdle removes and retires every Project's child that no request and no
@@ -540,15 +540,15 @@ func (m *projectMux) retireIdle() {
 	}
 	now := m.clock.Now()
 	m.mu.Lock()
-	var idle []*child
+	var retired []*child
 	for name, c := range m.children {
-		if name != "" && c.idle(now, m.idle) && c.s.ReadinessCheck() == nil {
-			idle = append(idle, c)
+		if name != "" && c.unusedFor(now, m.idleTimeout) && c.s.ReadinessCheck() == nil {
+			retired = append(retired, c)
 			delete(m.children, name)
 		}
 	}
 	m.mu.Unlock()
-	for _, c := range idle {
+	for _, c := range retired {
 		m.retire(c, removedIdle)
 	}
 }

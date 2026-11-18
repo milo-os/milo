@@ -64,10 +64,10 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 			children: map[string]*child{
 				"": {s: defS, destroy: defDestroy},
 			},
-			versioner: defS.Versioner(),
-			drain:     drain,
-			idle:      idle,
-			clock:     clock.RealClock{},
+			versioner:   defS.Versioner(),
+			drain:       drain,
+			idleTimeout: idle,
+			clock:       clock.RealClock{},
 		}
 		mux.removeListener = projects.AddListener(mux)
 		registerMux(gr, mux)

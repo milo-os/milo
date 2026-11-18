@@ -60,7 +60,7 @@ func newIdleMux(children *countingChildren, unready *atomic.Bool) (*projectMux, 
 	m := newTestMux(nil, everyProjectKnown())
 	clk := clocktesting.NewFakeClock(time.Now())
 	m.args = decoratorArgs{resourceKind: "configmaps"}
-	m.idle, m.drain, m.clock = testIdle, testDrain, clk
+	m.idleTimeout, m.drain, m.clock = testIdle, testDrain, clk
 	m.inner = cachesOf(children, unready)
 	return m, clk
 }
