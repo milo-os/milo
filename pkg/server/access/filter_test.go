@@ -2,7 +2,6 @@ package access
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -252,12 +251,15 @@ func TestInvalidDeclarationIsRefused(t *testing.T) {
 
 func TestStaleRulesRefuseCustomResources(t *testing.T) {
 	f := newFilter(t, false)
-	f.Rules.stale = fmt.Errorf("cache behind")
+	f.Rules.stale = map[string]bool{"posts." + group: true}
 	if _, code := serve(t, f, posts, "list", "", "", nil); code != http.StatusServiceUnavailable {
 		t.Errorf("stale = %d, want 503", code)
 	}
 	if _, code := serve(t, f, posts, "list", "", "", asMasters); code != http.StatusOK {
 		t.Errorf("stale, system:masters = %d", code)
+	}
+	if _, code := serve(t, f, votes, "list", "", "", nil); code == http.StatusServiceUnavailable {
+		t.Error("a CRD in step refused while another is stale")
 	}
 }
 

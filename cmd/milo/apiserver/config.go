@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -453,16 +454,6 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 	serviceResolver := webhook.NewDefaultServiceResolver()
 
-	loopbackInit := initializer.LoopbackInitializer{
-		Loopback: rest.CopyConfig(genericConfig.LoopbackClientConfig),
-	}
-
-	// Inject the legacy scheme into admission plugins (e.g. quota) that need to
-	// convert internal native types to their external versioned form.
-	convertorInit := initializer.ObjectConvertorInitializer{
-		Convertor: legacyscheme.Scheme,
-	}
-
 	// One watch of Projects for the whole process: admission plugins receive it
 	// through this initializer.
 	projectClient, err := dynamic.NewForConfig(rest.CopyConfig(genericConfig.LoopbackClientConfig))
@@ -471,10 +462,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 	projectStates := projectstate.NewCache(projectClient)
 	c.ProjectStates = projectStates
-	projectStatesInit := initializer.ProjectStatesInitializer{States: projectStates}
-	accessRulesInit := initializer.AccessRulesInitializer{Rules: accessRules}
+	miloInits := miloInitializers(genericConfig.LoopbackClientConfig, projectStates, accessRules)
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit, accessRulesInit})
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, miloInits)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +475,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		kubeAPIs.Generic.LoopbackClientConfig.Wrap(tracing.WrapperFor(kubeAPIs.Generic.TracerProvider))
 	}
 
-	combinedInits := append(upstreamInits, loopbackInit, convertorInit, projectStatesInit, accessRulesInit)
+	// The APIExtensions and aggregator servers get the same initializers as
+	// the control plane, so a plugin is initialized the same way on each.
+	combinedInits := append(slices.Clip(upstreamInits), miloInits...)
 
 	authInfoResolver := webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIs.ProxyTransport, kubeAPIs.Generic.EgressSelector, kubeAPIs.Generic.LoopbackClientConfig, kubeAPIs.Generic.TracerProvider)
 	apiExtensions, err := controlplaneapiserver.CreateAPIExtensionsConfig(*kubeAPIs.Generic, kubeAPIs.VersionedInformers, combinedInits, opts, 3, serviceResolver, authInfoResolver)
@@ -502,9 +494,11 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	kubeAPIs.Generic.AddPostStartHookOrDie("start-project-state-cache", projectStates.PostStartHook())
 	kubeAPIs.Generic.AddReadyzChecks(projectStates.ReadinessCheck())
 
-	// Hold traffic until every CRD's access rules are known, and while the
-	// CRD cache they're read from lags storage. Requests that arrive anyway
-	// are refused by the access filter rather than served without rules.
+	// Hold traffic until every CRD's access rules are known. Requests that
+	// arrive anyway are refused by the access filter rather than served
+	// without rules. A CRD whose cached copy lags storage later doesn't fail
+	// this check: the filter refuses just that CRD's resources, so a lag
+	// shared by every replica can't take them all out of rotation.
 	kubeAPIs.Generic.AddReadyzChecks(healthz.NamedCheck("milo-access-rules", func(*http.Request) error {
 		return accessRules.Check()
 	}))
@@ -691,4 +685,17 @@ func getSpanNameFromRequestInfo(info *request.RequestInfo, r *http.Request) stri
 		spanName += "/" + info.Subresource
 	}
 	return r.Method + " " + spanName
+}
+
+// miloInitializers returns Milo's own admission plugin initializers: the
+// loopback client, the legacy scheme for converting internal types (quota),
+// the shared Project cache and the access rules. Every server in the chain
+// gets this one list.
+func miloInitializers(loopback *rest.Config, states *projectstate.Cache, rules *access.Rules) []admission.PluginInitializer {
+	return []admission.PluginInitializer{
+		initializer.LoopbackInitializer{Loopback: rest.CopyConfig(loopback)},
+		initializer.ObjectConvertorInitializer{Convertor: legacyscheme.Scheme},
+		initializer.ProjectStatesInitializer{States: states},
+		initializer.AccessRulesInitializer{Rules: rules},
+	}
 }

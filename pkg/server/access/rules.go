@@ -23,9 +23,9 @@
 // pass through unchanged.
 //
 // The rules fail closed. A CRD whose declaration is invalid (see Declare),
-// and every resource while the rules can't be trusted (before the CRD cache
-// syncs, or while it lags storage), is refused to every caller outside
-// system:masters, rather than served without its rule.
+// a CRD whose cached copy lags storage, and every resource before the CRD
+// cache syncs, is refused to every caller outside system:masters, rather
+// than served without its rule.
 package access
 
 import (
@@ -76,7 +76,7 @@ type Rules struct {
 	synced  func() bool
 	decls   map[string]cachedDeclaration // by CRD name
 	invalid map[schema.GroupResource][]string
-	stale   error // non-nil while the CRD cache lags storage
+	stale   map[string]bool // CRDs whose cached copy lags storage, by name
 }
 
 // cachedDeclaration is a CRD's declaration, read from that exact object. The
@@ -121,15 +121,15 @@ func (r *Rules) HasSynced() bool {
 	return synced != nil && synced()
 }
 
-// Check reports why the rules can't be trusted, or nil when they can: the
-// milo-access-rules readiness check.
+// Check reports whether the rules have loaded: the milo-access-rules
+// readiness check. It doesn't fail while CRDs are stale: a lag shared by
+// every replica would take them all out of rotation, built-in resources
+// included. Lookup refuses the lagging CRDs instead.
 func (r *Rules) Check() error {
 	if !r.HasSynced() {
 		return fmt.Errorf("access rules not synced")
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.stale
+	return nil
 }
 
 // Lookup returns how to treat a request for gr.
@@ -140,7 +140,7 @@ func (r *Rules) Lookup(gr schema.GroupResource) Lookup {
 			"the API server is starting: access rules for custom resources aren't loaded yet"))
 	}
 	r.mu.RLock()
-	store, stale := r.crds, r.stale
+	store := r.crds
 	r.mu.RUnlock()
 
 	// A CRD's name is always <plural>.<group>.
@@ -156,9 +156,13 @@ func (r *Rules) Lookup(gr schema.GroupResource) Lookup {
 	if !ok {
 		return refused(apierrors.NewServiceUnavailable(fmt.Sprintf("reading the access rules of %s: unexpected %T", gr, obj)))
 	}
-	if stale != nil {
+	r.mu.RLock()
+	stale := r.stale[crd.Name]
+	r.mu.RUnlock()
+	if stale {
 		return refused(apierrors.NewServiceUnavailable(fmt.Sprintf(
-			"access rules for %s may be out of date: %v", gr, stale)))
+			"access rules for %s may be out of date: this API server's copy of CustomResourceDefinition %s "+
+				"has not caught up with storage", gr, crd.Name)))
 	}
 	d := r.declaration(crd)
 	if !d.Valid() {
@@ -263,9 +267,9 @@ func equalStrings(a, b []string) bool {
 type ListCRDVersions func(ctx context.Context) (map[string]string, error)
 
 // Run checks every interval that the CRD cache keeps up with storage, until
-// ctx is cancelled. When a CRD in storage differs from the cache and the
-// cache hasn't moved after grace, the rules are stale: every custom resource
-// is refused, and the readiness check fails, until the cache catches up.
+// ctx is cancelled. When a CRD in storage differs from the cache and its
+// cached copy hasn't moved after grace, that CRD is stale: its resources are
+// refused until the cache catches up. Other resources are unaffected.
 func (r *Rules) Run(ctx context.Context, list ListCRDVersions, interval, grace time.Duration) {
 	logged := false
 	var lagging map[string]string // name -> cached resource version when the lag was seen
@@ -323,33 +327,33 @@ func (r *Rules) checkStaleness(ctx context.Context, list ListCRDVersions, laggin
 
 	// A CRD that lagged last time and still has the same cached version
 	// hasn't moved for a whole grace period.
-	var stuck string
+	stuck := map[string]bool{}
 	for name, rv := range found {
 		if prev, ok := lagging[name]; ok && prev == rv {
-			stuck = name
-			break
+			stuck[name] = true
 		}
 	}
-	var staleErr error
-	if stuck != "" {
-		staleErr = fmt.Errorf("the API server's CustomResourceDefinition cache has not caught up with storage (%s differs)", stuck)
-	}
-	r.setStale(staleErr)
+	r.setStale(stuck)
 	return found
 }
 
-func (r *Rules) setStale(err error) {
+// setStale records which CRDs are stale, logging each change.
+func (r *Rules) setStale(stuck map[string]bool) {
 	r.mu.Lock()
 	was := r.stale
-	r.stale = err
+	r.stale = stuck
 	r.mu.Unlock()
-	switch {
-	case err != nil && was == nil:
-		staleCache.Set(1)
-		klog.ErrorS(err, "Access rules are stale; refusing custom resources outside system:masters until the CRD cache catches up")
-	case err == nil && was != nil:
-		staleCache.Set(0)
-		klog.InfoS("Access rules caught up with storage")
+	staleCache.Set(float64(len(stuck)))
+	for name := range stuck {
+		if !was[name] {
+			klog.ErrorS(nil, "Access rules for a CRD are stale; refusing its resources outside system:masters until the CRD cache catches up",
+				"crd", name)
+		}
+	}
+	for name := range was {
+		if !stuck[name] {
+			klog.InfoS("Access rules for a CRD caught up with storage", "crd", name)
+		}
 	}
 }
 

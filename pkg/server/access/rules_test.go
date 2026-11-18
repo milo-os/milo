@@ -208,56 +208,67 @@ func TestDeletedTombstoneClearsTheMetric(t *testing.T) {
 	}
 }
 
-func TestStaleCacheRefusesCustomResources(t *testing.T) {
+// TestStaleCRDIsRefused checks a CRD whose cached copy stops following
+// storage is refused, while other CRDs stay served and the readiness check
+// keeps passing: a lag every replica shares mustn't take them all out of
+// rotation.
+func TestStaleCRDIsRefused(t *testing.T) {
 	votesGR := schema.GroupResource{Group: group, Resource: "votes"}
-	rules, store := staticRules(crd("votes", map[string]string{OwnerFieldAnnotation: "spec.userRef.name"}))
-	live := map[string]string{"votes." + group: "1"}
+	notesGR := schema.GroupResource{Group: group, Resource: "notes"}
+	owned := map[string]string{OwnerFieldAnnotation: "spec.userRef.name"}
+	rules, store := staticRules(crd("votes", owned), crd("notes", owned))
+	live := map[string]string{"votes." + group: "1", "notes." + group: "1"}
 	list := func(context.Context) (map[string]string, error) { return live, nil }
 	ctx := context.Background()
+	served := func(gr schema.GroupResource) bool { return rules.Lookup(gr).State == Enforced }
 
 	lagging := rules.checkStaleness(ctx, list, nil)
-	if len(lagging) != 0 || rules.Check() != nil {
-		t.Fatalf("in step: lagging %v, check %v", lagging, rules.Check())
+	if len(lagging) != 0 || len(rules.stale) != 0 {
+		t.Fatalf("in step: lagging %v, stale %v", lagging, rules.stale)
 	}
 
 	// Storage moves on; the first check only notes it.
-	live = map[string]string{"votes." + group: "2", "posts." + group: "5"}
+	live = map[string]string{"votes." + group: "2", "posts." + group: "5", "notes." + group: "1"}
 	lagging = rules.checkStaleness(ctx, list, lagging)
-	if len(lagging) != 2 || rules.Check() != nil {
-		t.Fatalf("first lag: lagging %v, check %v", lagging, rules.Check())
+	if len(lagging) != 2 || len(rules.stale) != 0 || !served(votesGR) {
+		t.Fatalf("first lag: lagging %v, stale %v", lagging, rules.stale)
 	}
 
-	// A grace period later the cache hasn't moved: stale.
+	// A grace period later votes hasn't moved: it's stale, and only it.
 	lagging = rules.checkStaleness(ctx, list, lagging)
-	if rules.Check() == nil {
-		t.Fatal("cache that didn't move isn't stale")
+	if l := rules.Lookup(votesGR); l.State != Refused || !strings.Contains(l.Err.Error(), "out of date") ||
+		!strings.Contains(l.Err.Error(), "votes."+group) {
+		t.Errorf("stale CRD = %+v", l)
 	}
-	if l := rules.Lookup(votesGR); l.State != Refused || !strings.Contains(l.Err.Error(), "out of date") {
-		t.Errorf("custom resource while stale = %+v", l)
+	if !served(notesGR) {
+		t.Errorf("CRD in step while another is stale = %+v", rules.Lookup(notesGR))
 	}
 	if l := rules.Lookup(schema.GroupResource{Group: "iam.miloapis.com", Resource: "users-not-a-crd"}); l.State != Unrestricted {
-		t.Errorf("resource without a CRD while stale = %+v", l)
+		t.Errorf("resource without a CRD while a CRD is stale = %+v", l)
+	}
+	if err := rules.Check(); err != nil {
+		t.Errorf("readiness while a CRD is stale = %v, want ok", err)
 	}
 
 	// A storage read that fails keeps the verdict.
 	failing := func(context.Context) (map[string]string, error) { return nil, fmt.Errorf("boom") }
 	lagging = rules.checkStaleness(ctx, failing, lagging)
-	if rules.Check() == nil {
+	if served(votesGR) {
 		t.Error("a failed check cleared staleness")
 	}
 
 	// The cache catches up.
-	c := crd("votes", map[string]string{OwnerFieldAnnotation: "spec.userRef.name"})
+	c := crd("votes", owned)
 	c.ResourceVersion = "2"
 	_ = store.Update(c)
 	p := crd("posts", nil)
 	p.ResourceVersion = "5"
 	_ = store.Add(p)
-	if lagging = rules.checkStaleness(ctx, list, lagging); len(lagging) != 0 || rules.Check() != nil {
-		t.Errorf("caught up: lagging %v, check %v", lagging, rules.Check())
+	if lagging = rules.checkStaleness(ctx, list, lagging); len(lagging) != 0 || len(rules.stale) != 0 {
+		t.Errorf("caught up: lagging %v, stale %v", lagging, rules.stale)
 	}
-	if l := rules.Lookup(votesGR); l.State != Enforced {
-		t.Errorf("after catching up = %+v", l)
+	if !served(votesGR) {
+		t.Errorf("after catching up = %+v", rules.Lookup(votesGR))
 	}
 }
 
@@ -271,8 +282,8 @@ func TestMovingCacheIsNotStale(t *testing.T) {
 	c.ResourceVersion = "2"
 	_ = store.Update(c)
 	rules.checkStaleness(context.Background(), list, lagging)
-	if err := rules.Check(); err != nil {
-		t.Errorf("moving cache = %v", err)
+	if len(rules.stale) != 0 {
+		t.Errorf("moving cache is stale: %v", rules.stale)
 	}
 }
 

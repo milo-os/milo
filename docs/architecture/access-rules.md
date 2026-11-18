@@ -120,16 +120,18 @@ While the rules can't be trusted, Milo fails closed. Callers outside
 
 - **Before the cache has synced**, for every resource request outside a
   project, since any resource may turn out to have a rule.
-- **While the cache lags storage**, for every custom resource. Every 30
-  seconds Milo compares the resource version of each CRD in storage with the
-  cache. If a CRD still differs 10 seconds later and the cache hasn't moved,
-  the rules are stale until a later check finds the cache caught up. The
-  `milo_access_rules_stale` gauge is 1 meanwhile, and the
-  `MiloAccessRulesStale` alert fires when it lasts 5 minutes.
+- **While a CRD's cached copy lags storage**, for that CRD's resources
+  only. Every 30 seconds Milo compares the resource version of each CRD in
+  storage with the cache. If a CRD still differs 10 seconds later and its
+  cached copy hasn't moved, that CRD is stale until a later check finds it
+  caught up. Other resources, built-in and custom, are served as usual. The
+  `milo_access_rules_stale` gauge counts the stale CRDs, and the
+  `MiloAccessRulesStale` alert fires when any stay stale for 5 minutes.
 
-Both states also fail the `milo-access-rules` readiness check, which keeps
-new traffic away from the API server; the refusals cover requests that
-reach it anyway.
+Only the first state fails the `milo-access-rules` readiness check, which
+keeps traffic away from an API server that is still starting. Staleness
+doesn't: a watch problem shared by every replica would otherwise take them
+all out of rotation at once, and with them every resource Milo serves.
 
 The `system:masters` exemption lets Milo's own startup hooks, which use the
 loopback client, and operators work while the rules are unavailable.

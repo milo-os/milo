@@ -18,12 +18,12 @@ var (
 		[]string{"group", "resource", "reason"},
 	)
 
-	// staleCache is 1 while the CRD cache the access rules read lags storage.
+	// staleCache counts the CRDs whose cached copy lags storage.
 	staleCache = k8smetrics.NewGauge(
 		&k8smetrics.GaugeOpts{
 			Name: "milo_access_rules_stale",
-			Help: "1 while the API server's CRD cache has not caught up with storage, so access rules may be out of date " +
-				"and custom resources are refused outside system:masters.",
+			Help: "Number of CRDs whose copy in the API server's CRD cache has not caught up with storage, so their access " +
+				"rules may be out of date. Their resources are refused outside system:masters; other resources are served.",
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 	)
