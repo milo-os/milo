@@ -255,11 +255,16 @@ func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
 	}
 }
 
+// sweptIdle is the idle time of a decorated storage under test: under a
+// minute, so its sweep runs at the idle time, and short, so the idle child
+// goes well within waitFor's deadline.
+const sweptIdle = 50 * time.Millisecond
+
 // TestDecoratedStorageRetiresIdleChildren covers the idle time end to end: a
 // decorated storage sweeps on its own, at the idle time when it is under a
-// minute, and 0 keeps every child.
+// minute, and 0 starts no sweep.
 func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
-	for _, idle := range []time.Duration{50 * time.Millisecond, 0} {
+	for _, idle := range []time.Duration{sweptIdle, 0} {
 		var children countingChildren
 		s, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, cachesOf(&children, nil),
 			everyProjectKnown(), nil, testDrain, idle)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
@@ -277,9 +282,8 @@ func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
 			waitFor(t, "the idle child to be destroyed", func() bool { return children.destroyed.Load() == 1 })
 			continue
 		}
-		time.Sleep(200 * time.Millisecond)
-		if n := children.destroyed.Load(); n != 0 {
-			t.Fatalf("expected no retire with the idle time at 0, got %d destroyed", n)
+		if s.(*projectMux).stopSweep != nil {
+			t.Fatal("expected no sweep with the idle time at 0")
 		}
 	}
 }
