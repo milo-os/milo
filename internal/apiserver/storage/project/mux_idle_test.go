@@ -121,6 +121,30 @@ func TestIdleChildIsRetiredAndRebuilt(t *testing.T) {
 	}
 }
 
+// TestARetiredChildIsRetiredOnce covers the sweep and ProjectGone on one
+// child, in either order: the first takes it out of the mux, so the second
+// finds nothing, and the child is retired, and so destroyed, once.
+func TestARetiredChildIsRetiredOnce(t *testing.T) {
+	for _, sweepFirst := range []bool{true, false} {
+		var children countingChildren
+		m, clk := newIdleMux(&children, nil)
+		idleBefore, goneBefore := removals(t, m, removedIdle), removals(t, m, removedProjectGone)
+		get(t, m, "p")
+		clk.Step(testIdle)
+		if sweepFirst {
+			m.retireIdle()
+			m.ProjectGone("p")
+		} else {
+			m.ProjectGone("p")
+			m.retireIdle()
+		}
+		idle, gone := removals(t, m, removedIdle)-idleBefore, removals(t, m, removedProjectGone)-goneBefore
+		if want := map[bool][2]float64{true: {1, 0}, false: {0, 1}}[sweepFirst]; [2]float64{idle, gone} != want {
+			t.Fatalf("sweep first=%v: expected %v retires (idle, project gone), got [%v %v]", sweepFirst, want, idle, gone)
+		}
+	}
+}
+
 // TestARequestRenewsTheIdleTime covers a child in use: each request starts
 // its idle time again.
 func TestARequestRenewsTheIdleTime(t *testing.T) {
