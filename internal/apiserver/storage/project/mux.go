@@ -310,10 +310,9 @@ const (
 // start. Keep the idle time longer than such a client's interval.
 const DefaultChildIdleTimeout = 15 * time.Minute
 
-// maxIdleSweepPeriod bounds how often each mux looks for idle children, as the
-// kubelet's watch-based object cache sweeps its idle watches once a minute
-// (k8s.io/kubernetes v1.37.1, pkg/kubelet/util/manager/watch_based_manager.go
-// line 207).
+// maxIdleSweepPeriod is the longest time between two sweeps of a mux: an idle
+// child goes at most this long after its idle time, and a mux takes its lock
+// to sweep no more than once in this time, however long its idle time.
 const maxIdleSweepPeriod = time.Minute
 
 // ProjectLookup tells the storage about Projects: Lookup says which Project a
@@ -531,9 +530,7 @@ func (m *projectMux) startIdleSweep() {
 // retireIdle removes and retires every Project's child that no request and no
 // watch used for the idle time, as ProjectGone retires a gone Project's; the
 // next request into the Project builds it again. The root plane's child
-// stays, and so does a child whose cache has not served yet, as the kubelet
-// stops only a synced idle watch (k8s.io/kubernetes v1.37.1,
-// pkg/kubelet/util/manager/watch_based_manager.go line 106): its first list
+// stays, and so does a child whose cache has not served yet: its first list
 // is still running, and a request is waiting for it. A resource that a
 // readiness check holds warm keeps every child.
 func (m *projectMux) retireIdle() {
