@@ -111,7 +111,7 @@ func configMapMux(t *testing.T, etcdURL string) *projectMux {
 	cfg.Transport.ServerList = []string{etcdURL}
 	gr := schema.GroupResource{Resource: "configmaps"}
 	keyFunc := func(obj runtime.Object) (string, error) { return storage.NamespaceKeyFunc("/configmaps/", obj) }
-	s, destroy, err := ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), everyProjectKnown(), nil, testDrain)(
+	s, destroy, err := ProjectAwareDecorator(gr, etcdshared.StorageWithSharedCacher(), everyProjectKnown(), nil, testDrain, 0)(
 		cfg.ForResource(gr), "/configmaps", keyFunc,
 		func() runtime.Object { return &corev1.ConfigMap{} }, func() runtime.Object { return &corev1.ConfigMapList{} },
 		storage.DefaultNamespaceScopedAttr, nil, &cache.Indexers{})

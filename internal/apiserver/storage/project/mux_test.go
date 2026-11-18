@@ -44,7 +44,7 @@ func (c *countingChildren) storage(*storagebackend.ConfigForResource, string, fu
 // and returns it with the number of children built so far: the root plane's.
 func decorate(t *testing.T, children *countingChildren, projects ProjectLookup) (storage.Interface, int32) {
 	t.Helper()
-	s, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, children.storage, projects, nil, testDrain)(
+	s, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, children.storage, projects, nil, testDrain, 0)(
 		&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate configmaps: %v", err)
@@ -263,7 +263,7 @@ func (l *listenerCount) AddListener(projectstate.Listener) func() {
 func TestDestroyAllStopsTheViewsReports(t *testing.T) {
 	projects := &listenerCount{fakeProjects: everyProjectKnown()}
 	var children countingChildren
-	_, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, children.storage, projects, nil, testDrain)(
+	_, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, children.storage, projects, nil, testDrain, 0)(
 		&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate configmaps: %v", err)

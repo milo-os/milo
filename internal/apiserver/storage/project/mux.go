@@ -307,21 +307,6 @@ const (
 // start. Keep the idle time longer than such a client's interval.
 const DefaultChildIdleTimeout = 15 * time.Minute
 
-// childIdleTimeout is how long a Project's child storage is kept with no
-// request and no open watch; zero keeps every child until its Project goes.
-// SetChildIdleTimeout sets it at start, before the first storage is built.
-var childIdleTimeout time.Duration
-
-// SetChildIdleTimeout sets how long a Project's child storage is kept with no
-// request and no open watch, for every storage built after the call. Zero
-// turns the idle retire off.
-func SetChildIdleTimeout(d time.Duration) {
-	childIdleTimeout = d
-}
-
-// ChildIdleTimeout returns the idle time SetChildIdleTimeout set.
-func ChildIdleTimeout() time.Duration { return childIdleTimeout }
-
 // maxIdleSweepPeriod bounds how often each mux looks for idle children, as the
 // kubelet's watch-based object cache sweeps its idle watches once a minute
 // (k8s.io/kubernetes v1.37.1, pkg/kubelet/util/manager/watch_based_manager.go

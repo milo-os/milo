@@ -254,16 +254,14 @@ func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
 	}
 }
 
-// TestDecoratedStorageRetiresIdleChildren covers the setting end to end: a
-// storage built after SetChildIdleTimeout sweeps on its own, at the idle time
-// when it is under a minute, and 0 keeps every child.
+// TestDecoratedStorageRetiresIdleChildren covers the idle time end to end: a
+// decorated storage sweeps on its own, at the idle time when it is under a
+// minute, and 0 keeps every child.
 func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
-	t.Cleanup(func() { SetChildIdleTimeout(0) })
 	for _, idle := range []time.Duration{50 * time.Millisecond, 0} {
-		SetChildIdleTimeout(idle)
 		var children countingChildren
 		s, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, cachesOf(&children, nil),
-			everyProjectKnown(), nil, testDrain)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
+			everyProjectKnown(), nil, testDrain, idle)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("decorate configmaps: %v", err)
 		}
@@ -288,12 +286,10 @@ func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
 // TestDestroyStopsTheSweep covers a storage torn down, as apiextensions tears
 // down a CRD's: its sweep ends with it.
 func TestDestroyStopsTheSweep(t *testing.T) {
-	t.Cleanup(func() { SetChildIdleTimeout(0) })
-	SetChildIdleTimeout(time.Minute)
 	running := goleak.IgnoreCurrent()
 	var children countingChildren
 	_, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, cachesOf(&children, nil),
-		everyProjectKnown(), nil, testDrain)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
+		everyProjectKnown(), nil, testDrain, time.Minute)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate configmaps: %v", err)
 	}

@@ -112,7 +112,7 @@ func (s readinessStorage) ReadinessCheck() error {
 func buildClaims(t *testing.T, c *claimChildren) {
 	t.Helper()
 	var inner generic.StorageDecorator = c.storage
-	_, destroy, err := ProjectAwareDecorator(claimsGR, inner, everyProjectKnown(), nil, testDrain)(
+	_, destroy, err := ProjectAwareDecorator(claimsGR, inner, everyProjectKnown(), nil, testDrain, 0)(
 		&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build the claims storage: %v", err)

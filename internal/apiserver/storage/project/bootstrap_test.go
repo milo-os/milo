@@ -346,12 +346,12 @@ func TestNamespacesStorageNeverWaitsOnBootstrap(t *testing.T) {
 		return fakeStorage{}, func() {}, nil
 	}
 	cfg := &storagebackend.ConfigForResource{}
-	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, inner, everyProjectKnown(), b, testDrain)(
+	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, inner, everyProjectKnown(), b, testDrain, 0)(
 		cfg, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate namespaces: %v", err)
 	}
-	claims, _, err := ProjectAwareDecorator(schema.GroupResource{Group: "quota.miloapis.com", Resource: "resourceclaims"}, inner, everyProjectKnown(), b, testDrain)(
+	claims, _, err := ProjectAwareDecorator(schema.GroupResource{Group: "quota.miloapis.com", Resource: "resourceclaims"}, inner, everyProjectKnown(), b, testDrain, 0)(
 		cfg, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate resourceclaims: %v", err)
@@ -740,7 +740,7 @@ func fakeChildStorage(*storagebackend.ConfigForResource, string, func(runtime.Ob
 // and so is a read, which would build a child.
 func TestNamespaceWriteIntoAMissingProjectIsRefused(t *testing.T) {
 	b := newNamespaceBootstrapper(time.Minute, countingRun(new(atomic.Int32)))
-	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, fakeChildStorage, noProjectKnown(), b, testDrain)(
+	ns, _, err := ProjectAwareDecorator(schema.GroupResource{Resource: "namespaces"}, fakeChildStorage, noProjectKnown(), b, testDrain, 0)(
 		&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("decorate namespaces: %v", err)
@@ -781,7 +781,7 @@ func (emptyOptionsGetter) GetRESTOptions(schema.GroupResource, runtime.Object) (
 // Project is refused there too.
 func TestCoreProviderWriteIntoAMissingProjectIsRefused(t *testing.T) {
 	provider := &capturingProvider{}
-	if _, err := WrapProvider(provider, noProjectKnown(), testDrain).NewRESTStorage(nil, emptyOptionsGetter{}); err != nil {
+	if _, err := WrapProvider(provider, noProjectKnown(), testDrain, 0).NewRESTStorage(nil, emptyOptionsGetter{}); err != nil {
 		t.Fatalf("NewRESTStorage: %v", err)
 	}
 	getter, ok := provider.getter.(roGetter)

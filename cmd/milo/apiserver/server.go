@@ -284,12 +284,14 @@ func applyStorageFlags() error {
 
 	etcdshared.SetSharedClientPoolSize(sharedETCDClientPoolSize)
 	klog.InfoS("Shared etcd client pool configured", "size", sharedETCDClientPoolSize)
+	return nil
+}
 
-	if projectStorageIdleTimeout < 0 {
-		return fmt.Errorf("--project-storage-idle-timeout must not be negative, got %s", projectStorageIdleTimeout)
+// checkProjectStorageIdleTimeout refuses an idle time the project storage cannot take.
+func checkProjectStorageIdleTimeout(d time.Duration) error {
+	if d < 0 {
+		return fmt.Errorf("--project-storage-idle-timeout must not be negative, got %s", d)
 	}
-	projectstorage.SetChildIdleTimeout(projectStorageIdleTimeout)
-	klog.InfoS("Project storage idle timeout configured", "timeout", projectStorageIdleTimeout)
 	return nil
 }
 
@@ -302,6 +304,10 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	if err := applyStorageFlags(); err != nil {
 		return err
 	}
+	if err := checkProjectStorageIdleTimeout(projectStorageIdleTimeout); err != nil {
+		return err
+	}
+	klog.InfoS("Project storage idle timeout configured", "timeout", projectStorageIdleTimeout)
 
 	config, err := NewConfig(opts)
 	if err != nil {
@@ -377,9 +383,9 @@ func childDrain(config CompletedConfig) time.Duration {
 func makeExtensionsProjectAware(config CompletedConfig, bootstrapper *projectstorage.NamespaceBootstrapper) {
 	ext := config.APIExtensions
 	ext.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config))
+		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), projectStorageIdleTimeout)
 	ext.ExtraConfig.CRDRESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config))
+		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), projectStorageIdleTimeout)
 }
 
 // CreateServerChain creates the apiservers connected via delegation
@@ -449,7 +455,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 
 	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
 	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config)))
+		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config), projectStorageIdleTimeout))
 	}
 
 	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {
