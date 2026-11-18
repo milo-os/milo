@@ -43,6 +43,7 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 			return nil, nil, err
 		}
 
+		clk := clock.RealClock{}
 		mux := &projectMux{
 			inner:        inner,
 			cfg:          *cfg, // copy
@@ -62,12 +63,12 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 				indexers:    indexers,
 			},
 			children: map[string]*child{
-				"": {s: defS, destroy: defDestroy},
+				"": {s: defS, destroy: defDestroy, clock: clk},
 			},
 			versioner:   defS.Versioner(),
 			drain:       drain,
 			idleTimeout: idle,
-			clock:       clock.RealClock{},
+			clock:       clk,
 		}
 		mux.removeListener = projects.AddListener(mux)
 		registerMux(gr, mux)

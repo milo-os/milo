@@ -56,7 +56,7 @@ func newTestMux(b *NamespaceBootstrapper, projects ProjectLookup) *projectMux {
 		return fakeStorage{}, func() {}, nil
 	}
 	return &projectMux{
-		children:     map[string]*child{"": {s: fakeStorage{}}},
+		children:     map[string]*child{"": {s: fakeStorage{}, clock: clock.RealClock{}}},
 		versioner:    storage.APIObjectVersioner{},
 		inner:        inner,
 		args:         decoratorArgs{resourceGroup: "quota.miloapis.com", resourceKind: "resourceclaims"},

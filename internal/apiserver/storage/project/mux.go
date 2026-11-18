@@ -152,14 +152,16 @@ type child struct {
 	readyOnce sync.Once
 
 	// lastUsed is the last time, in Unix nanoseconds, that a request picked
-	// the child or a watch on it ended; watches counts its open watches. The
-	// idle sweep retires a child with no open watch and no use for the idle
-	// time.
+	// the child or a watch on it ended, by clock, the mux's; watches counts
+	// its open watches. The idle sweep retires a child with no open watch and
+	// no use for the idle time.
 	lastUsed atomic.Int64
 	watches  atomic.Int32
+	clock    clock.PassiveClock
 }
 
-func (c *child) touch(now time.Time) { c.lastUsed.Store(now.UnixNano()) }
+// touch marks the child used now.
+func (c *child) touch() { c.lastUsed.Store(c.clock.Now().UnixNano()) }
 
 // unusedFor says whether no watch is open on the child and nothing used it for d.
 func (c *child) unusedFor(now time.Time, d time.Duration) bool {
@@ -172,13 +174,12 @@ func (c *child) unusedFor(now time.Time, d time.Duration) bool {
 type countedWatch struct {
 	watch.Interface
 	child *child
-	clock clock.PassiveClock
 	once  sync.Once
 }
 
 func (w *countedWatch) Stop() {
 	w.once.Do(func() {
-		w.child.touch(w.clock.Now())
+		w.child.touch()
 		w.child.watches.Add(-1)
 	})
 	w.Interface.Stop()
@@ -204,7 +205,6 @@ type decoratorArgs struct {
 type instrumentedStorage struct {
 	inner storage.Interface
 	child *child
-	clock clock.PassiveClock // the mux's clock, for the time a watch on the child stops
 
 	// normalized labels
 	group string // API group ("" => "core" when you query; we keep "" here)
@@ -247,7 +247,7 @@ func (i *instrumentedStorage) Watch(ctx context.Context, key string, opts storag
 		return nil, i.markReinit("watch", err)
 	}
 	i.markSuccess()
-	return &countedWatch{Interface: w, child: i.child, clock: i.clock}, nil
+	return &countedWatch{Interface: w, child: i.child}, nil
 }
 func (i *instrumentedStorage) Get(ctx context.Context, key string, opts storage.GetOptions, objPtr runtime.Object) error {
 	if err := i.inner.Get(ctx, key, opts, objPtr); err != nil {
@@ -360,7 +360,7 @@ func (m *projectMux) Versioner() storage.Versioner { return m.versioner }
 func (m *projectMux) childForProject(project string) (storage.Interface, error) {
 	m.mu.RLock()
 	if c, ok := m.children[project]; ok {
-		c.touch(m.clock.Now())
+		c.touch()
 		m.mu.RUnlock()
 		return c.s, nil
 	}
@@ -369,7 +369,7 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.children[project]; ok {
-		c.touch(m.clock.Now())
+		c.touch()
 		return c.s, nil
 	}
 	start := time.Now()
@@ -401,12 +401,11 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	}
 
 	// Wrap the child once with instrumentation.
-	c := &child{s: s, destroy: destroy, created: time.Now()}
-	c.touch(m.clock.Now())
+	c := &child{s: s, destroy: destroy, created: time.Now(), clock: m.clock}
+	c.touch()
 	wrapped := &instrumentedStorage{
 		inner: s,
 		child: c,
-		clock: m.clock,
 		group: m.args.resourceGroup,
 		kind:  m.args.resourceKind,
 	}

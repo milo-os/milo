@@ -61,6 +61,7 @@ func newIdleMux(children *countingChildren, unready *atomic.Bool) (*projectMux, 
 	clk := clocktesting.NewFakeClock(time.Now())
 	m.args = decoratorArgs{resourceKind: "configmaps"}
 	m.idleTimeout, m.drain, m.clock = testIdle, testDrain, clk
+	m.children[""].clock = clk
 	m.inner = cachesOf(children, unready)
 	return m, clk
 }
@@ -217,7 +218,7 @@ func TestColdChildIsKept(t *testing.T) {
 func TestRootChildIsNeverIdle(t *testing.T) {
 	var children countingChildren
 	m, clk := newIdleMux(&children, nil)
-	m.children[""] = &child{s: cacheStorage{}}
+	m.children[""] = &child{s: cacheStorage{}, clock: clk}
 	clk.Step(10 * testIdle)
 	m.retireIdle()
 	if n := m.childCount(); n != 1 {
