@@ -13,3 +13,4 @@ resources:
 - iam.miloapis.com_platformaccesses.yaml
 - iam.miloapis.com_platformaccessapprovals.yaml
 - iam.miloapis.com_platformaccessrejections.yaml
+- iam.miloapis.com_workloadidentityissuers.yaml

@@ -83,6 +83,9 @@ resources:
   - iam-service-accounts-viewer.yaml
   - iam-service-accounts-editor.yaml
   - iam-service-accounts-admin.yaml
+  - iam-workload-identity-issuers-viewer.yaml
+  - iam-workload-identity-issuers-editor.yaml
+  - iam-workload-identity-issuers-admin.yaml
   - identity-service-account-keys-viewer.yaml
   - identity-service-account-keys-editor.yaml
   - identity-service-account-keys-admin.yaml
