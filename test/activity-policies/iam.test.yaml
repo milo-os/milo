@@ -1,0 +1,1588 @@
+# iam.miloapis.com: groups, memberships, platform access, policy bindings,
+# roles, service accounts, users and invitations.
+policy_files:
+- ../../config/services/activity/policies
+tests:
+- name: 'iam.miloapis.com-group: create names the object from the response'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: platform-admins
+    responseObject:
+      metadata:
+        name: platform-admins
+  exp_rule: create
+  exp_summary: alice@example.com created group platform-admins
+  exp_change_source: human
+  exp_links:
+  - marker: platform-admins
+    apiGroup: iam.miloapis.com
+    kind: Group
+    name: platform-admins
+    namespace: organization-acme
+- name: 'iam.miloapis.com-group: create without a response body uses objectRef'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    responseObject: {}
+  exp_rule: create
+  exp_summary: alice@example.com created group platform-admins
+- name: 'iam.miloapis.com-group: a rejected create is not an activity'
+  policy: iam.miloapis.com-group
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 409
+    responseObject:
+      kind: Status
+      status: Failure
+      code: 409
+  exp_no_match: true
+- name: 'iam.miloapis.com-group: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted group platform-admins
+- name: 'iam.miloapis.com-group: reading is not an activity'
+  policy: iam.miloapis.com-group
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-group: a controller''s write is not an activity'
+  policy: iam.miloapis.com-group
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-group: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated group platform-admins
+  exp_change_source: human
+- name: 'iam.miloapis.com-group: a status update is not a user''s edit'
+  policy: iam.miloapis.com-group
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groups
+      name: platform-admins
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'iam.miloapis.com-groupmembership: add a user to a group'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: m-1
+      spec: &id001
+        userRef:
+          name: bob
+        groupRef:
+          name: platform-admins
+  exp_rule: create-with-userref
+  exp_summary: alice@example.com added bob to group platform-admins
+- name: 'iam.miloapis.com-groupmembership: add without the references'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: m-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com added a member to the group
+- name: 'iam.miloapis.com-groupmembership: remove a user from a group'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 200
+    responseObject:
+      metadata:
+        name: m-1
+      spec: *id001
+  exp_rule: delete-with-userref
+  exp_summary: alice@example.com removed bob from group platform-admins
+- name: 'iam.miloapis.com-groupmembership: remove when the response has no spec'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 200
+    responseObject:
+      kind: Status
+      status: Success
+  exp_rule: delete-fallback
+  exp_summary: alice@example.com removed a member from the group
+- name: 'iam.miloapis.com-groupmembership: reading is not an activity'
+  policy: iam.miloapis.com-groupmembership
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-groupmembership: a controller''s write is not an activity'
+  policy: iam.miloapis.com-groupmembership
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-groupmembership: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated group membership m-1
+  exp_change_source: human
+- name: 'iam.miloapis.com-groupmembership: a status update is not a user''s edit'
+  policy: iam.miloapis.com-groupmembership
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: groupmemberships
+      name: m-1
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'iam.miloapis.com-platformaccessapproval: approve by email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessapprovals
+      name: pa-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pa-1
+      spec:
+        subjectRef:
+          email: bob@example.com
+          userRef:
+            name: bob
+  exp_rule: create-with-email
+  exp_summary: alice@example.com approved platform access for bob@example.com
+- name: 'iam.miloapis.com-platformaccessapproval: approve a user'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessapprovals
+      name: pa-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pa-1
+      spec:
+        subjectRef:
+          userRef:
+            name: bob
+  exp_rule: create-with-userref
+  exp_summary: alice@example.com approved platform access for bob
+- name: 'iam.miloapis.com-platformaccessapproval: approve without a subject'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessapprovals
+      name: pa-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pa-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com approved platform access
+- name: 'iam.miloapis.com-platformaccessapproval: revoke'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessapprovals
+      name: pa-1
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com revoked platform access approval pa-1
+- name: 'iam.miloapis.com-platformaccessapproval: reading is not an activity'
+  policy: iam.miloapis.com-platformaccessapproval
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessapprovals
+      name: pa-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-platformaccessapproval: a controller''s write is not an activity'
+  policy: iam.miloapis.com-platformaccessapproval
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessapprovals
+      name: pa-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-platformaccessrejection: reject with a reason'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessrejections
+      name: pr-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pr-1
+      spec:
+        subjectRef:
+          name: bob
+        reason: unknown company
+  exp_rule: create-with-subject-and-reason
+  exp_summary: 'alice@example.com rejected platform access for bob (reason: unknown company)'
+- name: 'iam.miloapis.com-platformaccessrejection: reject without a reason'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessrejections
+      name: pr-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pr-1
+      spec:
+        subjectRef:
+          name: bob
+  exp_rule: create-with-subject
+  exp_summary: alice@example.com rejected platform access for bob
+- name: 'iam.miloapis.com-platformaccessrejection: reject without a subject'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessrejections
+      name: pr-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pr-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com rejected a platform access request
+- name: 'iam.miloapis.com-platformaccessrejection: reading is not an activity'
+  policy: iam.miloapis.com-platformaccessrejection
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessrejections
+      name: pr-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-platformaccessrejection: a controller''s write is not an activity'
+  policy: iam.miloapis.com-platformaccessrejection
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platformaccessrejections
+      name: pr-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-platforminvitation: invite by email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platforminvitations
+      name: pi-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pi-1
+      spec:
+        email: bob@example.com
+  exp_rule: create-with-email
+  exp_summary: alice@example.com invited bob@example.com to the platform
+- name: 'iam.miloapis.com-platforminvitation: invite without an email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platforminvitations
+      name: pi-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pi-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com sent a platform invitation
+- name: 'iam.miloapis.com-platforminvitation: cancel'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platforminvitations
+      name: pi-1
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com cancelled the platform invitation for pi-1
+- name: 'iam.miloapis.com-platforminvitation: reading is not an activity'
+  policy: iam.miloapis.com-platforminvitation
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platforminvitations
+      name: pi-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-platforminvitation: a controller''s write is not an activity'
+  policy: iam.miloapis.com-platforminvitation
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: platforminvitations
+      name: pi-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-policybinding: grant a role to a subject'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pb-1
+      spec:
+        roleRef:
+          name: viewer
+        subjects:
+        - name: bob
+        - name: carol
+  exp_rule: create-with-role-and-subject
+  exp_summary: alice@example.com granted viewer to bob
+- name: 'iam.miloapis.com-policybinding: grant a role with no subjects'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pb-1
+      spec:
+        roleRef:
+          name: viewer
+        subjects: []
+  exp_rule: create-with-role
+  exp_summary: alice@example.com granted role viewer
+- name: 'iam.miloapis.com-policybinding: create without a role'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: pb-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com created a role binding
+- name: 'iam.miloapis.com-policybinding: remove'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com removed role binding pb-1
+- name: 'iam.miloapis.com-policybinding: reading is not an activity'
+  policy: iam.miloapis.com-policybinding
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-policybinding: a controller''s write is not an activity'
+  policy: iam.miloapis.com-policybinding
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-policybinding: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated role binding pb-1
+  exp_change_source: human
+- name: 'iam.miloapis.com-policybinding: a status update is not a user''s edit'
+  policy: iam.miloapis.com-policybinding
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: policybindings
+      name: pb-1
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'iam.miloapis.com-role: create names the object from the response'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: billing-viewer
+    responseObject:
+      metadata:
+        name: billing-viewer
+  exp_rule: create
+  exp_summary: alice@example.com created role billing-viewer
+  exp_change_source: human
+  exp_links:
+  - marker: billing-viewer
+    apiGroup: iam.miloapis.com
+    kind: Role
+    name: billing-viewer
+    namespace: organization-acme
+- name: 'iam.miloapis.com-role: create without a response body uses objectRef'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    responseObject: {}
+  exp_rule: create
+  exp_summary: alice@example.com created role billing-viewer
+- name: 'iam.miloapis.com-role: a rejected create is not an activity'
+  policy: iam.miloapis.com-role
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 409
+    responseObject:
+      kind: Status
+      status: Failure
+      code: 409
+  exp_no_match: true
+- name: 'iam.miloapis.com-role: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted role billing-viewer
+- name: 'iam.miloapis.com-role: reading is not an activity'
+  policy: iam.miloapis.com-role
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-role: a controller''s write is not an activity'
+  policy: iam.miloapis.com-role
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-role: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated role billing-viewer
+  exp_change_source: human
+- name: 'iam.miloapis.com-role: a status update is not a user''s edit'
+  policy: iam.miloapis.com-role
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: roles
+      name: billing-viewer
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'iam.miloapis.com-serviceaccount: create names the object from the response'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: ci-deployer
+    responseObject:
+      metadata:
+        name: ci-deployer
+  exp_rule: create
+  exp_summary: alice@example.com created service account ci-deployer
+  exp_change_source: human
+  exp_links:
+  - marker: ci-deployer
+    apiGroup: iam.miloapis.com
+    kind: ServiceAccount
+    name: ci-deployer
+    namespace: organization-acme
+- name: 'iam.miloapis.com-serviceaccount: create without a response body uses objectRef'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    responseObject: {}
+  exp_rule: create
+  exp_summary: alice@example.com created service account ci-deployer
+- name: 'iam.miloapis.com-serviceaccount: a rejected create is not an activity'
+  policy: iam.miloapis.com-serviceaccount
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 409
+    responseObject:
+      kind: Status
+      status: Failure
+      code: 409
+  exp_no_match: true
+- name: 'iam.miloapis.com-serviceaccount: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted service account ci-deployer
+- name: 'iam.miloapis.com-serviceaccount: deactivate'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        state: Inactive
+  exp_rule: deactivate
+  exp_summary: alice@example.com deactivated service account ci-deployer
+- name: 'iam.miloapis.com-serviceaccount: reactivate'
+  audit:
+    verb: update
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        state: Active
+  exp_rule: activate
+  exp_summary: alice@example.com reactivated service account ci-deployer
+- name: 'iam.miloapis.com-serviceaccount: reading is not an activity'
+  policy: iam.miloapis.com-serviceaccount
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-serviceaccount: a controller''s write is not an activity'
+  policy: iam.miloapis.com-serviceaccount
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-serviceaccount: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated service account ci-deployer
+  exp_change_source: human
+- name: 'iam.miloapis.com-serviceaccount: a status update is not a user''s edit'
+  policy: iam.miloapis.com-serviceaccount
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: serviceaccounts
+      name: ci-deployer
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'iam.miloapis.com-user: create with an email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: u-bob
+      spec:
+        email: bob@example.com
+  exp_rule: create-with-email
+  exp_summary: alice@example.com created user bob@example.com
+- name: 'iam.miloapis.com-user: create without an email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: u-bob
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com created user u-bob
+- name: 'iam.miloapis.com-user: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted user u-bob
+- name: 'iam.miloapis.com-user: a user renames themselves'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+      uid: u-alice
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-alice
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        givenName: Alice
+        familyName: Smith
+  exp_rule: update-own-name
+  exp_summary: alice@example.com updated their name to Alice Smith
+- name: 'iam.miloapis.com-user: an admin renames another user'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+      uid: u-alice
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        givenName: Bob
+        familyName: Jones
+  exp_rule: update-name
+  exp_summary: alice@example.com updated the name of user u-bob to Bob Jones
+- name: 'iam.miloapis.com-user: a JSON Patch is not a rename'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 200
+    requestObject:
+    - op: replace
+      path: /spec/givenName
+      value: Bob
+  exp_rule: update
+  exp_summary: alice@example.com updated user u-bob
+- name: 'iam.miloapis.com-user: account created by the identity provider'
+  event:
+    reason: AccountCreated
+    type: Normal
+    reportingController: auth-provider-zitadel
+    note: Account created
+    regarding:
+      apiVersion: iam.miloapis.com/v1alpha1
+      kind: User
+      name: u-bob
+  exp_rule: account-created
+  exp_summary: Account created
+  exp_policy: iam.miloapis.com-user
+  exp_change_source: system
+- name: 'iam.miloapis.com-user: passkey enrolled'
+  event:
+    reason: PasskeyEnrolled
+    type: Normal
+    reportingController: auth-provider-zitadel
+    note: Passkey MacBook enrolled
+    regarding:
+      apiVersion: iam.miloapis.com/v1alpha1
+      kind: User
+      name: u-bob
+  exp_rule: passkey-enrolled
+  exp_summary: Passkey MacBook enrolled
+- name: 'iam.miloapis.com-user: passkey removed'
+  event:
+    reason: PasskeyRemoved
+    type: Normal
+    reportingController: auth-provider-zitadel
+    note: Passkey MacBook removed
+    regarding:
+      apiVersion: iam.miloapis.com/v1alpha1
+      kind: User
+      name: u-bob
+  exp_rule: passkey-removed
+  exp_summary: Passkey MacBook removed
+- name: 'iam.miloapis.com-user: the same reason from another controller is not an activity'
+  policy: iam.miloapis.com-user
+  event:
+    reason: AccountCreated
+    type: Normal
+    reportingController: someone-else
+    regarding:
+      apiVersion: iam.miloapis.com/v1alpha1
+      kind: User
+      name: u-bob
+  exp_no_match: true
+- name: 'iam.miloapis.com-user: reading is not an activity'
+  policy: iam.miloapis.com-user
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-user: a controller''s write is not an activity'
+  policy: iam.miloapis.com-user
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-user: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated user u-bob
+  exp_change_source: human
+- name: 'iam.miloapis.com-user: a status update is not a user''s edit'
+  policy: iam.miloapis.com-user
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: users
+      name: u-bob
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'iam.miloapis.com-userdeactivation: deactivate with a reason'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: ud-1
+      spec:
+        userRef:
+          name: bob
+        reason: left the company
+  exp_rule: create-with-user-and-reason
+  exp_summary: 'alice@example.com deactivated user bob (reason: left the company)'
+- name: 'iam.miloapis.com-userdeactivation: deactivate without a reason'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: ud-1
+      spec:
+        userRef:
+          name: bob
+  exp_rule: create-with-user
+  exp_summary: alice@example.com deactivated user bob
+- name: 'iam.miloapis.com-userdeactivation: deactivate without a user'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: ud-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com deactivated a user
+- name: 'iam.miloapis.com-userdeactivation: reactivate'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 200
+    responseObject:
+      metadata:
+        name: ud-1
+      spec:
+        userRef:
+          name: bob
+  exp_rule: delete-with-user
+  exp_summary: alice@example.com reactivated user bob
+- name: 'iam.miloapis.com-userdeactivation: reactivate when the response has no spec'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 200
+    responseObject:
+      kind: Status
+      status: Success
+  exp_rule: delete-fallback
+  exp_summary: alice@example.com reactivated user ud-1
+- name: 'iam.miloapis.com-userdeactivation: reading is not an activity'
+  policy: iam.miloapis.com-userdeactivation
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-userdeactivation: a controller''s write is not an activity'
+  policy: iam.miloapis.com-userdeactivation
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userdeactivations
+      name: ud-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-userinvitation: resend to an organization'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-2
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata: &id002
+        name: inv-2
+        annotations:
+          iam.miloapis.com/resent-from: inv-1
+      spec:
+        email: bob@example.com
+        organizationRef:
+          name: acme
+  exp_rule: resend-with-email-and-org
+  exp_summary: alice@example.com resent the invitation for bob@example.com to acme
+  exp_links:
+  - marker: acme
+    apiGroup: iam.miloapis.com
+    kind: UserInvitation
+    name: inv-2
+    namespace: organization-acme
+- name: 'iam.miloapis.com-userinvitation: resend without an organization'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-2
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata: *id002
+      spec:
+        email: bob@example.com
+        organizationRef: {}
+  exp_rule: resend-with-email
+  exp_summary: alice@example.com resent the invitation for bob@example.com
+- name: 'iam.miloapis.com-userinvitation: invite to an organization'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: inv-1
+        annotations: {}
+      spec:
+        email: bob@example.com
+        organizationRef:
+          name: acme
+  exp_rule: create-with-email-and-org
+  exp_summary: alice@example.com invited bob@example.com to acme
+- name: 'iam.miloapis.com-userinvitation: invite without an organization'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: inv-1
+        annotations: {}
+      spec:
+        email: bob@example.com
+        organizationRef: {}
+  exp_rule: create-with-email
+  exp_summary: alice@example.com invited bob@example.com to the organization
+- name: 'iam.miloapis.com-userinvitation: invite without an email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: inv-1
+        annotations: {}
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com sent an invitation to the organization
+- name: 'iam.miloapis.com-userinvitation: accepted, naming the organization'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        state: Accepted
+    responseObject: &id003
+      metadata:
+        name: inv-1
+      status:
+        organization:
+          displayName: Acme Corp
+  exp_rule: accepted-with-org
+  exp_summary: The invitation to Acme Corp was accepted
+- name: 'iam.miloapis.com-userinvitation: accepted without the organization'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        state: Accepted
+    responseObject:
+      status: {}
+  exp_rule: accepted
+  exp_summary: The invitation for inv-1 was accepted
+- name: 'iam.miloapis.com-userinvitation: declined, naming the organization'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        state: Declined
+    responseObject: *id003
+  exp_rule: declined-with-org
+  exp_summary: The invitation to Acme Corp was declined
+- name: 'iam.miloapis.com-userinvitation: declined without the organization'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec:
+        state: Declined
+    responseObject:
+      status: {}
+  exp_rule: declined
+  exp_summary: The invitation for inv-1 was declined
+- name: 'iam.miloapis.com-userinvitation: cancel, naming the organization'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    responseObject: *id003
+  exp_rule: delete-with-org
+  exp_summary: alice@example.com cancelled the invitation to Acme Corp
+- name: 'iam.miloapis.com-userinvitation: cancel without the organization'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    responseObject:
+      status: {}
+  exp_rule: delete
+  exp_summary: alice@example.com cancelled the invitation for inv-1
+- name: 'iam.miloapis.com-userinvitation: expired'
+  event:
+    reason: InvitationExpired
+    type: Normal
+    reportingController: invitation-controller
+    note: The invitation for bob@example.com expired
+    regarding:
+      apiVersion: iam.miloapis.com/v1alpha1
+      kind: UserInvitation
+      name: inv-1
+      namespace: organization-acme
+  exp_rule: expired
+  exp_summary: The invitation for bob@example.com expired
+  exp_policy: iam.miloapis.com-userinvitation
+- name: 'iam.miloapis.com-userinvitation: reading is not an activity'
+  policy: iam.miloapis.com-userinvitation
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-userinvitation: a controller''s write is not an activity'
+  policy: iam.miloapis.com-userinvitation
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'iam.miloapis.com-userinvitation: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated invitation inv-1
+  exp_change_source: human
+- name: 'iam.miloapis.com-userinvitation: a status update is not a user''s edit'
+  policy: iam.miloapis.com-userinvitation
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: iam.miloapis.com
+      resource: userinvitations
+      name: inv-1
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true

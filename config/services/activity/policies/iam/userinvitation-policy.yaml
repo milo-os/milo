@@ -60,7 +60,7 @@ spec:
 
     # Invitation accepted with org displayname (state transition update)
     - name: accepted-with-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted' && has(audit.responseObject.status.organization.displayName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Accepted' && has(audit.responseObject.status) && has(audit.responseObject.status.organization) && has(audit.responseObject.status.organization.displayName)"
       summary: "The invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }} was accepted"
 
     # Invitation accepted fallback
@@ -70,7 +70,7 @@ spec:
 
     # Invitation declined with org displayname (state transition update)
     - name: declined-with-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined' && has(audit.responseObject.status.organization.displayName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb in ['update', 'patch'] && !has(audit.objectRef.subresource) && has(audit.requestObject.spec) && has(audit.requestObject.spec.state) && audit.requestObject.spec.state == 'Declined' && has(audit.responseObject.status) && has(audit.responseObject.status.organization) && has(audit.responseObject.status.organization.displayName)"
       summary: "The invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }} was declined"
 
     # Invitation declined fallback
@@ -85,7 +85,7 @@ spec:
 
     # Delete with org displayname — invitation cancelled
     - name: delete-with-org
-      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.status.organization.displayName)"
+      match: "!audit.user.username.startsWith('system:') && audit.verb == 'delete' && has(audit.responseObject.status) && has(audit.responseObject.status.organization) && has(audit.responseObject.status.organization.displayName)"
       summary: "{{ actor }} cancelled the invitation to {{ link(audit.responseObject.status.organization.displayName, audit.objectRef) }}"
 
     # Delete fallback — invitation cancelled

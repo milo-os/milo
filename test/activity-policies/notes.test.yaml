@@ -1,0 +1,95 @@
+# notes.miloapis.com: notes.
+policy_files:
+- ../../config/services/activity/policies
+tests:
+- name: 'notes.miloapis.com-note: add'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notes.miloapis.com
+      resource: notes
+      name: n-1
+      namespace: project-web
+    responseStatus:
+      code: 201
+  exp_rule: create
+  exp_summary: alice@example.com added a note
+  exp_policy: notes.miloapis.com-note
+- name: 'notes.miloapis.com-note: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notes.miloapis.com
+      resource: notes
+      name: n-1
+      namespace: project-web
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted a note
+- name: 'notes.miloapis.com-note: reading is not an activity'
+  policy: notes.miloapis.com-note
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notes.miloapis.com
+      resource: notes
+      name: n-1
+      namespace: project-web
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notes.miloapis.com-note: a controller''s write is not an activity'
+  policy: notes.miloapis.com-note
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notes.miloapis.com
+      resource: notes
+      name: n-1
+      namespace: project-web
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notes.miloapis.com-note: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notes.miloapis.com
+      resource: notes
+      name: n-1
+      namespace: project-web
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated a note
+  exp_change_source: human
+- name: 'notes.miloapis.com-note: a status update is not a user''s edit'
+  policy: notes.miloapis.com-note
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notes.miloapis.com
+      resource: notes
+      name: n-1
+      namespace: project-web
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true

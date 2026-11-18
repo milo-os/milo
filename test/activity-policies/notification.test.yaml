@@ -1,0 +1,558 @@
+# notification.miloapis.com: contacts, contact groups and their members,
+# emails and email broadcasts.
+policy_files:
+- ../../config/services/activity/policies
+tests:
+- name: 'notification.miloapis.com-contact: create with an email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: c-bob
+      spec:
+        email: bob@example.com
+  exp_rule: create-with-email
+  exp_summary: alice@example.com created contact bob@example.com
+- name: 'notification.miloapis.com-contact: create without an email'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: c-bob
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com created contact c-bob
+- name: 'notification.miloapis.com-contact: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted contact c-bob
+- name: 'notification.miloapis.com-contact: reading is not an activity'
+  policy: notification.miloapis.com-contact
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contact: a controller''s write is not an activity'
+  policy: notification.miloapis.com-contact
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contact: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated contact c-bob
+  exp_change_source: human
+- name: 'notification.miloapis.com-contact: a status update is not a user''s edit'
+  policy: notification.miloapis.com-contact
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroup: create with a display name'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: cg-1
+      spec:
+        displayName: Billing alerts
+  exp_rule: create-with-displayname
+  exp_summary: alice@example.com created contact group Billing alerts
+  exp_links:
+  - marker: Billing alerts
+    apiGroup: notification.miloapis.com
+    kind: ContactGroup
+    name: cg-1
+- name: 'notification.miloapis.com-contactgroup: create without a display name'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: cg-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com created contact group cg-1
+- name: 'notification.miloapis.com-contactgroup: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted contact group cg-1
+- name: 'notification.miloapis.com-contactgroup: reading is not an activity'
+  policy: notification.miloapis.com-contactgroup
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroup: a controller''s write is not an activity'
+  policy: notification.miloapis.com-contactgroup
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroup: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated contact group cg-1
+  exp_change_source: human
+- name: 'notification.miloapis.com-contactgroup: a status update is not a user''s edit'
+  policy: notification.miloapis.com-contactgroup
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroups
+      name: cg-1
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroupmembership: add a contact'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmemberships
+      name: cgm-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: cgm-1
+      spec: &id001
+        contactRef:
+          name: c-bob
+        contactGroupRef:
+          name: cg-1
+  exp_rule: create-with-refs
+  exp_summary: alice@example.com added c-bob to contact group cg-1
+- name: 'notification.miloapis.com-contactgroupmembership: add without the references'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmemberships
+      name: cgm-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: cgm-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com added a contact to a group
+- name: 'notification.miloapis.com-contactgroupmembership: remove a contact'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmemberships
+      name: cgm-1
+    responseStatus:
+      code: 200
+    responseObject:
+      metadata:
+        name: cgm-1
+      spec: *id001
+  exp_rule: delete-with-refs
+  exp_summary: alice@example.com removed c-bob from contact group cg-1
+- name: 'notification.miloapis.com-contactgroupmembership: remove when the response has no spec'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmemberships
+      name: cgm-1
+    responseStatus:
+      code: 200
+    responseObject:
+      kind: Status
+      status: Success
+  exp_rule: delete-fallback
+  exp_summary: alice@example.com removed a contact from a group
+- name: 'notification.miloapis.com-contactgroupmembership: reading is not an activity'
+  policy: notification.miloapis.com-contactgroupmembership
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmemberships
+      name: cgm-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroupmembership: a controller''s write is not an activity'
+  policy: notification.miloapis.com-contactgroupmembership
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmemberships
+      name: cgm-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroupmembershipremoval: remove a contact'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmembershipremovals
+      name: r-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: r-1
+      spec: *id001
+  exp_rule: create-with-refs
+  exp_summary: alice@example.com removed c-bob from contact group cg-1
+- name: 'notification.miloapis.com-contactgroupmembershipremoval: remove without the references'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmembershipremovals
+      name: r-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: r-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com removed a contact from a group
+- name: 'notification.miloapis.com-contactgroupmembershipremoval: reading is not an activity'
+  policy: notification.miloapis.com-contactgroupmembershipremoval
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmembershipremovals
+      name: r-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-contactgroupmembershipremoval: a controller''s write is not an activity'
+  policy: notification.miloapis.com-contactgroupmembershipremoval
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contactgroupmembershipremovals
+      name: r-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-email: send to an address'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emails
+      name: e-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: e-1
+      spec:
+        recipient:
+          emailAddress: bob@example.com
+          userRef:
+            name: u-bob
+  exp_rule: create-with-email-address
+  exp_summary: alice@example.com sent an email to bob@example.com
+- name: 'notification.miloapis.com-email: send to a user'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emails
+      name: e-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: e-1
+      spec:
+        recipient:
+          userRef:
+            name: u-bob
+  exp_rule: create-with-userref
+  exp_summary: alice@example.com sent an email to u-bob
+- name: 'notification.miloapis.com-email: send without a recipient'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emails
+      name: e-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: e-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com sent an email
+- name: 'notification.miloapis.com-email: reading is not an activity'
+  policy: notification.miloapis.com-email
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emails
+      name: e-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-email: a controller''s write is not an activity'
+  policy: notification.miloapis.com-email
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emails
+      name: e-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-emailbroadcast: schedule a named broadcast'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emailbroadcasts
+      name: b-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: b-1
+      spec:
+        displayName: October newsletter
+        contactGroupRef:
+          name: cg-1
+  exp_rule: create-with-displayname-and-group
+  exp_summary: alice@example.com scheduled broadcast October newsletter to cg-1
+- name: 'notification.miloapis.com-emailbroadcast: schedule without a name'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emailbroadcasts
+      name: b-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: b-1
+      spec:
+        contactGroupRef:
+          name: cg-1
+  exp_rule: create-with-group
+  exp_summary: alice@example.com scheduled a broadcast to cg-1
+- name: 'notification.miloapis.com-emailbroadcast: schedule without a group'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emailbroadcasts
+      name: b-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: b-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com scheduled an email broadcast
+- name: 'notification.miloapis.com-emailbroadcast: cancel'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emailbroadcasts
+      name: b-1
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com cancelled broadcast b-1
+- name: 'notification.miloapis.com-emailbroadcast: reading is not an activity'
+  policy: notification.miloapis.com-emailbroadcast
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emailbroadcasts
+      name: b-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'notification.miloapis.com-emailbroadcast: a controller''s write is not an activity'
+  policy: notification.miloapis.com-emailbroadcast
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: emailbroadcasts
+      name: b-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
