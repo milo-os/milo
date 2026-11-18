@@ -139,7 +139,7 @@ func incrReinit(group, kind, verb string) {
 func recordFirstReady(c *child, group, kind string) {
 	c.readyOnce.Do(func() {
 		firstReady.WithLabelValues(group, kind).
-			Observe(time.Since(c.created).Seconds())
+			Observe(c.clock.Since(c.created).Seconds())
 	})
 }
 
@@ -372,9 +372,9 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 		c.touch()
 		return c.s, nil
 	}
-	start := time.Now()
+	start := m.clock.Now()
 	defer func() {
-		childLockHold.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Observe(time.Since(start).Seconds())
+		childLockHold.WithLabelValues(m.args.resourceGroup, m.args.resourceKind).Observe(m.clock.Since(start).Seconds())
 	}()
 
 	cfg2 := m.cfg // copy
@@ -401,7 +401,7 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	}
 
 	// Wrap the child once with instrumentation.
-	c := &child{s: s, destroy: destroy, created: time.Now(), clock: m.clock}
+	c := &child{s: s, destroy: destroy, created: m.clock.Now(), clock: m.clock}
 	c.touch()
 	wrapped := &instrumentedStorage{
 		inner: s,
