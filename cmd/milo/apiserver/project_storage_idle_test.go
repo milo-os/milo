@@ -39,6 +39,19 @@ func TestProjectStorageIdleTimeoutRefusesANegativeTime(t *testing.T) {
 	}
 }
 
+// TestProjectStorageIdleTimeoutRefusesATimeUnderAMinute covers the minimum: an
+// idle time above 0 and under a minute is refused, and a minute is taken.
+func TestProjectStorageIdleTimeoutRefusesATimeUnderAMinute(t *testing.T) {
+	for _, d := range []time.Duration{time.Nanosecond, 30 * time.Second, time.Minute - time.Nanosecond} {
+		if err := checkProjectStorageIdleTimeout(d); err == nil {
+			t.Errorf("--%s=%s was taken", projectStorageIdleFlag, d)
+		}
+	}
+	if err := checkProjectStorageIdleTimeout(time.Minute); err != nil {
+		t.Errorf("--%s=1m refused: %v", projectStorageIdleFlag, err)
+	}
+}
+
 // restoreIdleTimeout puts the flag's variable back when the test ends.
 func restoreIdleTimeout(t *testing.T) {
 	t.Helper()

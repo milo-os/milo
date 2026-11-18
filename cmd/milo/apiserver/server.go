@@ -231,7 +231,7 @@ func NewCommand() *cobra.Command {
 	fs.DurationVar(&projectNamespaceBootstrapTimeout, "project-namespace-bootstrap-timeout", projectstorage.DefaultNamespaceBootstrapTimeout, "Maximum time to wait for the milo-system namespace to be ensured in a project control plane on first use. Requests for that project wait at most this long; other projects are never blocked.")
 	fs.BoolVar(&claimCacheReadiness, "quota-claim-cache-readiness", true, "Hold a starting server out of traffic until every Project's ResourceClaim storage serves, within --storage-initialization-timeout. Quota admission waits for a claim on a watch through this server, so a cold claim cache refuses it. Off: the server goes ready with those caches cold.")
 	fs.IntVar(&claimCacheReadinessBatch, "quota-claim-cache-readiness-batch", 50, "Project ResourceClaim storages built per readiness check at the server's start; the check runs every 100 ms. Minimum 1.")
-	fs.DurationVar(&projectStorageIdleTimeout, "project-storage-idle-timeout", projectstorage.DefaultChildIdleTimeout, "How long a project control plane's storage of one resource, a watch cache with its own etcd watch, is kept with no request and no open watch. The next request builds it again; until its cache serves, a watch on it gets 'storage is (re)initializing' with a retry. Storages that a readiness check waits for at start are kept. 0 keeps every storage until its Project is gone.")
+	fs.DurationVar(&projectStorageIdleTimeout, "project-storage-idle-timeout", projectstorage.DefaultChildIdleTimeout, "How long a project control plane's storage of one resource, a watch cache with its own etcd watch, is kept with no request and no open watch. The next request builds it again; until its cache serves, a watch on it gets 'storage is (re)initializing' with a retry. Storages that a readiness check waits for at start are kept. 0 keeps every storage until its Project is gone; otherwise at least 1m.")
 	fs.DurationVar(&watchCacheConsistencyCheckPeriod, "watch-cache-consistency-check-period", defaultWatchCacheConsistencyCheckPeriod, "How often each watch cache compares itself with etcd when the DetectCacheInconsistency feature gate is on, with up to half again as jitter. Each check lists the cache's resource from etcd. Must be positive.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
@@ -287,10 +287,21 @@ func applyStorageFlags() error {
 	return nil
 }
 
+// minProjectStorageIdleTimeout is the shortest idle time above 0. A request
+// marks its storage used and then opens its watch; a sweep between the two
+// sees no watch, and only the idle time keeps the storage. The idle time must
+// stay far longer than that gap. A minute is also the sweep's longest period,
+// so from it up each storage's sweep takes the lock once a minute, not at the
+// idle time.
+const minProjectStorageIdleTimeout = time.Minute
+
 // checkProjectStorageIdleTimeout refuses an idle time the project storage cannot take.
 func checkProjectStorageIdleTimeout(d time.Duration) error {
 	if d < 0 {
 		return fmt.Errorf("--project-storage-idle-timeout must not be negative, got %s", d)
+	}
+	if d > 0 && d < minProjectStorageIdleTimeout {
+		return fmt.Errorf("--project-storage-idle-timeout must be 0 or at least %s, got %s", minProjectStorageIdleTimeout, d)
 	}
 	return nil
 }
