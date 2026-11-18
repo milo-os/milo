@@ -383,8 +383,8 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	return prepared.Run(ctx)
 }
 
-// childDrain is how long a gone Project's child storage serves the requests that picked it before its storage
-// stops: twice the request timeout, apiextensions' bound for the requests on a CRD storage it tears down
+// childDrain is how long a removed child storage, its Project gone or the storage idle, serves the requests that
+// picked it before its storage stops: twice the request timeout, apiextensions' bound for the requests on a CRD storage it tears down
 // (k8s.io/apiextensions-apiserver v0.37.1, pkg/apiserver/customresource_handler.go lines 565-583).
 func childDrain(config CompletedConfig) time.Duration {
 	return 2 * config.ControlPlane.Generic.RequestTimeout
