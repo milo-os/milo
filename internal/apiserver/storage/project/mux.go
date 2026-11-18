@@ -204,7 +204,7 @@ type decoratorArgs struct {
 type instrumentedStorage struct {
 	inner storage.Interface
 	child *child
-	clock clock.PassiveClock // ends a watch's use of the child
+	clock clock.PassiveClock // the mux's clock, for the time a watch on the child stops
 
 	// normalized labels
 	group string // API group ("" => "core" when you query; we keep "" here)
@@ -301,7 +301,10 @@ const (
 	removedIdle        = "idle"
 )
 
-// DefaultChildIdleTimeout is --project-storage-idle-timeout's default.
+// DefaultChildIdleTimeout is --project-storage-idle-timeout's default. A
+// storage asked for again after a retire costs one list from etcd and a cache
+// start, so a client that comes back to a Project less often than this pays
+// at most that, four times an hour.
 const DefaultChildIdleTimeout = 15 * time.Minute
 
 // childIdleTimeout is how long a Project's child storage is kept with no
@@ -427,8 +430,13 @@ func (m *projectMux) childForProject(project string) (storage.Interface, error) 
 	return c.s, nil
 }
 
+// groupResource names the resource this mux stores.
+func (m *projectMux) groupResource() schema.GroupResource {
+	return schema.GroupResource{Group: m.args.resourceGroup, Resource: m.args.resourceKind}
+}
+
 func (m *projectMux) destroyAll() {
-	forgetMux(schema.GroupResource{Group: m.args.resourceGroup, Resource: m.args.resourceKind}, m)
+	forgetMux(m.groupResource(), m)
 	if m.removeListener != nil {
 		m.removeListener()
 	}
@@ -534,15 +542,15 @@ func (m *projectMux) startIdleSweep() {
 }
 
 // retireIdle removes and retires every Project's child that no request and no
-// watch used for the idle time, as ProjectGone retires a gone Project's; the next request
-// into the Project builds it again. The root plane's child stays, and so does
-// a child whose cache has not served yet, as the kubelet stops only a synced
-// idle watch (k8s.io/kubernetes v1.37.1,
+// watch used for the idle time, as ProjectGone retires a gone Project's; the
+// next request into the Project builds it again. The root plane's child
+// stays, and so does a child whose cache has not served yet, as the kubelet
+// stops only a synced idle watch (k8s.io/kubernetes v1.37.1,
 // pkg/kubelet/util/manager/watch_based_manager.go line 106): its first list
 // is still running, and a request is waiting for it. A resource that a
 // readiness check holds warm keeps every child.
 func (m *projectMux) retireIdle() {
-	if isHeldWarm(schema.GroupResource{Group: m.args.resourceGroup, Resource: m.args.resourceKind}) {
+	if isHeldWarm(m.groupResource()) {
 		return
 	}
 	now := m.clock.Now()
