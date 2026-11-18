@@ -95,7 +95,7 @@ func (m *projectMux) childCount() int {
 func TestIdleChildIsRetiredAndRebuilt(t *testing.T) {
 	var children countingChildren
 	m, clk := newIdleMux(&children, nil)
-	idleBefore := removals(t, m, "idle")
+	idleBefore := removals(t, m, removedIdle)
 	get(t, m, "p")
 
 	clk.Step(testIdle / 2)
@@ -110,7 +110,7 @@ func TestIdleChildIsRetiredAndRebuilt(t *testing.T) {
 		t.Fatalf("expected only the root plane's child after the idle retire, got %d children", n)
 	}
 	waitFor(t, "the idle child to be destroyed", func() bool { return children.destroyed.Load() == 1 })
-	if got := removals(t, m, "idle") - idleBefore; got != 1 {
+	if got := removals(t, m, removedIdle) - idleBefore; got != 1 {
 		t.Fatalf("expected one removal counted as idle, got %v", got)
 	}
 
@@ -306,9 +306,9 @@ func get(t *testing.T, m *projectMux, project string) {
 }
 
 // removals reads the removal counter of m's kind for reason.
-func removals(t *testing.T, m *projectMux, reason string) float64 {
+func removals(t *testing.T, m *projectMux, reason removalReason) float64 {
 	t.Helper()
-	got, err := testutil.GetCounterMetricValue(childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, reason))
+	got, err := testutil.GetCounterMetricValue(childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, string(reason)))
 	if err != nil {
 		t.Fatalf("read the removal counter: %v", err)
 	}

@@ -295,10 +295,13 @@ func (i *instrumentedStorage) CompactRevision() int64 { return i.inner.CompactRe
 // volume. A writer that retries a refused write in a loop would otherwise log at its own rate.
 const refusalLogInterval = 10 * time.Second
 
-// Reasons a child storage is removed, the reason label of childRemovals.
+// removalReason says why a child storage is removed: the reason label of
+// childRemovals.
+type removalReason string
+
 const (
-	removedProjectGone = "project_gone"
-	removedIdle        = "idle"
+	removedProjectGone removalReason = "project_gone"
+	removedIdle        removalReason = "idle"
 )
 
 // DefaultChildIdleTimeout is --project-storage-idle-timeout's default. A
@@ -556,8 +559,8 @@ func (m *projectMux) retireIdle() {
 // retire destroys a removed child after drain. A request that picked the child
 // before its removal ends within the server's request timeout, and a watch on
 // it ends when its cacher stops.
-func (m *projectMux) retire(c *child, reason string) {
-	childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, reason).Inc()
+func (m *projectMux) retire(c *child, reason removalReason) {
+	childRemovals.WithLabelValues(m.args.resourceGroup, m.args.resourceKind, string(reason)).Inc()
 	if c.destroy != nil {
 		time.AfterFunc(m.drain, c.destroy)
 	}
