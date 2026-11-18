@@ -27,11 +27,16 @@ type ReadinessRegistrar interface {
 
 // muxes hands a readiness check the mux the decorator built for its resource.
 // apiextensions builds a definition's storage on the first request for it,
-// through a decorator this package never calls itself.
+// through a decorator this package never calls itself. heldWarm holds the
+// resources whose children a readiness check waits for at the server's start:
+// quota admission watches a ResourceClaim right after its create, and a cache
+// that is still starting refuses that watch with a Retry-After of up to 30 s,
+// so the idle sweep never retires these children.
 var muxes = struct {
 	sync.Mutex
 	byResource map[schema.GroupResource]*projectMux
-}{byResource: map[schema.GroupResource]*projectMux{}}
+	heldWarm   map[schema.GroupResource]bool
+}{byResource: map[schema.GroupResource]*projectMux{}, heldWarm: map[schema.GroupResource]bool{}}
 
 func registerMux(gr schema.GroupResource, m *projectMux) {
 	muxes.Lock()
@@ -57,6 +62,18 @@ func registeredMux(gr schema.GroupResource) *projectMux {
 	muxes.Lock()
 	defer muxes.Unlock()
 	return muxes.byResource[gr]
+}
+
+func holdWarm(gr schema.GroupResource) {
+	muxes.Lock()
+	defer muxes.Unlock()
+	muxes.heldWarm[gr] = true
+}
+
+func isHeldWarm(gr schema.GroupResource) bool {
+	muxes.Lock()
+	defer muxes.Unlock()
+	return muxes.heldWarm[gr]
 }
 
 // ChildrenReadiness keeps a starting API server out of traffic until the
@@ -154,17 +171,6 @@ func (r *ChildrenReadiness) record(reason string, err error) error {
 func RegisterChildrenReadiness(reg ReadinessRegistrar, enabled bool, gvr metav1.GroupVersionResource, r *ChildrenReadiness) {
 	if enabled {
 		reg.RegisterStorage(gvr, r)
-		heldWarm.Store(r.gr, struct{}{})
+		holdWarm(r.gr)
 	}
-}
-
-// heldWarm holds the resources whose children a readiness check waits for at
-// the server's start. Quota admission watches a ResourceClaim right after its
-// create, and a cache that is still starting refuses that watch with a
-// Retry-After of up to 30 s, so the idle sweep never retires these children.
-var heldWarm sync.Map // schema.GroupResource to struct{}
-
-func isHeldWarm(gr schema.GroupResource) bool {
-	_, ok := heldWarm.Load(gr)
-	return ok
 }
