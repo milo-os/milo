@@ -302,9 +302,9 @@ const (
 )
 
 // DefaultChildIdleTimeout is --project-storage-idle-timeout's default. A
-// storage asked for again after a retire costs one list from etcd and a cache
-// start, so a client that comes back to a Project less often than this pays
-// at most that, four times an hour.
+// client that asks for one Project's resource at an interval a little longer
+// than the idle time pays a rebuild each time: one list from etcd and a cache
+// start. Keep the idle time longer than such a client's interval.
 const DefaultChildIdleTimeout = 15 * time.Minute
 
 // childIdleTimeout is how long a Project's child storage is kept with no
