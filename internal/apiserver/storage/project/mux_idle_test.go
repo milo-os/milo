@@ -255,18 +255,21 @@ func TestRootChildIsNeverIdle(t *testing.T) {
 // watches: the sweep keeps them warm too, and keeps retiring other kinds.
 func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
 	held := schema.GroupResource{Group: "idle.test.miloapis.com", Resource: "held"}
-	for _, enabled := range []bool{false, true} {
-		gvr := metav1.GroupVersionResource{Group: held.Group, Version: "v1", Resource: held.Resource}
-		RegisterChildrenReadiness(&registrar{}, enabled, gvr, NewChildrenReadiness(held, &view{}, served, 50))
-		var children countingChildren
-		m, clk := newIdleMux(&children, nil)
-		m.args = decoratorArgs{resourceGroup: held.Group, resourceKind: held.Resource}
-		get(t, m, "p")
-		clk.Step(10 * testIdle)
-		m.retireIdle()
-		if want := map[bool]int{false: 1, true: 2}[enabled]; m.childCount() != want {
-			t.Fatalf("readiness check enabled=%v: expected %d children, got %d", enabled, want, m.childCount())
-		}
+	// The enabled case runs first: the disabled one must pass after it too.
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
+			gvr := metav1.GroupVersionResource{Group: held.Group, Version: "v1", Resource: held.Resource}
+			RegisterChildrenReadiness(&registrar{}, enabled, gvr, NewChildrenReadiness(held, &view{}, served, 50))
+			var children countingChildren
+			m, clk := newIdleMux(&children, nil)
+			m.args = decoratorArgs{resourceGroup: held.Group, resourceKind: held.Resource}
+			get(t, m, "p")
+			clk.Step(10 * testIdle)
+			m.retireIdle()
+			if want := map[bool]int{false: 1, true: 2}[enabled]; m.childCount() != want {
+				t.Fatalf("readiness check enabled=%v: expected %d children, got %d", enabled, want, m.childCount())
+			}
+		})
 	}
 
 	var children countingChildren
