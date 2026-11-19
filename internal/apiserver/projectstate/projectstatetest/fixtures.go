@@ -3,6 +3,7 @@
 package projectstatetest
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/utils/clock"
@@ -112,6 +114,34 @@ func NewCacheWithClock(t *testing.T, clk clock.Clock, objects ...runtime.Object)
 	t.Helper()
 	client := NewClient(t, objects...)
 	c := projectstate.NewCacheWithClock(client, clk)
+	Start(t, c, client)
+	return c, client
+}
+
+// Start runs c, a cache on client, waits for its initial List and for its
+// watch to open, and stops it when the test ends.
+//
+// The fake client sends an event only to the watches open at the time of the
+// write, and it never sends a delete again. So a test that deletes a Project
+// between the initial List and the watch would lose the delete. client-go's
+// own fake-client example waits for the watch the same way
+// (k8s.io/client-go v0.37.1, examples/fake-client/main_test.go).
+func Start(t *testing.T, c *projectstate.Cache, client *fake.FakeDynamicClient) {
+	t.Helper()
+	watching := make(chan struct{})
+	var opened sync.Once
+	client.PrependWatchReactor(projectstate.ProjectGVR.Resource, func(action clienttesting.Action) (bool, watch.Interface, error) {
+		var opts metav1.ListOptions
+		if a, ok := action.(clienttesting.WatchActionImpl); ok {
+			opts = a.ListOptions
+		}
+		w, err := client.Tracker().Watch(action.GetResource(), action.GetNamespace(), opts)
+		if err != nil {
+			return true, nil, err
+		}
+		opened.Do(func() { close(watching) })
+		return true, w, nil
+	})
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	c.Start(stop)
@@ -123,5 +153,9 @@ func NewCacheWithClock(t *testing.T, clk clock.Clock, objects ...runtime.Object)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return c, client
+	select {
+	case <-watching:
+	case <-time.After(time.Until(deadline)):
+		t.Fatalf("project state cache did not open its watch")
+	}
 }
