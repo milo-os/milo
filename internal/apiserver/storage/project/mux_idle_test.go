@@ -188,6 +188,23 @@ func TestARequestAfterEachIdleTimeRebuildsItsChild(t *testing.T) {
 	}
 }
 
+// TestARetiredChildAndItsSuccessorLiveTogether covers a request just after
+// the retire: it builds a new child while the retired one still serves the
+// requests that picked it, so for up to the drain the pod holds both. The
+// drain outlasts the test; TestRemovedChildServesUntilTheDrain holds its end.
+func TestARetiredChildAndItsSuccessorLiveTogether(t *testing.T) {
+	var children countingChildren
+	m, clk := newIdleMux(&children, nil)
+	m.drain = time.Hour
+	get(t, m, "p")
+	clk.Step(testIdle)
+	m.retireIdle()
+	get(t, m, "p")
+	if built, destroyed := children.built.Load(), children.destroyed.Load(); built != 2 || destroyed != 0 {
+		t.Fatalf("expected the retired child and its successor both alive, got %d built and %d destroyed", built, destroyed)
+	}
+}
+
 // TestWatchedChildIsKept covers an open watch: its child is in use however
 // long the watch lasts, and the idle time starts when the watch stops.
 func TestWatchedChildIsKept(t *testing.T) {
