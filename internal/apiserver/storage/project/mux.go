@@ -16,7 +16,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
@@ -347,7 +346,7 @@ type projectMux struct {
 	// watch; zero keeps it until its Project goes. clock tells the time of
 	// each use and of each sweep; stopSweep ends the sweep.
 	idleTimeout time.Duration
-	clock       clock.PassiveClock
+	clock       clock.WithTicker
 	stopSweep   chan struct{}
 }
 
@@ -517,14 +516,25 @@ func (m *projectMux) ViewResynced() {
 	}
 }
 
-// startIdleSweep retires idle children every sweep period until destroyAll,
-// when m.idleTimeout is set.
+// startIdleSweep retires idle children every sweep period, by the mux's
+// clock, until destroyAll, when m.idleTimeout is set.
 func (m *projectMux) startIdleSweep() {
 	if m.idleTimeout <= 0 {
 		return
 	}
 	m.stopSweep = make(chan struct{})
-	go wait.Until(m.retireIdle, min(m.idleTimeout, maxIdleSweepPeriod), m.stopSweep)
+	tick := m.clock.NewTicker(min(m.idleTimeout, maxIdleSweepPeriod))
+	go func() {
+		defer tick.Stop()
+		for {
+			select {
+			case <-m.stopSweep:
+				return
+			case <-tick.C():
+				m.retireIdle()
+			}
+		}
+	}()
 }
 
 // retireIdle removes and retires every Project's child that no request and no
