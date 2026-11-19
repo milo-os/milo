@@ -260,6 +260,7 @@ func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
 		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
 			gvr := metav1.GroupVersionResource{Group: held.Group, Version: "v1", Resource: held.Resource}
 			RegisterChildrenReadiness(&registrar{}, enabled, gvr, NewChildrenReadiness(held, &view{}, served, 50))
+			t.Cleanup(func() { forgetHeldWarm(held) })
 			var children countingChildren
 			m, clk := newIdleMux(&children, nil)
 			m.args = decoratorArgs{resourceGroup: held.Group, resourceKind: held.Resource}
@@ -327,6 +328,14 @@ func TestDestroyStopsTheSweep(t *testing.T) {
 	}
 	destroy()
 	goleak.VerifyNone(t, running)
+}
+
+// forgetHeldWarm clears the mark that a readiness check's registration sets
+// for the life of the process, so the next test starts without it.
+func forgetHeldWarm(gr schema.GroupResource) {
+	muxes.Lock()
+	defer muxes.Unlock()
+	delete(muxes.heldWarm, gr)
 }
 
 // get makes one get request into project through m.

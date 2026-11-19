@@ -337,6 +337,7 @@ func (r *registrar) RegisterStorage(gvr metav1.GroupVersionResource, _ rest.Stor
 
 func TestTheFlagDecidesTheRegistration(t *testing.T) {
 	gvr := metav1.GroupVersionResource{Group: claimsGR.Group, Version: "v1alpha1", Resource: claimsGR.Resource}
+	t.Cleanup(func() { forgetHeldWarm(claimsGR) })
 	for _, enabled := range []bool{true, false} {
 		reg := &registrar{}
 		RegisterChildrenReadiness(reg, enabled, gvr, NewChildrenReadiness(claimsGR, &view{}, served, 50))
