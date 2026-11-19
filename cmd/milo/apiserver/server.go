@@ -287,21 +287,10 @@ func applyStorageFlags() error {
 	return nil
 }
 
-// minProjectStorageIdleTimeout is the shortest idle time above 0. A request
-// marks its storage used and then opens its watch; a sweep between the two
-// sees no watch, and only the idle time keeps the storage. The idle time must
-// stay far longer than that gap. A minute is also the sweep's longest period,
-// so from it up each storage's sweep takes the lock once a minute, not at the
-// idle time.
-const minProjectStorageIdleTimeout = time.Minute
-
-// checkProjectStorageIdleTimeout refuses an idle time the project storage cannot take.
+// checkProjectStorageIdleTimeout refuses, at the server's start, an idle time the project storage cannot take.
 func checkProjectStorageIdleTimeout(d time.Duration) error {
-	if d < 0 {
-		return fmt.Errorf("--project-storage-idle-timeout must not be negative, got %s", d)
-	}
-	if d > 0 && d < minProjectStorageIdleTimeout {
-		return fmt.Errorf("--project-storage-idle-timeout must be 0 or at least %s, got %s", minProjectStorageIdleTimeout, d)
+	if err := projectstorage.CheckChildIdleTimeout(d); err != nil {
+		return fmt.Errorf("--project-storage-idle-timeout: %w", err)
 	}
 	return nil
 }

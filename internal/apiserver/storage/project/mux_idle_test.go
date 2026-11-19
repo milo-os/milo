@@ -298,19 +298,14 @@ func TestTheSweepRunsOnItsOwn(t *testing.T) {
 	waitFor(t, "the idle child to be destroyed", func() bool { return children.destroyed.Load() == 1 })
 }
 
-// sweptIdle is the idle time of a decorated storage under test: under a
-// minute, so its sweep runs at the idle time, and short, so the idle child
-// goes well within waitFor's deadline.
-const sweptIdle = 50 * time.Millisecond
-
 // TestDecoratedStorageRetiresIdleChildren covers the idle time end to end: a
-// decorated storage sweeps on its own, at the idle time when it is under a
-// minute, and 0 starts no sweep.
+// decorated storage sweeps on its own, by its clock, and 0 starts no sweep.
 func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
-	for _, idle := range []time.Duration{sweptIdle, 0} {
+	for _, idle := range []time.Duration{time.Minute, 0} {
 		var children countingChildren
-		s, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, cachesOf(&children, nil),
-			everyProjectKnown(), nil, testDrain, idle)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
+		clk := clocktesting.NewFakeClock(time.Now())
+		s, destroy, err := projectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, cachesOf(&children, nil),
+			everyProjectKnown(), nil, testDrain, idle, clk)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("decorate configmaps: %v", err)
 		}
@@ -322,6 +317,7 @@ func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
 			t.Fatalf("expected the root plane's child and one Project's, got %d built", n)
 		}
 		if idle > 0 {
+			clk.Step(idle)
 			waitFor(t, "the idle child to be destroyed", func() bool { return children.destroyed.Load() == 1 })
 			continue
 		}

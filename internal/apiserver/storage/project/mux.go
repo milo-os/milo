@@ -309,10 +309,25 @@ const (
 // start. Keep the idle time longer than such a client's interval.
 const DefaultChildIdleTimeout = 15 * time.Minute
 
-// maxIdleSweepPeriod is the longest time between two sweeps of a mux: an idle
-// child goes at most this long after its idle time, and a mux takes its lock
-// to sweep no more than once in this time, however long its idle time.
-const maxIdleSweepPeriod = time.Minute
+// MinChildIdleTimeout is the shortest idle time above 0, and the idle sweep's
+// period. A request marks its storage used and then opens its watch; a sweep
+// between the two sees no watch, and only the idle time keeps the storage, so
+// the idle time must stay far longer than that gap. The sweep runs once in
+// this time: an idle child goes at most this long after its idle time, and a
+// mux takes its lock to sweep at most once in it.
+const MinChildIdleTimeout = time.Minute
+
+// CheckChildIdleTimeout refuses an idle time the project storage cannot keep
+// to: one below 0, or one above 0 and under MinChildIdleTimeout.
+func CheckChildIdleTimeout(d time.Duration) error {
+	if d < 0 {
+		return fmt.Errorf("the project storage idle timeout must not be negative, got %s", d)
+	}
+	if d > 0 && d < MinChildIdleTimeout {
+		return fmt.Errorf("the project storage idle timeout must be 0 or at least %s, got %s", MinChildIdleTimeout, d)
+	}
+	return nil
+}
 
 // ProjectLookup tells the storage about Projects: Lookup says which Project a
 // name refers to now, reading storage when the view cannot answer; Project
@@ -516,14 +531,14 @@ func (m *projectMux) ViewResynced() {
 	}
 }
 
-// startIdleSweep retires idle children every sweep period, by the mux's
-// clock, until destroyAll, when m.idleTimeout is set.
+// startIdleSweep retires idle children once every MinChildIdleTimeout, by the
+// mux's clock, until destroyAll, when m.idleTimeout is set.
 func (m *projectMux) startIdleSweep() {
 	if m.idleTimeout <= 0 {
 		return
 	}
 	m.stopSweep = make(chan struct{})
-	tick := m.clock.NewTicker(min(m.idleTimeout, maxIdleSweepPeriod))
+	tick := m.clock.NewTicker(MinChildIdleTimeout)
 	go func() {
 		defer tick.Stop()
 		for {
