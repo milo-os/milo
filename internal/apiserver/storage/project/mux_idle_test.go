@@ -331,6 +331,27 @@ func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
 	}
 }
 
+// TestTheDecoratorRefusesAnIdleTimeUnderAMinute covers the minimum, whoever
+// builds the storage: an idle time below 0, or above 0 and under a minute, is
+// refused before any child is built; 0 and a minute are taken.
+func TestTheDecoratorRefusesAnIdleTimeUnderAMinute(t *testing.T) {
+	for _, idle := range []time.Duration{-time.Minute, time.Nanosecond, 30 * time.Second, time.Minute - time.Nanosecond, 0, time.Minute} {
+		var children countingChildren
+		_, destroy, err := ProjectAwareDecorator(schema.GroupResource{Resource: "configmaps"}, children.storage,
+			everyProjectKnown(), nil, testDrain, idle)(&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
+		if err == nil {
+			destroy()
+		}
+		taken := idle == 0 || idle == time.Minute
+		if taken != (err == nil) {
+			t.Errorf("idle time %s: expected taken=%v, got error %v", idle, taken, err)
+		}
+		if !taken && children.built.Load() != 0 {
+			t.Errorf("idle time %s: expected no child built, got %d", idle, children.built.Load())
+		}
+	}
+}
+
 // TestDestroyStopsTheSweep covers a storage torn down, as apiextensions tears
 // down a CRD's: its sweep ends with it.
 func TestDestroyStopsTheSweep(t *testing.T) {
