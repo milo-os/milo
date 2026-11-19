@@ -283,6 +283,21 @@ func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
 	}
 }
 
+// TestTheSweepRunsOnItsOwn covers the sweep's loop: once started, it sweeps
+// each time the mux's clock passes the sweep's period, with no call from the
+// test. The child is built one period after the start, so only a later sweep
+// can retire it.
+func TestTheSweepRunsOnItsOwn(t *testing.T) {
+	var children countingChildren
+	m, clk := newIdleMux(&children, nil)
+	m.startIdleSweep()
+	t.Cleanup(m.destroyAll)
+	clk.Step(testIdle)
+	get(t, m, "p")
+	clk.Step(testIdle)
+	waitFor(t, "the idle child to be destroyed", func() bool { return children.destroyed.Load() == 1 })
+}
+
 // sweptIdle is the idle time of a decorated storage under test: under a
 // minute, so its sweep runs at the idle time, and short, so the idle child
 // goes well within waitFor's deadline.
