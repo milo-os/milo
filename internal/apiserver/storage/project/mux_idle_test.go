@@ -170,6 +170,24 @@ func TestARequestRenewsTheIdleTime(t *testing.T) {
 	}
 }
 
+// TestARequestAfterEachIdleTimeRebuildsItsChild covers a client that asks
+// for one Project's resource at an interval a little longer than the idle
+// time: the sweep retires the child between two requests, so each request
+// builds it again, one list from etcd and a cache start each time.
+func TestARequestAfterEachIdleTimeRebuildsItsChild(t *testing.T) {
+	const requests = 4
+	var children countingChildren
+	m, clk := newIdleMux(&children, nil)
+	for range requests {
+		get(t, m, "p")
+		clk.Step(testIdle * 11 / 10)
+		m.retireIdle()
+	}
+	if n := children.built.Load(); n != requests {
+		t.Fatalf("expected each of %d requests to build the child, got %d built", requests, n)
+	}
+}
+
 // TestWatchedChildIsKept covers an open watch: its child is in use however
 // long the watch lasts, and the idle time starts when the watch stops.
 func TestWatchedChildIsKept(t *testing.T) {
