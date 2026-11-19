@@ -150,10 +150,10 @@ type child struct {
 	created   time.Time
 	readyOnce sync.Once
 
-	// lastUsed is the last time, in Unix nanoseconds, that a request picked
-	// the child or a watch on it ended, by clock, the mux's; watches counts
-	// its open watches. The idle sweep retires a child with no open watch and
-	// no use for the idle time.
+	// lastUsed is when a request last picked the child, or a watch on it last
+	// ended, in Unix nanoseconds by clock. watches counts the child's open
+	// watches. The idle sweep retires a child that has no open watch and that
+	// nothing used for the idle time.
 	lastUsed atomic.Int64
 	watches  atomic.Int32
 	clock    clock.PassiveClock
