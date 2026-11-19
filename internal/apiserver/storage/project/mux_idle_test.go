@@ -3,6 +3,7 @@ package projectstorage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -324,6 +325,45 @@ func TestDecoratedStorageRetiresIdleChildren(t *testing.T) {
 		if s.(*projectMux).stopSweep != nil {
 			t.Fatal("expected no sweep with the idle time at 0")
 		}
+	}
+}
+
+// TestASweepAndDestroyAllEndEachChildOnce covers a storage torn down while
+// its sweep runs: the sweep retires only the children it took out of the
+// mux, and destroyAll destroys the rest, so each child is retired or
+// destroyed, never both. The drain outlasts the test, so a destroy counted
+// here is destroyAll's and a retire is the sweep's.
+func TestASweepAndDestroyAllEndEachChildOnce(t *testing.T) {
+	const projects, rounds = 20, 50
+	together := func(m *projectMux) {
+		swept := make(chan struct{})
+		go func() { defer close(swept); m.retireIdle() }()
+		m.destroyAll()
+		<-swept
+	}
+	for name, run := range map[string]func(*projectMux){
+		"sweep first":   func(m *projectMux) { m.retireIdle(); m.destroyAll() },
+		"destroy first": func(m *projectMux) { m.destroyAll(); m.retireIdle() },
+		"together":      together,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for range rounds {
+				var children countingChildren
+				m, clk := newIdleMux(&children, nil)
+				m.drain = time.Hour
+				for i := range projects {
+					get(t, m, fmt.Sprintf("p%d", i))
+				}
+				clk.Step(testIdle)
+				idleBefore := removals(t, m, removedIdle)
+				run(m)
+				retired := int(removals(t, m, removedIdle) - idleBefore)
+				if destroyed := int(children.destroyed.Load()); retired+destroyed != projects {
+					t.Fatalf("expected %d children retired or destroyed once each, got %d retired and %d destroyed",
+						projects, retired, destroyed)
+				}
+			}
+		})
 	}
 }
 
