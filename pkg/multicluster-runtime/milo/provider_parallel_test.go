@@ -32,14 +32,17 @@ const waitFor = 60 * time.Second
 
 // TestParallelEngagementSyncsProjectsTogether checks that the provider syncs as
 // many project caches at once as MaxConcurrentReconciles allows. The syncs are
-// held until all three wait together, or for 10 s.
+// held until all three wait together, so a provider that syncs one project at
+// a time never gets there. No clock decides the release: a clock that starts
+// before envtest also measures how long envtest takes to start.
 func TestParallelEngagementSyncsProjectsTogether(t *testing.T) {
+	projects := []string{"p-1", "p-2", "p-3"}
 	gates := newSyncGates()
-	go gates.releaseWhen(3, 10*time.Second)
-	rig := startParallel(t, 3, 0, gates, "p-1", "p-2", "p-3")
+	rig := startParallel(t, len(projects), 0, gates, projects...)
 
-	rig.requireEngaged(t, "p-1", "p-2", "p-3")
-	require.Equal(t, 3, gates.peakWaiting(), "project caches synced at the same time")
+	gates.requireWaitingTogether(t, len(projects))
+	close(gates.release)
+	rig.requireEngaged(t, projects...)
 }
 
 // TestHungProjectDoesNotHoldTheOthers checks that a project whose cache never
@@ -240,15 +243,6 @@ func (g *syncGates) hang(projects ...string) {
 	}
 }
 
-// releaseWhen closes release once n syncs wait together, or after limit.
-func (g *syncGates) releaseWhen(n int, limit time.Duration) {
-	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) && g.peakWaiting() < n {
-		time.Sleep(10 * time.Millisecond)
-	}
-	close(g.release)
-}
-
 func (g *syncGates) wrap(project string, c cache.Cache) cache.Cache {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -294,6 +288,12 @@ func (g *syncGates) requireArrived(t *testing.T, projects ...string) {
 	for _, name := range projects {
 		require.Eventually(t, func() bool { return g.hasArrived(name) }, waitFor, 10*time.Millisecond, "project %s never began its sync", name)
 	}
+}
+
+// requireWaitingTogether checks that n syncs wait at once within waitFor.
+func (g *syncGates) requireWaitingTogether(t *testing.T, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool { return g.peakWaiting() >= n }, waitFor, 10*time.Millisecond, "%d project caches never waited to sync together", n)
 }
 
 // requireStopped checks that each cache stops within limit.
