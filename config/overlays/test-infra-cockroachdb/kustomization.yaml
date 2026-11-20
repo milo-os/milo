@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The test-infra environment with the API server's resources in CockroachDB
+# instead of etcd.
+namespace: milo-system
+
+resources:
+  - ../test-infra
+  - ../../dependencies/cockroachdb
+
+patches:
+  - path: patches/apiserver-storage-engine.yaml
+    target:
+      kind: Deployment
+      name: milo-apiserver
+  - path: patches/apiserver-client-certs.yaml
+    target:
+      kind: Deployment
+      name: milo-apiserver
+  - path: patches/apiserver-without-etcd.yaml
+    target:
+      kind: Deployment
+      name: milo-apiserver
+  - path: patches/remove-etcd-release.yaml
+    target:
+      kind: HelmRelease
+      name: etcd
+  - path: patches/remove-etcd-repository.yaml
+    target:
+      kind: HelmRepository
+      name: bitnami
