@@ -1,0 +1,133 @@
+# quota.miloapis.com: resource grants.
+policy_files:
+- ../../config/services/activity/policies
+tests:
+- name: 'quota.miloapis.com-resourcegrant: grant to a consumer'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: g-1
+      spec: &id001
+        consumerRef:
+          kind: Organization
+          name: acme
+  exp_rule: create-with-consumer
+  exp_summary: alice@example.com granted quota to Organization acme
+  exp_policy: quota.miloapis.com-resourcegrant
+- name: 'quota.miloapis.com-resourcegrant: grant without a consumer'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: g-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com created a quota grant
+- name: 'quota.miloapis.com-resourcegrant: revoke from a consumer'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 200
+    responseObject:
+      metadata:
+        name: g-1
+      spec: *id001
+  exp_rule: delete-with-consumer
+  exp_summary: alice@example.com revoked quota from Organization acme
+- name: 'quota.miloapis.com-resourcegrant: revoke when the response has no spec'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 200
+    responseObject:
+      kind: Status
+      status: Success
+  exp_rule: delete-fallback
+  exp_summary: alice@example.com revoked a quota grant
+- name: 'quota.miloapis.com-resourcegrant: reading is not an activity'
+  policy: quota.miloapis.com-resourcegrant
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'quota.miloapis.com-resourcegrant: a controller''s write is not an activity'
+  policy: quota.miloapis.com-resourcegrant
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'quota.miloapis.com-resourcegrant: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated quota grant g-1
+  exp_change_source: human
+- name: 'quota.miloapis.com-resourcegrant: a status update is not a user''s edit'
+  policy: quota.miloapis.com-resourcegrant
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: quota.miloapis.com
+      resource: resourcegrants
+      name: g-1
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true

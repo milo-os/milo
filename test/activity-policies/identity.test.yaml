@@ -1,0 +1,79 @@
+# identity.miloapis.com: service account (API) keys.
+policy_files:
+- ../../config/services/activity/policies
+tests:
+- name: 'identity.miloapis.com-serviceaccountkey: create a key for an account'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: identity.miloapis.com
+      resource: serviceaccountkeys
+      name: key-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: key-1
+      spec:
+        machineAccountUserName: ci-deployer
+  exp_rule: create-with-account
+  exp_summary: alice@example.com created API key for ci-deployer
+  exp_policy: identity.miloapis.com-serviceaccountkey
+- name: 'identity.miloapis.com-serviceaccountkey: create without the account'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: identity.miloapis.com
+      resource: serviceaccountkeys
+      name: key-1
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: key-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com created a machine account key
+- name: 'identity.miloapis.com-serviceaccountkey: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: identity.miloapis.com
+      resource: serviceaccountkeys
+      name: key-1
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted API key key-1
+- name: 'identity.miloapis.com-serviceaccountkey: reading is not an activity'
+  policy: identity.miloapis.com-serviceaccountkey
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: identity.miloapis.com
+      resource: serviceaccountkeys
+      name: key-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'identity.miloapis.com-serviceaccountkey: a controller''s write is not an activity'
+  policy: identity.miloapis.com-serviceaccountkey
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: identity.miloapis.com
+      resource: serviceaccountkeys
+      name: key-1
+    responseStatus:
+      code: 200
+  exp_no_match: true

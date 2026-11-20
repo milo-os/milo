@@ -1,0 +1,35 @@
+name: Activity Policy Tests
+
+# Validates Milo's ActivityPolicies and runs their unit tests
+# (test/activity-policies) in the activitytool image. Run the same check
+# locally with `task test-activity-policies`.
+
+on:
+  pull_request:
+    paths:
+      - "config/services/activity/policies/**"
+      - "test/activity-policies/**"
+      - ".github/workflows/test-activity-policies.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "config/services/activity/policies/**"
+      - "test/activity-policies/**"
+      - ".github/workflows/test-activity-policies.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-activity-policies:
+    permissions:
+      contents: read
+    uses: datum-cloud/actions/.github/workflows/test-activity-policies.yaml@v1.29.0
+    with:
+      # The milo-os/activity release deployed with Milo. Keep in sync with
+      # ACTIVITYTOOL_VERSION in Taskfile.yaml.
+      # renovate: datasource=docker depName=ghcr.io/milo-os/activitytool
+      activitytool-version: v0.10.0@sha256:8846d57a341837d888cc3de1d2cb396e42b8e0bcf0e2da5f501d8d5223fe0db1
+      policies-path: config/services/activity/policies
+      tests-path: test/activity-policies
+      fail-on-untested: true

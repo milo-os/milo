@@ -21,6 +21,11 @@ vars:
   E2E_SELECTOR: "requires notin (authorization-provider,discovery-context-filter)"
   # Test infra repository configuration - can be overridden with environment variable
   TEST_INFRA_REPO_REF: 'v0.5.0'
+  # The milo-os/activity release deployed with Milo, so CEL and template
+  # functions match production. Keep in sync with
+  # .github/workflows/test-activity-policies.yaml.
+  # renovate: datasource=docker depName=ghcr.io/milo-os/activitytool
+  ACTIVITYTOOL_VERSION: v0.10.0@sha256:8846d57a341837d888cc3de1d2cb396e42b8e0bcf0e2da5f501d8d5223fe0db1
 
 includes:
   # Must set TASK_X_REMOTE_TASKFILES=1 to use this feature.
@@ -615,4 +620,19 @@ tasks:
             echo ""
             echo "🎉 All Prometheus rule tests passed."
           fi
+      silent: false
+
+  test-activity-policies:
+      desc: Validate the ActivityPolicies and run their unit tests in the activitytool image
+      cmds:
+        - |
+          set -eu
+          root=$(git rev-parse --show-toplevel)
+          prefix=$(git rev-parse --show-prefix)
+          docker run --rm --network none --user 65532:65532 --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --volume "$root:/work:ro" --workdir "/work/$prefix" \
+            "ghcr.io/milo-os/activitytool:{{.ACTIVITYTOOL_VERSION}}" \
+            test --fail-on-untested --fail-on-untested-rules \
+              --policies config/services/activity/policies test/activity-policies
       silent: false
