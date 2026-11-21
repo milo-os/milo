@@ -38,6 +38,22 @@ spec:
                 path: '{.status.phase}'
                 value: Active
 
+    - name: setup-grant-creation-policy
+      description: Create GrantCreationPolicy to provision notes quota for test projects
+      cluster: main
+      try:
+        - apply:
+            file: 02-grant-creation-policy.yaml
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: GrantCreationPolicy
+            name: cn-mc-test-project-notes-grant-policy
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'true'
+
     - name: create-project
       description: Create project in org control plane
       cluster: org
@@ -53,6 +69,21 @@ spec:
               condition:
                 name: Ready
                 value: 'true'
+
+    - name: wait-for-project-quota-grant
+      description: Wait for notes quota grant to appear in project control plane, confirming the proxy is reachable and quota is provisioned
+      cluster: project
+      try:
+        - wait:
+            apiVersion: quota.miloapis.com/v1alpha1
+            kind: ResourceGrant
+            name: auto-grant-cn-mc-test-project-1
+            namespace: milo-system
+            timeout: 60s
+            for:
+              condition:
+                name: Active
+                value: 'True'
 
     - name: create-namespace-in-project
       description: Create cluster-scoped Namespace in project control plane
