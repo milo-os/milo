@@ -18,10 +18,13 @@ spec:
     - The bound role (roleRef) must be an assignable role in the assignable-roles
       namespace (the controller-manager --assignable-roles-namespace flag,
       "datum-cloud") and must actually exist there.
-    - Subjects are unrestricted: an org holder may grant a role to a User,
-      Group, or ServiceAccount. What keeps those grants inside the organization
-      is the namespace and target containment above, not a subject-kind
-      restriction. A ServiceAccount also need not live in the target Project's
+    - A non-system Group subject must live in the organization's namespace. A
+      Group in another namespace is refused before its uid is resolved, with the
+      same error as a Group that does not exist.
+    - Other subjects are unrestricted: an org holder may grant a role to a User
+      or ServiceAccount. What keeps those grants inside the organization is the
+      namespace and target containment above, not a subject-kind restriction. A
+      ServiceAccount also need not live in the target Project's
       control plane — an organization admin can grant a ServiceAccount access
       outside of its own project (for example, IAM admin access across the
       whole org).
@@ -34,6 +37,8 @@ spec:
     - An organization-wide grant (targeting the request organization) is
       accepted; one targeting another organization is denied.
     - User and system-group subjects are accepted.
+    - A Group subject in another organization is denied, and the denial reads
+      the same whether or not that Group exists.
     - Binding a Project that belongs to another organization is denied.
     - Kind-level (resourceKind) targets are denied.
     - A binding created in a namespace other than the organization's namespace
@@ -203,6 +208,13 @@ spec:
               spec:
                 state: Active
 
+    - name: create-group-b
+      description: Create a Group in Organization B's namespace
+      cluster: main
+      try:
+        - apply:
+            file: test-data/group-b.yaml
+
     - name: allow-serviceaccount-bound-to-in-project
       description: A ServiceAccount bound to a Project in its own organization and control plane is accepted
       cluster: orgAUser
@@ -303,6 +315,28 @@ spec:
               metadata:
                 name: pb-system-group-subject
                 namespace: organization-pb-org-a
+
+    - name: deny-group-from-another-organization
+      description: A Group subject in another organization is denied without resolving its uid
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-cross-org-group-existing.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'Group "pb-group-b" does not exist in the organization''s namespace "organization-pb-org-a"')): true
+
+    - name: deny-missing-group-in-another-organization
+      description: A missing Group in another organization is denied with the same error as an existing one
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-cross-org-group-missing.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'Group "pb-group-missing" does not exist in the organization''s namespace "organization-pb-org-a"')): true
 
     - name: deny-binding-outside-org-namespace
       description: A binding created outside the organization's namespace is denied

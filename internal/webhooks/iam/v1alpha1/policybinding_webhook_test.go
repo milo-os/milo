@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -118,7 +119,7 @@ func TestPolicyBindingMutator_Default(t *testing.T) {
 			mutator := &PolicyBindingMutator{client: cl}
 
 			pb := policyBinding(tc.subjects...)
-			err := mutator.Default(context.Background(), pb)
+			err := mutator.Default(platformContextRequest(), pb)
 
 			if tc.expectError {
 				require.Error(t, err)
@@ -132,6 +133,91 @@ func TestPolicyBindingMutator_Default(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPolicyBindingMutator_DefaultGroupSubjectScope(t *testing.T) {
+	ownGroup := &iamv1alpha1.Group{
+		ObjectMeta: metav1.ObjectMeta{Name: "loaders", Namespace: "organization-acme", UID: types.UID("own-group-uid")},
+	}
+	foreignGroup := &iamv1alpha1.Group{
+		ObjectMeta: metav1.ObjectMeta{Name: "admins", Namespace: "organization-globex", UID: types.UID("foreign-group-uid")},
+	}
+	platformGroup := &iamv1alpha1.Group{
+		ObjectMeta: metav1.ObjectMeta{Name: "staff-users", Namespace: "milo-system", UID: types.UID("platform-group-uid")},
+	}
+
+	newMutator := func(t *testing.T, refuseForeignGets bool) *PolicyBindingMutator {
+		builder := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(ownGroup, foreignGroup, platformGroup)
+		if refuseForeignGets {
+			builder = builder.WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*iamv1alpha1.Group); ok && key.Namespace != "organization-acme" {
+						t.Errorf("unexpected Group lookup in namespace %q", key.Namespace)
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+		}
+		return &PolicyBindingMutator{client: builder.Build()}
+	}
+
+	defaultErr := func(t *testing.T, ctx context.Context, subject iamv1alpha1.Subject) (string, *iamv1alpha1.PolicyBinding) {
+		pb := policyBinding(subject)
+		err := newMutator(t, true).Default(ctx, pb)
+		require.Error(t, err)
+		return err.Error(), pb
+	}
+
+	t.Run("org context does not resolve a group in another organization", func(t *testing.T) {
+		msg, pb := defaultErr(t, orgContextRequest("acme"), iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-globex"})
+		assert.Empty(t, pb.Spec.Subjects[0].UID)
+		assert.NotContains(t, msg, "foreign-group-uid")
+		assert.Contains(t, msg, `Group "admins" does not exist in the organization's namespace "organization-acme"`)
+	})
+
+	t.Run("org context does not resolve a platform group", func(t *testing.T) {
+		msg, pb := defaultErr(t, orgContextRequest("acme"), iamv1alpha1.Subject{Kind: "Group", Name: "staff-users", Namespace: "milo-system"})
+		assert.Empty(t, pb.Spec.Subjects[0].UID)
+		assert.NotContains(t, msg, "platform-group-uid")
+	})
+
+	t.Run("org context reports a foreign group and a missing group identically", func(t *testing.T) {
+		existing, _ := defaultErr(t, orgContextRequest("acme"), iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-globex"})
+		missingForeign, _ := defaultErr(t, orgContextRequest("acme"), iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-initech"})
+		missingOwn, _ := defaultErr(t, orgContextRequest("acme"), iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-acme"})
+		assert.Equal(t, missingForeign, existing)
+		assert.Equal(t, missingOwn, existing)
+	})
+
+	t.Run("org context resolves a group in its own namespace", func(t *testing.T) {
+		pb := policyBinding(iamv1alpha1.Subject{Kind: "Group", Name: "loaders", Namespace: "organization-acme"})
+		require.NoError(t, newMutator(t, true).Default(orgContextRequest("acme"), pb))
+		assert.Equal(t, "own-group-uid", pb.Spec.Subjects[0].UID)
+	})
+
+	t.Run("project context resolves nothing", func(t *testing.T) {
+		msg, pb := defaultErr(t, projectContextRequest("project-a"), iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-globex"})
+		assert.Empty(t, pb.Spec.Subjects[0].UID)
+		assert.Contains(t, msg, "project-context PolicyBindings are not yet supported")
+	})
+
+	t.Run("platform context resolves a platform group", func(t *testing.T) {
+		pb := policyBinding(iamv1alpha1.Subject{Kind: "Group", Name: "staff-users", Namespace: "milo-system"})
+		require.NoError(t, newMutator(t, false).Default(platformContextRequest(), pb))
+		assert.Equal(t, "platform-group-uid", pb.Spec.Subjects[0].UID)
+	})
+
+	t.Run("superuser in org context resolves a group in another namespace", func(t *testing.T) {
+		pb := policyBinding(iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-globex"})
+		require.NoError(t, newMutator(t, false).Default(orgContextSuperuserRequest("acme"), pb))
+		assert.Equal(t, "foreign-group-uid", pb.Spec.Subjects[0].UID)
+	})
+}
+
+func platformContextRequest() context.Context {
+	return admission.NewContextWithRequest(context.Background(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{},
+	})
 }
 
 func testProject(name, org string) *resourcemanagerv1alpha1.Project {
@@ -403,6 +489,37 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			expectError: true,
 			contains:    "resourceKind (kind-level) targets are not allowed in organization context",
 		},
+		"org context denies a group subject in another organization's namespace": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: func() *iamv1alpha1.PolicyBinding {
+				b := projectBinding("project-a")
+				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "Group", Name: "loaders", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgB), UID: "group-uid-2"}}
+				return b
+			}(),
+			expectError: true,
+			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
+		},
+		"org context denies a platform group subject": {
+			preObjects: []client.Object{projectA},
+			ctx:        orgContextRequest(orgA),
+			binding: func() *iamv1alpha1.PolicyBinding {
+				b := projectBinding("project-a")
+				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "Group", Name: "staff-users", Namespace: "milo-system", UID: "group-uid-3"}}
+				return b
+			}(),
+			expectError: true,
+			contains:    `Group "staff-users" does not exist in the organization's namespace "organization-acme"`,
+		},
+		"not in org context allows a platform group subject": {
+			ctx: platformContextRequest(),
+			binding: func() *iamv1alpha1.PolicyBinding {
+				b := projectBinding("project-a")
+				b.Namespace = "milo-system"
+				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "Group", Name: "staff-users", Namespace: "milo-system", UID: "group-uid-3"}}
+				return b
+			}(),
+		},
 		"org context denies a binding in the wrong namespace": {
 			preObjects:  []client.Object{projectA},
 			ctx:         orgContextRequest(orgA),
@@ -630,6 +747,17 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			}(),
 			expectError: true,
 			contains:    "does not match the request organization",
+		},
+		"update that swaps in a group from another organization is denied": {
+			ctx:   orgContextRequest(orgA),
+			oldPB: saBinding,
+			newPB: func() *iamv1alpha1.PolicyBinding {
+				b := saBinding.DeepCopy()
+				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "Group", Name: "loaders", Namespace: "organization-globex", UID: "group-uid-2"}}
+				return b
+			}(),
+			expectError: true,
+			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
 		},
 		"project context fails closed on update": {
 			ctx:         projectContextRequest("project-a"),
