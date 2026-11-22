@@ -201,6 +201,12 @@ func TestPolicyBindingMutator_DefaultGroupSubjectScope(t *testing.T) {
 		assert.Contains(t, msg, "project-context PolicyBindings are not yet supported")
 	})
 
+	t.Run("user parent context resolves nothing", func(t *testing.T) {
+		msg, pb := defaultErr(t, userContextRequest("alice"), iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-globex"})
+		assert.Empty(t, pb.Spec.Subjects[0].UID)
+		assert.Contains(t, msg, `PolicyBindings are not supported in a "User" parent context`)
+	})
+
 	t.Run("platform context resolves a platform group", func(t *testing.T) {
 		pb := policyBinding(iamv1alpha1.Subject{Kind: "Group", Name: "staff-users", Namespace: "milo-system"})
 		require.NoError(t, newMutator(t, false).Default(platformContextRequest(), pb))
@@ -211,6 +217,20 @@ func TestPolicyBindingMutator_DefaultGroupSubjectScope(t *testing.T) {
 		pb := policyBinding(iamv1alpha1.Subject{Kind: "Group", Name: "admins", Namespace: "organization-globex"})
 		require.NoError(t, newMutator(t, false).Default(orgContextSuperuserRequest("acme"), pb))
 		assert.Equal(t, "foreign-group-uid", pb.Spec.Subjects[0].UID)
+	})
+}
+
+func userContextRequest(userID string) context.Context {
+	return admission.NewContextWithRequest(context.Background(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UserInfo: authenticationv1.UserInfo{
+				Extra: map[string]authenticationv1.ExtraValue{
+					iamv1alpha1.ParentNameExtraKey:     {userID},
+					iamv1alpha1.ParentKindExtraKey:     {"User"},
+					iamv1alpha1.ParentAPIGroupExtraKey: {iamv1alpha1.SchemeGroupVersion.Group},
+				},
+			},
+		},
 	})
 }
 
@@ -334,6 +354,14 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 	user := &iamv1alpha1.Subject{Kind: "User", Name: "alice", UID: "user-uid-1"}
 	group := &iamv1alpha1.Subject{Kind: "Group", Name: "loaders", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA), UID: "group-uid-1"}
 	systemGroup := &iamv1alpha1.Subject{Kind: "Group", Name: "system:authenticated-users"}
+	userObj := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "user-uid-1"}}
+	groupObj := &iamv1alpha1.Group{ObjectMeta: metav1.ObjectMeta{Name: "loaders", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA), UID: "group-uid-1"}}
+	foreignGroupObj := &iamv1alpha1.Group{ObjectMeta: metav1.ObjectMeta{Name: "admins", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgB), UID: "foreign-group-uid"}}
+	withSubjects := func(subjects ...iamv1alpha1.Subject) *iamv1alpha1.PolicyBinding {
+		b := projectBinding("project-a")
+		b.Spec.Subjects = subjects
+		return b
+	}
 
 	tests := map[string]struct {
 		preObjects  []client.Object
@@ -355,7 +383,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			expectError: false,
 		},
 		"org context allows a user subject": {
-			preObjects: []client.Object{projectA},
+			preObjects: []client.Object{projectA, userObj},
 			ctx:        orgContextRequest(orgA),
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
@@ -375,7 +403,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			expectError: false,
 		},
 		"org context allows a group subject": {
-			preObjects: []client.Object{projectA},
+			preObjects: []client.Object{projectA, groupObj},
 			ctx:        orgContextRequest(orgA),
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
@@ -519,6 +547,40 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 				b.Spec.Subjects = []iamv1alpha1.Subject{{Kind: "Group", Name: "staff-users", Namespace: "milo-system", UID: "group-uid-3"}}
 				return b
 			}(),
+		},
+		"org context denies an own-namespace group subject carrying another group's uid": {
+			preObjects:  []client.Object{projectA, groupObj, foreignGroupObj},
+			ctx:         orgContextRequest(orgA),
+			binding:     withSubjects(iamv1alpha1.Subject{Kind: "Group", Name: "loaders", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA), UID: "foreign-group-uid"}),
+			expectError: true,
+			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
+		},
+		"org context denies an own-namespace group subject that does not exist": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     withSubjects(iamv1alpha1.Subject{Kind: "Group", Name: "loaders", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA), UID: "group-uid-1"}),
+			expectError: true,
+			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
+		},
+		"org context denies a user subject carrying another user's uid": {
+			preObjects:  []client.Object{projectA, userObj},
+			ctx:         orgContextRequest(orgA),
+			binding:     withSubjects(iamv1alpha1.Subject{Kind: "User", Name: "alice", UID: "someone-else"}),
+			expectError: true,
+			contains:    `uid does not match User "alice"`,
+		},
+		"org context denies a system group subject in another namespace": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     withSubjects(iamv1alpha1.Subject{Kind: "Group", Name: "system:authenticated-users", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgB)}),
+			expectError: true,
+			contains:    "a system group subject must not set a namespace",
+		},
+		"user parent context fails closed": {
+			ctx:         userContextRequest("alice"),
+			binding:     withSubjects(*group),
+			expectError: true,
+			contains:    `PolicyBindings are not supported in a "User" parent context`,
 		},
 		"org context denies a binding in the wrong namespace": {
 			preObjects:  []client.Object{projectA},
@@ -770,7 +832,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA, assignableRole()).Build()
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA, assignableRole(), &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "user-uid-1"}}).Build()
 			validator := &PolicyBindingValidator{client: cl, assignableRolesNamespace: testAssignableRolesNamespace}
 
 			_, err := validator.ValidateUpdate(tc.ctx, tc.oldPB, tc.newPB)

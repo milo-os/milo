@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -269,8 +270,8 @@ func policyBindingOrgContextFromRequest(ctx context.Context) (string, bool, erro
 	// Not an organization context. The project control plane is a known future
 	// scope but is not wired up yet, so fail closed: reject any project-context
 	// PolicyBinding. A developer enabling that scope is forced to extend this
-	// webhook before any binding can slip through. Any other scope (there is
-	// none today) passes through unchanged.
+	// webhook before any binding can slip through. Any other parent scope is
+	// rejected too.
 	projectName, isProjectContext, err := webhook.ProjectContextFromRequest(ctx)
 	if err != nil {
 		return "", false, err
@@ -288,7 +289,33 @@ func policyBindingOrgContextFromRequest(ctx context.Context) (string, bool, erro
 		)
 	}
 
+	if kind, ok := otherParentKind(ctx); ok {
+		return "", false, errors.NewInvalid(
+			iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(),
+			"",
+			field.ErrorList{
+				field.Forbidden(
+					field.NewPath("metadata", "namespace"),
+					fmt.Sprintf("PolicyBindings are not supported in a %q parent context", kind),
+				),
+			},
+		)
+	}
+
 	return "", false, nil
+}
+
+func otherParentKind(ctx context.Context) (string, bool) {
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil || slices.Contains(req.UserInfo.Groups, "system:masters") {
+		return "", false
+	}
+	for _, key := range []string{iamv1alpha1.ParentKindExtraKey, iamv1alpha1.ParentNameExtraKey, iamv1alpha1.ParentAPIGroupExtraKey} {
+		if _, ok := req.UserInfo.Extra[key]; ok {
+			return strings.Join(req.UserInfo.Extra[iamv1alpha1.ParentKindExtraKey], ","), true
+		}
+	}
+	return "", false
 }
 
 // validateOrgContextRestrictions applies the organization-context restrictions
@@ -385,15 +412,7 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
-	orgNamespace := resourcemanagerv1alpha1.OrganizationNamespace(orgID)
-	for i, subject := range pb.Spec.Subjects {
-		if subject.Kind != "Group" || strings.HasPrefix(subject.Name, systemGroupPrefix) {
-			continue
-		}
-		if subject.Namespace != orgNamespace {
-			errs = append(errs, orgGroupNotFoundError(field.NewPath("spec", "subjects").Index(i).Child("name"), subject.Name, orgNamespace))
-		}
-	}
+	errs = append(errs, v.validateOrgSubjects(ctx, pb, resourcemanagerv1alpha1.OrganizationNamespace(orgID))...)
 
 	// The bound role must be an assignable role in the assignable-roles
 	// namespace, and must actually exist there. This stops an org holder from
@@ -406,4 +425,47 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	}
 
 	return nil, nil
+}
+
+func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *iamv1alpha1.PolicyBinding, orgNamespace string) field.ErrorList {
+	var errs field.ErrorList
+	for i, subject := range pb.Spec.Subjects {
+		subjectPath := field.NewPath("spec", "subjects").Index(i)
+		namePath := subjectPath.Child("name")
+		switch subject.Kind {
+		case "Group":
+			if strings.HasPrefix(subject.Name, systemGroupPrefix) {
+				if subject.Namespace != "" {
+					errs = append(errs, field.Forbidden(subjectPath.Child("namespace"), "a system group subject must not set a namespace"))
+				}
+				continue
+			}
+			if subject.Namespace != orgNamespace {
+				errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
+				continue
+			}
+			group := &iamv1alpha1.Group{}
+			if err := v.client.Get(ctx, client.ObjectKey{Namespace: orgNamespace, Name: subject.Name}, group); err != nil {
+				if errors.IsNotFound(err) {
+					errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
+				} else {
+					errs = append(errs, field.InternalError(namePath, fmt.Errorf("failed to get Group %q: %w", subject.Name, err)))
+				}
+				continue
+			}
+			if string(group.GetUID()) != subject.UID {
+				errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
+			}
+		case "User":
+			user := &iamv1alpha1.User{}
+			if err := v.client.Get(ctx, client.ObjectKey{Name: subject.Name}, user); err != nil {
+				errs = append(errs, lookupFieldError(namePath, subject.Name, "User", err))
+				continue
+			}
+			if string(user.GetUID()) != subject.UID {
+				errs = append(errs, field.Invalid(subjectPath.Child("uid"), subject.UID, fmt.Sprintf("uid does not match User %q", subject.Name)))
+			}
+		}
+	}
+	return errs
 }
