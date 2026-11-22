@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -57,6 +58,15 @@ type PolicyBindingMutator struct {
 func (m *PolicyBindingMutator) Default(ctx context.Context, pb *iamv1alpha1.PolicyBinding) error {
 	log := logf.FromContext(ctx).WithValues("policybinding", pb.GetName(), "namespace", pb.GetNamespace())
 
+	orgID, isOrgContext, err := policyBindingOrgContextFromRequest(ctx)
+	if err != nil {
+		return err
+	}
+	orgNamespace := ""
+	if isOrgContext {
+		orgNamespace = resourcemanagerv1alpha1.OrganizationNamespace(orgID)
+	}
+
 	var errs field.ErrorList
 	subjectsPath := field.NewPath("spec").Child("subjects")
 
@@ -77,7 +87,12 @@ func (m *PolicyBindingMutator) Default(ctx context.Context, pb *iamv1alpha1.Poli
 			continue
 		}
 
-		uid, fieldErr := m.resolveSubjectUID(ctx, subject, subjectPath)
+		if isOrgContext && subject.Kind == "Group" && subject.Namespace != "" && subject.Namespace != orgNamespace {
+			errs = append(errs, orgGroupNotFoundError(subjectPath.Child("name"), subject.Name, orgNamespace))
+			continue
+		}
+
+		uid, fieldErr := m.resolveSubjectUID(ctx, subject, subjectPath, orgNamespace)
 		if fieldErr != nil {
 			errs = append(errs, fieldErr)
 			continue
@@ -97,7 +112,7 @@ func (m *PolicyBindingMutator) Default(ctx context.Context, pb *iamv1alpha1.Poli
 // resolveSubjectUID looks up the object named by the subject and returns its
 // uid. It returns a field error when the subject is malformed or the named
 // object does not exist.
-func (m *PolicyBindingMutator) resolveSubjectUID(ctx context.Context, subject *iamv1alpha1.Subject, subjectPath *field.Path) (string, *field.Error) {
+func (m *PolicyBindingMutator) resolveSubjectUID(ctx context.Context, subject *iamv1alpha1.Subject, subjectPath *field.Path, orgNamespace string) (string, *field.Error) {
 	namePath := subjectPath.Child("name")
 
 	switch subject.Kind {
@@ -121,6 +136,9 @@ func (m *PolicyBindingMutator) resolveSubjectUID(ctx context.Context, subject *i
 		}
 		group := &iamv1alpha1.Group{}
 		if err := m.client.Get(ctx, client.ObjectKey{Namespace: subject.Namespace, Name: subject.Name}, group); err != nil {
+			if orgNamespace != "" && errors.IsNotFound(err) {
+				return "", orgGroupNotFoundError(namePath, subject.Name, orgNamespace)
+			}
 			return "", lookupFieldError(namePath, subject.Name, "Group", err)
 		}
 		return string(group.GetUID()), nil
@@ -138,6 +156,12 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 		return notFound
 	}
 	return field.InternalError(namePath, fmt.Errorf("failed to get %s %q: %w", kind, name, err))
+}
+
+func orgGroupNotFoundError(namePath *field.Path, name, orgNamespace string) *field.Error {
+	notFound := field.NotFound(namePath, name)
+	notFound.Detail = fmt.Sprintf("Group %q does not exist in the organization's namespace %q; cannot resolve subject uid", name, orgNamespace)
+	return notFound
 }
 
 // PolicyBindingValidator validates PolicyBindings.
@@ -195,7 +219,7 @@ func (v *PolicyBindingValidator) ValidateUpdate(ctx context.Context, oldPB, newP
 }
 
 func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
-	orgID, isOrgContext, err := v.orgContextFromRequest(ctx)
+	orgID, isOrgContext, err := policyBindingOrgContextFromRequest(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +243,7 @@ func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1al
 	return nil, nil
 }
 
-// orgContextFromRequest extracts the request organization id when the request
+// policyBindingOrgContextFromRequest extracts the request organization id when the request
 // is made in the organization context this webhook guards, layering the
 // PolicyBinding-specific project-context fail-closed behavior on top of the
 // shared detection in pkg/webhook. The shared detection already handles the
@@ -237,7 +261,7 @@ func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1al
 //   - ("", false, err) on webhook-infrastructure failures (a missing admission
 //     request or malformed parent extras), which callers surface as an internal
 //     error rather than a validation denial.
-func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (string, bool, error) {
+func policyBindingOrgContextFromRequest(ctx context.Context) (string, bool, error) {
 	orgID, isOrgContext, err := webhook.OrgContextFromRequest(ctx)
 	if err != nil || isOrgContext {
 		return orgID, isOrgContext, err
@@ -246,8 +270,8 @@ func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (str
 	// Not an organization context. The project control plane is a known future
 	// scope but is not wired up yet, so fail closed: reject any project-context
 	// PolicyBinding. A developer enabling that scope is forced to extend this
-	// webhook before any binding can slip through. Any other scope (there is
-	// none today) passes through unchanged.
+	// webhook before any binding can slip through. Any other parent scope is
+	// rejected too.
 	projectName, isProjectContext, err := webhook.ProjectContextFromRequest(ctx)
 	if err != nil {
 		return "", false, err
@@ -265,7 +289,33 @@ func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (str
 		)
 	}
 
+	if kind, ok := otherParentKind(ctx); ok {
+		return "", false, errors.NewInvalid(
+			iamv1alpha1.SchemeGroupVersion.WithKind("PolicyBinding").GroupKind(),
+			"",
+			field.ErrorList{
+				field.Forbidden(
+					field.NewPath("metadata", "namespace"),
+					fmt.Sprintf("PolicyBindings are not supported in a %q parent context", kind),
+				),
+			},
+		)
+	}
+
 	return "", false, nil
+}
+
+func otherParentKind(ctx context.Context) (string, bool) {
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil || slices.Contains(req.UserInfo.Groups, "system:masters") {
+		return "", false
+	}
+	for _, key := range []string{iamv1alpha1.ParentKindExtraKey, iamv1alpha1.ParentNameExtraKey, iamv1alpha1.ParentAPIGroupExtraKey} {
+		if _, ok := req.UserInfo.Extra[key]; ok {
+			return strings.Join(req.UserInfo.Extra[iamv1alpha1.ParentKindExtraKey], ","), true
+		}
+	}
+	return "", false
 }
 
 // validateOrgContextRestrictions applies the organization-context restrictions
@@ -273,7 +323,7 @@ func (v *PolicyBindingValidator) orgContextFromRequest(ctx context.Context) (str
 // returns nil, nil so platform-scope and internal-controller bindings pass
 // through unchanged.
 func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
-	orgID, isOrgContext, err := v.orgContextFromRequest(ctx)
+	orgID, isOrgContext, err := policyBindingOrgContextFromRequest(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +412,8 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
+	errs = append(errs, v.validateOrgSubjects(ctx, pb, resourcemanagerv1alpha1.OrganizationNamespace(orgID))...)
+
 	// The bound role must be an assignable role in the assignable-roles
 	// namespace, and must actually exist there. This stops an org holder from
 	// referencing an arbitrary or dangling role. See validateAssignableRole.
@@ -373,4 +425,47 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	}
 
 	return nil, nil
+}
+
+func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *iamv1alpha1.PolicyBinding, orgNamespace string) field.ErrorList {
+	var errs field.ErrorList
+	for i, subject := range pb.Spec.Subjects {
+		subjectPath := field.NewPath("spec", "subjects").Index(i)
+		namePath := subjectPath.Child("name")
+		switch subject.Kind {
+		case "Group":
+			if strings.HasPrefix(subject.Name, systemGroupPrefix) {
+				if subject.Namespace != "" {
+					errs = append(errs, field.Forbidden(subjectPath.Child("namespace"), "a system group subject must not set a namespace"))
+				}
+				continue
+			}
+			if subject.Namespace != orgNamespace {
+				errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
+				continue
+			}
+			group := &iamv1alpha1.Group{}
+			if err := v.client.Get(ctx, client.ObjectKey{Namespace: orgNamespace, Name: subject.Name}, group); err != nil {
+				if errors.IsNotFound(err) {
+					errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
+				} else {
+					errs = append(errs, field.InternalError(namePath, fmt.Errorf("failed to get Group %q: %w", subject.Name, err)))
+				}
+				continue
+			}
+			if string(group.GetUID()) != subject.UID {
+				errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
+			}
+		case "User":
+			user := &iamv1alpha1.User{}
+			if err := v.client.Get(ctx, client.ObjectKey{Name: subject.Name}, user); err != nil {
+				errs = append(errs, lookupFieldError(namePath, subject.Name, "User", err))
+				continue
+			}
+			if string(user.GetUID()) != subject.UID {
+				errs = append(errs, field.Invalid(subjectPath.Child("uid"), subject.UID, fmt.Sprintf("uid does not match User %q", subject.Name)))
+			}
+		}
+	}
+	return errs
 }

@@ -14,10 +14,13 @@ request user. In that context the webhook enforces:
 - The bound role (roleRef) must be an assignable role in the assignable-roles
   namespace (the controller-manager --assignable-roles-namespace flag,
   "datum-cloud") and must actually exist there.
-- Subjects are unrestricted: an org holder may grant a role to a User,
-  Group, or ServiceAccount. What keeps those grants inside the organization
-  is the namespace and target containment above, not a subject-kind
-  restriction. A ServiceAccount also need not live in the target Project's
+- A non-system Group subject must live in the organization's namespace. A
+  Group in another namespace is refused before its uid is resolved, with the
+  same error as a Group that does not exist.
+- Other subjects are unrestricted: an org holder may grant a role to a User
+  or ServiceAccount. What keeps those grants inside the organization is the
+  namespace and target containment above, not a subject-kind restriction. A
+  ServiceAccount also need not live in the target Project's
   control plane — an organization admin can grant a ServiceAccount access
   outside of its own project (for example, IAM admin access across the
   whole org).
@@ -30,6 +33,8 @@ This test verifies:
 - An organization-wide grant (targeting the request organization) is
   accepted; one targeting another organization is denied.
 - User and system-group subjects are accepted.
+- A Group subject in another organization is denied, and the denial reads
+  the same whether or not that Group exists.
 - Binding a Project that belongs to another organization is denied.
 - Kind-level (resourceKind) targets are denied.
 - A binding created in a namespace other than the organization's namespace
@@ -60,16 +65,19 @@ and user webhooks), which would let every denied binding through.
 | 6 | [create-project-b](#step-create-project-b) | 0 | 2 | 0 | 0 | 0 |
 | 7 | [create-service-account-a](#step-create-service-account-a) | 0 | 2 | 0 | 0 | 0 |
 | 8 | [create-service-account-b](#step-create-service-account-b) | 0 | 2 | 0 | 0 | 0 |
-| 9 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
-| 10 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
-| 11 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
-| 12 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
-| 13 | [deny-role-outside-assignable-namespace](#step-deny-role-outside-assignable-namespace) | 0 | 1 | 0 | 0 | 0 |
-| 14 | [allow-org-wide-grant](#step-allow-org-wide-grant) | 0 | 2 | 0 | 0 | 0 |
-| 15 | [deny-cross-org-wide-grant](#step-deny-cross-org-wide-grant) | 0 | 1 | 0 | 0 | 0 |
-| 16 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
-| 17 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
-| 18 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 9 | [create-group-b](#step-create-group-b) | 0 | 1 | 0 | 0 | 0 |
+| 10 | [allow-serviceaccount-bound-to-in-project](#step-allow-serviceaccount-bound-to-in-project) | 0 | 2 | 0 | 0 | 0 |
+| 11 | [deny-project-from-another-organization](#step-deny-project-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
+| 12 | [allow-serviceaccount-from-another-project](#step-allow-serviceaccount-from-another-project) | 0 | 2 | 0 | 0 | 0 |
+| 13 | [deny-resourcekind-target](#step-deny-resourcekind-target) | 0 | 1 | 0 | 0 | 0 |
+| 14 | [deny-role-outside-assignable-namespace](#step-deny-role-outside-assignable-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 15 | [allow-org-wide-grant](#step-allow-org-wide-grant) | 0 | 2 | 0 | 0 | 0 |
+| 16 | [deny-cross-org-wide-grant](#step-deny-cross-org-wide-grant) | 0 | 1 | 0 | 0 | 0 |
+| 17 | [allow-user-subject](#step-allow-user-subject) | 0 | 2 | 0 | 0 | 0 |
+| 18 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
+| 19 | [deny-group-from-another-organization](#step-deny-group-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
+| 20 | [deny-missing-group-in-another-organization](#step-deny-missing-group-in-another-organization) | 0 | 1 | 0 | 0 | 0 |
+| 21 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organizations`
 
@@ -159,6 +167,16 @@ Create a ServiceAccount in Project B's control plane
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `create-group-b`
+
+Create a Group in Organization B's namespace
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `apply` | 0 | 0 | *No description* |
 
 ### Step: `allow-serviceaccount-bound-to-in-project`
 
@@ -254,6 +272,26 @@ A system group subject binding targeting a Project in the organization is accept
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `deny-group-from-another-organization`
+
+A Group subject in another organization is denied without resolving its uid
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
+
+### Step: `deny-missing-group-in-another-organization`
+
+A missing Group in another organization is denied with the same error as an existing one
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
 
 ### Step: `deny-binding-outside-org-namespace`
 
