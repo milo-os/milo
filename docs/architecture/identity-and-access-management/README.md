@@ -50,3 +50,10 @@ The IAM system currently supports the following providers:
   relationship tuples in OpenFGA based on roles and policies that are created.
   Read through the [OpenFGA integration](./providers/openfga.md) for more
   information.
+
+## Client certificates
+
+A controller can sign in with a client certificate that carries a
+ServiceAccount's UID and be authorized as that ServiceAccount. The
+ServiceAccount has to opt in. Read
+[Signing in as a ServiceAccount with a client certificate](./client-certificate-service-accounts.md).

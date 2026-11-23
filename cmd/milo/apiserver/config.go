@@ -49,6 +49,7 @@ import (
 	svmrest "k8s.io/kubernetes/pkg/registry/storagemigration/rest"
 
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
+	"go.miloapis.com/milo/internal/apiserver/certidentity"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
 	passkeyregistrationlinksbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
 	passkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
@@ -527,10 +528,11 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 // wrapped by the project router, with the registry's filters innermost. Build it once: the servers share its filters.
 func projectRouterChain(registry *discoveryctx.Registry, accessRules *access.Rules, accessClient dynamic.Interface, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
 	registryFilters := discoveryctx.NewFilters(registry, utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter))
+	certUIDs := certidentity.NewGuard(certidentity.NewLoopbackLookup(loopbackClientConfig), certidentity.DefaultTTL)
 	return func(h http.Handler, c *server.Config) http.Handler {
 		accessFilter := &access.Filter{Rules: accessRules, Authorizer: c.Authorization.Authorizer, Client: accessClient, Serializer: c.Serializer}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(accessFilter.Wrap(registryFilters(h)), c, loopbackClientConfig), // build stock chain first
+			DefaultBuildHandlerChain(accessFilter.Wrap(registryFilters(h)), c, loopbackClientConfig, certUIDs), // build stock chain first
 			c.RequestInfoResolver, // then wrap with router
 		)
 	}
@@ -550,7 +552,7 @@ func openAPIDefinitions(ref openapicommon.ReferenceCallback) map[string]openapic
 	return definitions
 }
 
-func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbackConfig *rest.Config) http.Handler {
+func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbackConfig *rest.Config, certUIDs *certidentity.Guard) http.Handler {
 	handler := apiHandler
 
 	handler = filterlatency.TrackCompleted(handler)
@@ -588,7 +590,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 
 	failedHandler = filterlatency.TrackCompleted(failedHandler)
 	handler = filterlatency.TrackCompleted(handler)
-	handler = genericapifilters.WithAuthentication(handler, c.Authentication.Authenticator, failedHandler, c.Authentication.APIAudiences, c.Authentication.RequestHeaderConfig)
+	handler = genericapifilters.WithAuthentication(handler, certUIDs.Authenticator(c.Authentication.Authenticator), failedHandler, c.Authentication.APIAudiences, c.Authentication.RequestHeaderConfig)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authentication")
 
 	handler = genericfilters.WithCORS(handler, c.CorsAllowedOriginList, nil, nil, nil, "true")
