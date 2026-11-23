@@ -53,8 +53,16 @@ func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, me
 	// organization itself. This stops an org admin (who holds update rights to
 	// manage roles) from creating a membership in an organization that points at
 	// another organization.
-	if _, err := v.validateOrgContext(ctx, membership); err != nil {
+	isOrgContext, err := v.validateOrgContext(ctx, membership)
+	if err != nil {
 		return nil, err
+	}
+	if isOrgContext {
+		return nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: resourcemanagerv1alpha1.GroupVersion.Group, Resource: "organizationmemberships"},
+			membership.Name,
+			fmt.Errorf("members join an organization by accepting a UserInvitation; memberships cannot be created directly in organization scope"),
+		)
 	}
 
 	// Validate roles if specified
@@ -73,8 +81,14 @@ func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, ol
 	// In organization context the membership must reference the request
 	// organization itself. Re-run on the new object so that an org admin cannot
 	// repoint an existing membership's organizationRef to another organization.
-	if _, err := v.validateOrgContext(ctx, newMembership); err != nil {
+	isOrgContext, err := v.validateOrgContext(ctx, newMembership)
+	if err != nil {
 		return nil, err
+	}
+	if isOrgContext && newMembership.Spec.UserRef.Name != oldMembership.Spec.UserRef.Name {
+		return nil, apierrors.NewInvalid(resourcemanagerv1alpha1.GroupVersion.WithKind("OrganizationMembership").GroupKind(), newMembership.Name, field.ErrorList{
+			field.Forbidden(field.NewPath("spec", "userRef", "name"), "userRef cannot be changed in organization scope"),
+		})
 	}
 
 	// Validate roles if specified
@@ -139,20 +153,20 @@ func (v *OrganizationMembershipValidator) ValidateDelete(ctx context.Context, me
 // validateOrgContext applies the organization-context restrictions to an
 // OrganizationMembership: the membership must live in the request
 // organization's namespace and must reference that same organization. When the
-// request is not made in an organization context it returns nil, nil so
+// request is not made in an organization context it returns false, nil so
 // platform-scope and internal-controller memberships pass through unchanged.
 //
 // This closes an escalation where an org admin holds update rights on the
 // membership (granted so they can manage roles) and could otherwise repoint an
 // existing membership's organizationRef at another organization, or create a
 // new membership in their org's namespace that references another organization.
-func (v *OrganizationMembershipValidator) validateOrgContext(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
+func (v *OrganizationMembershipValidator) validateOrgContext(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (bool, error) {
 	orgID, isOrgContext, err := webhook.OrgContextFromRequest(ctx)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	if !isOrgContext {
-		return nil, nil
+		return false, nil
 	}
 
 	var errs field.ErrorList
@@ -177,10 +191,10 @@ func (v *OrganizationMembershipValidator) validateOrgContext(ctx context.Context
 	}
 
 	if len(errs) > 0 {
-		return nil, apierrors.NewInvalid(resourcemanagerv1alpha1.GroupVersion.WithKind("OrganizationMembership").GroupKind(), membership.Name, errs)
+		return true, apierrors.NewInvalid(resourcemanagerv1alpha1.GroupVersion.WithKind("OrganizationMembership").GroupKind(), membership.Name, errs)
 	}
 
-	return nil, nil
+	return true, nil
 }
 
 // allowOwnerDeletionDuringTeardown returns true when the membership owner removal should be permitted because

@@ -1,0 +1,10 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: User
+metadata:
+  name: om-other
+  labels:
+    test.miloapis.com/scenario: "organizationmembership-org-context"
+spec:
+  email: other@om-context.example.com
+  givenName: Other
+  familyName: Test
