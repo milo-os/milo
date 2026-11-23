@@ -1,0 +1,7 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Group
+metadata:
+  name: pb-group-b
+  namespace: organization-pb-org-b
+  labels:
+    test.miloapis.com/scenario: "policybinding-org-restrictions"

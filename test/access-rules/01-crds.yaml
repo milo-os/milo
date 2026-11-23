@@ -1,0 +1,65 @@
+# Two synthetic CRDs with access rules: notes belong to a user, bulletins can
+# be hidden. Cluster-scoped, like Milo's user-owned resources.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: notes.access-rules-test.example.com
+  annotations:
+    iam.miloapis.com/owner-field: spec.owner
+spec:
+  group: access-rules-test.example.com
+  scope: Cluster
+  names:
+    kind: Note
+    listKind: NoteList
+    plural: notes
+    singular: note
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      selectableFields:
+        - jsonPath: .spec.owner
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                owner:
+                  type: string
+                text:
+                  type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: bulletins.access-rules-test.example.com
+  annotations:
+    iam.miloapis.com/hidden-field: spec.hidden
+spec:
+  group: access-rules-test.example.com
+  scope: Cluster
+  names:
+    kind: Bulletin
+    listKind: BulletinList
+    plural: bulletins
+    singular: bulletin
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      selectableFields:
+        - jsonPath: .spec.hidden
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                hidden:
+                  type: boolean
+                text:
+                  type: string

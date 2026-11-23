@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -20,6 +21,7 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
 	genericfilters "k8s.io/apiserver/pkg/server/filters"
+	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/routine"
 	apiservercompat "k8s.io/apiserver/pkg/util/compatibility"
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
@@ -47,6 +49,7 @@ import (
 	svmrest "k8s.io/kubernetes/pkg/registry/storagemigration/rest"
 
 	"go.miloapis.com/milo/internal/apiserver/admission/initializer"
+	"go.miloapis.com/milo/internal/apiserver/certidentity"
 	eventsbackend "go.miloapis.com/milo/internal/apiserver/events"
 	passkeyregistrationlinksbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeyregistrationlinks"
 	passkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/passkeys"
@@ -61,6 +64,7 @@ import (
 	quotaapi "go.miloapis.com/milo/pkg/apis/quota"
 	"go.miloapis.com/milo/pkg/features"
 	admissionquota "go.miloapis.com/milo/pkg/quota/admission"
+	"go.miloapis.com/milo/pkg/server/access"
 	discoveryctx "go.miloapis.com/milo/pkg/server/discovery"
 	datumfilters "go.miloapis.com/milo/pkg/server/filters"
 	generic "k8s.io/apiserver/pkg/registry/generic"
@@ -80,6 +84,11 @@ type Config struct {
 	// whatever the gates say, populated from CRDs and policies by post-start
 	// hooks in CreateServerChain.
 	DiscoveryRegistry *discoveryctx.Registry
+
+	// AccessRules are the owner and hidden-field rules CRDs declare with
+	// annotations. Created in NewConfig, populated from CRDs by a post-start
+	// hook in CreateServerChain, and enforced by the handler chain.
+	AccessRules *access.Rules
 
 	// ProjectStates is the server's one view of Projects. Created in
 	// NewConfig, injected into admission plugins, started by a post-start
@@ -164,6 +173,8 @@ type completedConfig struct {
 	APIExtensions apiextensionsapiserver.CompletedConfig
 
 	DiscoveryRegistry *discoveryctx.Registry
+
+	AccessRules *access.Rules
 
 	ProjectStates *projectstate.Cache
 
@@ -388,6 +399,8 @@ func (c *Config) Complete() (CompletedConfig, error) {
 
 		DiscoveryRegistry: c.DiscoveryRegistry,
 
+		AccessRules: c.AccessRules,
+
 		ProjectStates: c.ProjectStates,
 
 		Storage: c.Storage,
@@ -398,10 +411,12 @@ func (c *Config) Complete() (CompletedConfig, error) {
 
 func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	registry := discoveryctx.NewRegistry()
+	accessRules := access.NewRules()
 
 	c := &Config{
 		Options:           opts,
 		DiscoveryRegistry: registry,
+		AccessRules:       accessRules,
 	}
 
 	miloScheme := runtime.NewScheme()
@@ -437,20 +452,17 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 	loopbackClientConfig := genericConfig.LoopbackClientConfig
 
-	buildHandlerChain := projectRouterChain(registry, loopbackClientConfig)
+	// Named requests for resources with access rules read the stored object
+	// through the loopback client, which has full access and so isn't
+	// narrowed by the rules itself.
+	accessClient, err := dynamic.NewForConfig(rest.CopyConfig(loopbackClientConfig))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access rule client: %w", err)
+	}
+	buildHandlerChain := projectRouterChain(registry, accessRules, accessClient, loopbackClientConfig)
 	genericConfig.BuildHandlerChainFunc = buildHandlerChain
 
 	serviceResolver := webhook.NewDefaultServiceResolver()
-
-	loopbackInit := initializer.LoopbackInitializer{
-		Loopback: rest.CopyConfig(genericConfig.LoopbackClientConfig),
-	}
-
-	// Inject the legacy scheme into admission plugins (e.g. quota) that need to
-	// convert internal native types to their external versioned form.
-	convertorInit := initializer.ObjectConvertorInitializer{
-		Convertor: legacyscheme.Scheme,
-	}
 
 	// One watch of Projects for the whole process: admission plugins receive it
 	// through this initializer.
@@ -460,9 +472,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 	projectStates := projectstate.NewCache(projectClient)
 	c.ProjectStates = projectStates
-	projectStatesInit := initializer.ProjectStatesInitializer{States: projectStates}
+	miloInits := miloInitializers(genericConfig.LoopbackClientConfig, projectStates, accessRules)
 
-	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, []admission.PluginInitializer{loopbackInit, convertorInit, projectStatesInit})
+	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, miloInits)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +485,9 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 		kubeAPIs.Generic.LoopbackClientConfig.Wrap(tracing.WrapperFor(kubeAPIs.Generic.TracerProvider))
 	}
 
-	combinedInits := append(upstreamInits, loopbackInit, convertorInit, projectStatesInit)
+	// The APIExtensions and aggregator servers get the same initializers as
+	// the control plane, so a plugin is initialized the same way on each.
+	combinedInits := append(slices.Clip(upstreamInits), miloInits...)
 
 	authInfoResolver := webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIs.ProxyTransport, kubeAPIs.Generic.EgressSelector, kubeAPIs.Generic.LoopbackClientConfig, kubeAPIs.Generic.TracerProvider)
 	apiExtensions, err := controlplaneapiserver.CreateAPIExtensionsConfig(*kubeAPIs.Generic, kubeAPIs.VersionedInformers, combinedInits, opts, 3, serviceResolver, authInfoResolver)
@@ -489,6 +503,15 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	// Start the shared view of Projects once the server serves, and hold traffic until it has synced
 	kubeAPIs.Generic.AddPostStartHookOrDie("start-project-state-cache", projectStates.PostStartHook())
 	kubeAPIs.Generic.AddReadyzChecks(projectStates.ReadinessCheck())
+
+	// Hold traffic until every CRD's access rules are known. Requests that
+	// arrive anyway are refused by the access filter rather than served
+	// without rules. A CRD whose cached copy lags storage later doesn't fail
+	// this check: the filter refuses just that CRD's resources, so a lag
+	// shared by every replica can't take them all out of rotation.
+	kubeAPIs.Generic.AddReadyzChecks(healthz.NamedCheck("milo-access-rules", func(*http.Request) error {
+		return accessRules.Check()
+	}))
 
 	// Add post-start hook to bootstrap CRDs from embedded filesystem
 	// This installs all CRDs EXCEPT infrastructure.miloapis.com group, which should remain in the infrastructure cluster
@@ -512,11 +535,13 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 
 // projectRouterChain builds the handler chain each server in the chain uses: the stock chain with Milo's filters,
 // wrapped by the project router, with the registry's filters innermost. Build it once: the servers share its filters.
-func projectRouterChain(registry *discoveryctx.Registry, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
+func projectRouterChain(registry *discoveryctx.Registry, accessRules *access.Rules, accessClient dynamic.Interface, loopbackClientConfig *rest.Config) func(http.Handler, *server.Config) http.Handler {
 	registryFilters := discoveryctx.NewFilters(registry, utilfeature.DefaultFeatureGate.Enabled(features.DiscoveryContextFilter))
+	certUIDs := certidentity.NewGuard(certidentity.NewLoopbackLookup(loopbackClientConfig), certidentity.DefaultTTL)
 	return func(h http.Handler, c *server.Config) http.Handler {
+		accessFilter := &access.Filter{Rules: accessRules, Authorizer: c.Authorization.Authorizer, Client: accessClient, Serializer: c.Serializer}
 		return datumfilters.ProjectRouterWithRequestInfo(
-			DefaultBuildHandlerChain(registryFilters(h), c, loopbackClientConfig), // build stock chain first
+			DefaultBuildHandlerChain(accessFilter.Wrap(registryFilters(h)), c, loopbackClientConfig, certUIDs), // build stock chain first
 			c.RequestInfoResolver, // then wrap with router
 		)
 	}
@@ -536,7 +561,7 @@ func openAPIDefinitions(ref openapicommon.ReferenceCallback) map[string]openapic
 	return definitions
 }
 
-func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbackConfig *rest.Config) http.Handler {
+func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbackConfig *rest.Config, certUIDs *certidentity.Guard) http.Handler {
 	handler := apiHandler
 
 	handler = filterlatency.TrackCompleted(handler)
@@ -574,7 +599,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 
 	failedHandler = filterlatency.TrackCompleted(failedHandler)
 	handler = filterlatency.TrackCompleted(handler)
-	handler = genericapifilters.WithAuthentication(handler, c.Authentication.Authenticator, failedHandler, c.Authentication.APIAudiences, c.Authentication.RequestHeaderConfig)
+	handler = genericapifilters.WithAuthentication(handler, certUIDs.Authenticator(c.Authentication.Authenticator), failedHandler, c.Authentication.APIAudiences, c.Authentication.RequestHeaderConfig)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authentication")
 
 	handler = genericfilters.WithCORS(handler, c.CorsAllowedOriginList, nil, nil, nil, "true")
@@ -671,4 +696,17 @@ func getSpanNameFromRequestInfo(info *request.RequestInfo, r *http.Request) stri
 		spanName += "/" + info.Subresource
 	}
 	return r.Method + " " + spanName
+}
+
+// miloInitializers returns Milo's own admission plugin initializers: the
+// loopback client, the legacy scheme for converting internal types (quota),
+// the shared Project cache and the access rules. Every server in the chain
+// gets this one list.
+func miloInitializers(loopback *rest.Config, states *projectstate.Cache, rules *access.Rules) []admission.PluginInitializer {
+	return []admission.PluginInitializer{
+		initializer.LoopbackInitializer{Loopback: rest.CopyConfig(loopback)},
+		initializer.ObjectConvertorInitializer{Convertor: legacyscheme.Scheme},
+		initializer.ProjectStatesInitializer{States: states},
+		initializer.AccessRulesInitializer{Rules: rules},
+	}
 }

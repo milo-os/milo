@@ -2,6 +2,7 @@ package projectstate_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,20 @@ func (r *recorder) heard() ([]string, int) {
 	return append([]string(nil), r.gone...), r.resynced
 }
 
+// waitToHear fails the test unless r hears within a second that the view no
+// longer holds name. A listener hears of a delete after the view has changed,
+// so a test that waits only for the view can remove the listener too early.
+func (r *recorder) waitToHear(t *testing.T, name string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for gone, _ := r.heard(); !slices.Contains(gone, name); gone, _ = r.heard() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting to hear that %s is gone, heard %v", name, gone)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestListeners_HearTheListAndEachDelete covers what a listener hears: the
 // first list is a relist, a deleted Project is named, and a removed listener
 // hears nothing more.
@@ -85,15 +100,13 @@ func TestListeners_HearTheListAndEachDelete(t *testing.T) {
 	c := projectstate.NewCache(client)
 	var r recorder
 	remove := c.AddListener(&r)
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
-	c.Start(stop)
+	projectstatetest.Start(t, c, client)
 	waitForProject(t, c, "a", projectstate.Project{UID: "uid-a"}, true)
 
 	if err := client.Resource(projectstate.ProjectGVR).Delete(context.Background(), "a", metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete a: %v", err)
 	}
-	waitForProject(t, c, "a", projectstate.Project{}, false)
+	r.waitToHear(t, "a")
 	remove()
 	if err := client.Resource(projectstate.ProjectGVR).Delete(context.Background(), "b", metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete b: %v", err)

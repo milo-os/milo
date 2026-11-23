@@ -1,0 +1,43 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: milo-access-rules
+  labels:
+    app.kubernetes.io/name: milo
+    app.kubernetes.io/component: apiserver
+    app.kubernetes.io/part-of: milo
+    monitoring.coreos.com/prometheus: kube-prometheus
+spec:
+  groups:
+    - name: milo.access-rules
+      interval: 30s
+      rules:
+        # A CRD whose iam.miloapis.com/ annotations Milo can't apply is refused to every caller outside
+        # system:masters (docs/architecture/access-rules.md), so the resource is down for its users until the CRD
+        # is fixed. Admission refuses new invalid declarations, so this means a CRD stored before that check.
+        - alert: MiloAccessRuleInvalid
+          expr: |
+            max by (group, resource, reason) (milo_access_rule_invalid) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: milo
+            team: platform
+          annotations:
+            summary: "Requests for {{ $labels.resource }}.{{ $labels.group }} are refused: its access rules are invalid ({{ $labels.reason }})"
+            description: "The CustomResourceDefinition {{ $labels.resource }}.{{ $labels.group }} declares access rules Milo can't apply, so Milo refuses its requests outside system:masters rather than serve it unprotected. The API server log names the annotation and problem; fix the CRD's iam.miloapis.com/ annotations."
+
+        # The pod's cached copy of one or more CRDs lags storage, so their access rules may be out of date and Milo
+        # refuses those CRDs' resources outside system:masters. Other resources are served, and the pod stays ready.
+        # A change normally reaches the cache within a second.
+        - alert: MiloAccessRulesStale
+          expr: |
+            max by (pod) (milo_access_rules_stale) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: milo
+            team: platform
+          annotations:
+            summary: "Milo API server {{ $labels.pod }} has refused {{ $value }} CRDs' resources for 5 minutes: its CRD cache lags storage"
+            description: "The pod's copy of {{ $value }} CustomResourceDefinitions has not caught up with storage, so their access rules may be out of date. It refuses those resources outside system:masters until the cache catches up; everything else is served. The pod's log names each CRD. Check its watch of customresourcedefinitions; restarting the pod rebuilds the cache."

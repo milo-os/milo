@@ -1,0 +1,22 @@
+# Makes test-user staff: get on bulletins/hidden lets it see hidden ones.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: access-rules-test-staff
+rules:
+  - apiGroups: ["access-rules-test.example.com"]
+    resources: ["bulletins/hidden"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: access-rules-test-staff
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: access-rules-test-staff
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io

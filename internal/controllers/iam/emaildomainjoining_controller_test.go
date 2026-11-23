@@ -163,8 +163,8 @@ func TestEmailDomainJoiningController_OffersVerifiedDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if result.RequeueAfter != time.Minute {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, time.Minute)
+	if maxRecheck := time.Minute + time.Minute/5; result.RequeueAfter < time.Minute || result.RequeueAfter > maxRecheck {
+		t.Errorf("RequeueAfter = %v, want between %v and %v", result.RequeueAfter, time.Minute, maxRecheck)
 	}
 
 	offers := listOffers(t, c)

@@ -168,19 +168,21 @@ func memoryWatcher(t *testing.T, h *hub) *watcher {
 	return w
 }
 
-// testEpoch is when arrive's writes commit. It's recent, so the hub records
-// their timestamps.
-var testEpoch = time.Now().UnixNano()
+// committedAt is rev's commit time if it commits now. It's recent, so the hub
+// records it, however late in the package's run the test comes.
+func committedAt(rev int64) hlc { return hlc{wallNanos: time.Now().UnixNano(), logical: int32(rev)} }
 
-func committedAt(rev int64) hlc { return hlc{wallNanos: testEpoch, logical: int32(rev)} }
-
-// arrive hands the hub the project's writes at revs, then its counter at high.
-func arrive(t *testing.T, h *hub, high int64, revs ...int64) {
+// arrive hands the hub the project's writes at revs, each committed as it's
+// handed over, then its counter at high. It returns each write's commit time.
+func arrive(t *testing.T, h *hub, high int64, revs ...int64) map[int64]hlc {
 	t.Helper()
+	committed := make(map[int64]hlc, len(revs))
 	for _, rev := range revs {
-		require.NoError(t, h.write(&feedRow{Project: "project", Key: fmt.Sprintf("/pods/%d", rev), RV: rev}, nil, committedAt(rev)))
+		committed[rev] = committedAt(rev)
+		require.NoError(t, h.write(&feedRow{Project: "project", Key: fmt.Sprintf("/pods/%d", rev), RV: rev}, nil, committed[rev]))
 	}
 	require.NoError(t, h.write(&feedRow{Project: "project", RV: high}, nil, hlc{}))
+	return committed
 }
 
 // span is the revisions from first to last.
@@ -192,15 +194,32 @@ func span(first, last int64) []int64 {
 	return out
 }
 
+// A hub test can run more than a window after the package starts: TestMain
+// starts CockroachDB first, and on a busy machine the tests in the files
+// before this one take over a minute. arrive's writes still commit when it
+// hands them over, so the hub records their commit times.
+func TestArriveCommitsWhenItHandsTheWritesOver(t *testing.T) {
+	started := time.Now().Round(0) // wall clock only
+	synctest.Test(t, func(t *testing.T) {
+		h := memoryHub()
+		// The bubble's clock starts in 2000. Move it to two of the hub's
+		// windows after the test started.
+		time.Sleep(time.Until(started.Add(2 * h.revTS.window)))
+		arrive(t, h, 3, 2, 3)
+		_, ok := h.revTS.get("project", 3)
+		require.True(t, ok, "the hub holds no commit time for a write that arrive handed over two windows after the test started")
+	})
+}
+
 func TestHubPublishesReleasedWrites(t *testing.T) {
 	h := memoryHub()
 	_, sub := subscribe(t, h, everything, initialRevision)
-	arrive(t, h, 3, 3, 2)
+	committed := arrive(t, h, 3, 3, 2)
 	require.Equal(t, int64(2), (<-sub.in).rev)
 	require.Equal(t, int64(3), (<-sub.in).rev)
 	ts, ok := h.revTS.get("project", 3)
 	require.True(t, ok)
-	require.Equal(t, committedAt(3), ts)
+	require.Equal(t, committed[3], ts)
 }
 
 // A revision's commit time is recorded only once it's released, in order, so

@@ -515,6 +515,30 @@ func TestAllowanceBucketDecidesAClaimsRequestsOfOneTypeTogether(t *testing.T) {
 // that makes a live recompute. A quiet bucket gets no event to show it, so every reconcile comes back after an interval,
 // spread by up to a tenth so that buckets reconciled together after a restart do not all come back in the same minute.
 func TestAllowanceBucketComesBackAfterTheRecheckInterval(t *testing.T) {
+	reconcile := quietBucketReconcile(t)
+	seen := map[time.Duration]bool{}
+	for range 20 {
+		result := reconcile()
+		assert.GreaterOrEqual(t, result.RequeueAfter, bucketRecheckInterval)
+		assert.Less(t, result.RequeueAfter, bucketRecheckInterval+bucketRecheckInterval/10)
+		seen[result.RequeueAfter] = true
+	}
+	assert.Greater(t, len(seen), 1, "20 reconciles came back after one interval: %v", seen)
+	assert.Positive(t, bucketRecheckInterval)
+}
+
+// A recheck comes back as ordinary work. A requeue keeps the priority its item was taken at, so a bucket an undecided
+// claim raised would otherwise come back ahead of other work every interval while this leader runs.
+func TestAllowanceBucketRecheckComesBackAsOrdinaryWork(t *testing.T) {
+	result := quietBucketReconcile(t)()
+	require.NotNil(t, result.Priority, "the recheck keeps the priority its bucket was taken at")
+	assert.Equal(t, 0, *result.Priority, "ordinary work is priority 0, below the undecided claims' %d", undecidedClaimPriority)
+}
+
+// quietBucketReconcile returns one reconcile of a bucket whose cached total matches its claims: the reconcile that
+// ends in a recheck.
+func quietBucketReconcile(t *testing.T) func() ctrl.Result {
+	t.Helper()
 	claims := []*quotav1alpha1.ResourceClaim{testClaim("kept", 1, quotav1alpha1.ResourceClaimAllocationStatusGranted)}
 	consumer := claims[0].Spec.ConsumerRef
 	bucket := &quotav1alpha1.AllowanceBucket{ObjectMeta: metav1.ObjectMeta{Name: "bucket", Namespace: "milo-system"}, Spec: quotav1alpha1.AllowanceBucketSpec{ConsumerRef: consumer, ResourceType: "example/count"}, Status: quotav1alpha1.AllowanceBucketStatus{Limit: 3, Allocated: 1}}
@@ -523,14 +547,9 @@ func TestAllowanceBucketComesBackAfterTheRecheckInterval(t *testing.T) {
 	c := claimTestCluster(t, bucket, grant, claims, &liveLists)
 	cacheHolding(&c, claims...)
 	r := &AllowanceBucketController{Scheme: c.client.Scheme(), Manager: fakeManager{cluster: c}}
-	seen := map[time.Duration]bool{}
-	for range 20 {
+	return func() ctrl.Result {
 		result, err := r.Reconcile(context.Background(), mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bucket)}})
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, result.RequeueAfter, bucketRecheckInterval)
-		assert.Less(t, result.RequeueAfter, bucketRecheckInterval+bucketRecheckInterval/10)
-		seen[result.RequeueAfter] = true
+		return result
 	}
-	assert.Greater(t, len(seen), 1, "20 reconciles came back after one interval: %v", seen)
-	assert.Positive(t, bucketRecheckInterval)
 }

@@ -1,0 +1,268 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: access-rules
+spec:
+  description: |
+    End-to-end test for owner and hidden-field access rules
+    (docs/architecture/access-rules.md), through the real handler chain.
+
+    Two synthetic CRDs: notes carry iam.miloapis.com/owner-field, bulletins
+    carry iam.miloapis.com/hidden-field. test-user (token test-user-token,
+    UID test-user) may do anything to both through RBAC, but has no get on
+    bulletins/hidden until a later step makes it staff.
+
+    Covers:
+      - lists, watches as tables, and collection deletes narrowed to the
+        caller's notes in the user and organization contexts, even when the
+        client asks for another owner;
+      - named requests for another user's note, or a hidden bulletin,
+        answering NotFound from the filter. The filter reads the stored object
+        through the loopback client, so a hidden bulletin answering 404 rather
+        than 200 also shows the loopback read isn't narrowed itself;
+      - the AccessRuleOwnerEnforcement admission plugin refusing a create, or
+        a server-side apply that creates, for another owner, and a change of
+        owner;
+      - the platform context passing owner rules through but still hiding
+        bulletins, and staff seeing hidden bulletins;
+      - the milo-access-rules readiness check;
+      - CRD writes that declare access rules Milo can't apply (a misspelt or
+        blank annotation, a field that isn't selectable) being refused, so a
+        resource is never served with its rule silently off.
+
+  clusters:
+    root:
+      kubeconfig: kubeconfig-root
+
+  cluster: root
+  concurrent: false
+  namespace: default
+  skipDelete: false
+
+  steps:
+    - name: install-crds
+      try:
+        - apply:
+            file: 01-crds.yaml
+        - wait:
+            apiVersion: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: notes.access-rules-test.example.com
+            timeout: 30s
+            for:
+              condition:
+                name: Established
+                value: "True"
+        - wait:
+            apiVersion: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: bulletins.access-rules-test.example.com
+            timeout: 30s
+            for:
+              condition:
+                name: Established
+                value: "True"
+        - apply:
+            file: 02-rbac.yaml
+        # No wait for the rules: the access filter reads each CRD from the
+        # cache the CRD handler serves from, so once notes are served their
+        # rule applies.
+        - apply:
+            file: 03-objects.yaml
+
+    - name: readiness-check
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              OUT=$(kubectl --kubeconfig=kubeconfig-root get --raw '/readyz/milo-access-rules')
+              [ "$OUT" = "ok" ] || { echo "FAIL: /readyz/milo-access-rules = $OUT"; exit 1; }
+              echo "PASS: readiness check"
+
+    - name: user-context
+      description: test-user, in its own user context, only sees and changes its own notes.
+      try:
+        - script:
+            timeout: 60s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/iam.miloapis.com/v1alpha1/users/test-user/control-plane/apis/access-rules-test.example.com/v1alpha1"
+              req() { curl -sk -o /tmp/access-rules.json -w '%{http_code}' -H "Authorization: Bearer test-user-token" "$@"; }
+              expect() { # expect <code> <what> <curl args...>
+                want=$1; what=$2; shift 2
+                got=$(req "$@")
+                [ "$got" = "$want" ] || { echo "FAIL: $what: got $got, want $want"; cat /tmp/access-rules.json; exit 1; }
+                echo "ok: $what ($got)"
+              }
+
+              expect 200 "list notes" "$BASE/notes?fieldSelector=spec.owner%3Dother-user"
+              NAMES=$(jq -r '.items[].metadata.name' /tmp/access-rules.json | sort | tr '\n' ' ')
+              [ "$NAMES" = "note-mine " ] || { echo "FAIL: listed $NAMES, want only note-mine"; exit 1; }
+
+              expect 200 "list notes as a table" -H 'Accept: application/json;as=Table;v=v1;g=meta.k8s.io' "$BASE/notes"
+              ROWS=$(jq -r '.rows[].object.metadata.name' /tmp/access-rules.json | tr '\n' ' ')
+              [ "$ROWS" = "note-mine " ] || { echo "FAIL: table rows $ROWS, want only note-mine"; exit 1; }
+
+              expect 200 "get own note" "$BASE/notes/note-mine"
+              expect 404 "get another user's note" "$BASE/notes/note-theirs"
+              expect 404 "delete another user's note" -X DELETE "$BASE/notes/note-theirs"
+              expect 404 "patch another user's note" -X PATCH -H 'Content-Type: application/merge-patch+json' \
+                -d '{"spec":{"text":"mine now"}}' "$BASE/notes/note-theirs"
+
+              expect 403 "give own note to another user" -X PATCH -H 'Content-Type: application/merge-patch+json' \
+                -d '{"spec":{"owner":"other-user"}}' "$BASE/notes/note-mine"
+              expect 403 "create a note for another user" -X POST -H 'Content-Type: application/json' \
+                -d '{"apiVersion":"access-rules-test.example.com/v1alpha1","kind":"Note","metadata":{"name":"note-forged"},"spec":{"owner":"other-user"}}' \
+                "$BASE/notes"
+              expect 403 "apply-create a note for another user" -X PATCH -H 'Content-Type: application/apply-patch+yaml' \
+                -d '{"apiVersion":"access-rules-test.example.com/v1alpha1","kind":"Note","metadata":{"name":"note-applied"},"spec":{"owner":"other-user"}}' \
+                "$BASE/notes/note-applied?fieldManager=e2e"
+              expect 201 "create own note" -X POST -H 'Content-Type: application/json' \
+                -d '{"apiVersion":"access-rules-test.example.com/v1alpha1","kind":"Note","metadata":{"name":"note-new"},"spec":{"owner":"test-user"}}' \
+                "$BASE/notes"
+
+              expect 200 "list bulletins" "$BASE/bulletins?fieldSelector=spec.hidden%3Dtrue"
+              NAMES=$(jq -r '.items[].metadata.name' /tmp/access-rules.json | tr '\n' ' ')
+              [ "$NAMES" = "bulletin-shown " ] || { echo "FAIL: listed $NAMES, want only bulletin-shown"; exit 1; }
+              expect 404 "get hidden bulletin" "$BASE/bulletins/bulletin-hidden"
+              expect 404 "patch hidden bulletin" -X PATCH -H 'Content-Type: application/merge-patch+json' \
+                -d '{"spec":{"text":"x"}}' "$BASE/bulletins/bulletin-hidden"
+
+              expect 200 "delete all notes" -X DELETE "$BASE/notes"
+              echo "PASS: user context"
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              # The collection delete only removed test-user's notes.
+              NAMES=$(kubectl --kubeconfig=kubeconfig-root get notes.access-rules-test.example.com -o jsonpath='{.items[*].metadata.name}')
+              [ "$NAMES" = "note-theirs note-theirs-2" ] || { echo "FAIL: notes left $NAMES"; exit 1; }
+              echo "PASS: collection delete kept other users' notes"
+
+    - name: organization-context
+      description: In an organization context, test-user still only sees its own notes.
+      try:
+        - apply:
+            resource:
+              apiVersion: access-rules-test.example.com/v1alpha1
+              kind: Note
+              metadata:
+                name: note-mine-2
+              spec:
+                owner: test-user
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/resourcemanager.miloapis.com/v1alpha1/organizations/access-rules-org/control-plane/apis/access-rules-test.example.com/v1alpha1"
+              req() { curl -sk -o /tmp/access-rules.json -w '%{http_code}' -H "Authorization: Bearer test-user-token" "$@"; }
+              code=$(req "$BASE/notes")
+              [ "$code" = 200 ] || { echo "FAIL: list notes = $code"; cat /tmp/access-rules.json; exit 1; }
+              NAMES=$(jq -r '.items[].metadata.name' /tmp/access-rules.json | tr '\n' ' ')
+              [ "$NAMES" = "note-mine-2 " ] || { echo "FAIL: listed $NAMES, want only note-mine-2"; exit 1; }
+              code=$(req "$BASE/notes/note-theirs")
+              [ "$code" = 404 ] || { echo "FAIL: get another user's note = $code"; exit 1; }
+              code=$(req -X POST -H 'Content-Type: application/json' \
+                -d '{"apiVersion":"access-rules-test.example.com/v1alpha1","kind":"Note","metadata":{"name":"note-org-forged"},"spec":{"owner":"other-user"}}' \
+                "$BASE/notes")
+              [ "$code" = 403 ] || { echo "FAIL: create a note for another user = $code"; cat /tmp/access-rules.json; exit 1; }
+              echo "PASS: organization context"
+
+    - name: platform-context
+      description: The platform context passes owner rules through but still hides bulletins from non-staff.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/access-rules-test.example.com/v1alpha1"
+              req() { curl -sk -o /tmp/access-rules.json -w '%{http_code}' -H "Authorization: Bearer test-user-token" "$@"; }
+              code=$(req "$BASE/notes")
+              [ "$code" = 200 ] || { echo "FAIL: list notes = $code"; exit 1; }
+              N=$(jq '.items | length' /tmp/access-rules.json)
+              [ "$N" = 3 ] || { echo "FAIL: platform list returned $N notes, want 3"; exit 1; }
+              code=$(req "$BASE/bulletins")
+              NAMES=$(jq -r '.items[].metadata.name' /tmp/access-rules.json | tr '\n' ' ')
+              [ "$NAMES" = "bulletin-shown " ] || { echo "FAIL: listed $NAMES, want only bulletin-shown"; exit 1; }
+              code=$(req "$BASE/bulletins/bulletin-hidden")
+              [ "$code" = 404 ] || { echo "FAIL: get hidden bulletin = $code"; exit 1; }
+              # Admin is in system:masters, so it can see hidden bulletins.
+              kubectl --kubeconfig=kubeconfig-root get bulletins.access-rules-test.example.com bulletin-hidden >/dev/null
+              echo "PASS: platform context"
+
+    - name: staff
+      description: With get on bulletins/hidden, test-user sees hidden bulletins.
+      try:
+        - apply:
+            file: 04-staff-rbac.yaml
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              BASE="https://localhost:30443/apis/access-rules-test.example.com/v1alpha1"
+              req() { curl -sk -o /tmp/access-rules.json -w '%{http_code}' -H "Authorization: Bearer test-user-token" "$@"; }
+              code=$(req "$BASE/bulletins/bulletin-hidden")
+              [ "$code" = 200 ] || { echo "FAIL: staff get hidden bulletin = $code"; cat /tmp/access-rules.json; exit 1; }
+              code=$(req "$BASE/bulletins")
+              N=$(jq '.items | length' /tmp/access-rules.json)
+              [ "$N" = 2 ] || { echo "FAIL: staff listed $N bulletins, want 2"; exit 1; }
+              echo "PASS: staff"
+
+    - name: invalid-declaration
+      description: A CRD write whose access-rule annotations Milo can't apply is refused.
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -e
+              K="kubectl --kubeconfig=kubeconfig-root"
+              expect_invalid() { # expect_invalid <what> <message> <kubectl args...>
+                what=$1; msg=$2; shift 2
+                if OUT=$($K "$@" 2>&1); then echo "FAIL: $what was accepted"; exit 1; fi
+                echo "$OUT" | grep -q "$msg" || { echo "FAIL: $what: $OUT"; exit 1; }
+                echo "ok: $what refused"
+              }
+              crd() { # crd <annotation key> <value>: a CRD for jottings with one annotation
+                cat <<YAML
+              apiVersion: apiextensions.k8s.io/v1
+              kind: CustomResourceDefinition
+              metadata:
+                name: jottings.access-rules-test.example.com
+                annotations:
+                  $1: "$2"
+              spec:
+                group: access-rules-test.example.com
+                scope: Cluster
+                names: {kind: Jotting, listKind: JottingList, plural: jottings, singular: jotting}
+                versions:
+                  - name: v1alpha1
+                    served: true
+                    storage: true
+                    selectableFields: [{jsonPath: .spec.owner}]
+                    schema:
+                      openAPIV3Schema:
+                        type: object
+                        properties:
+                          spec: {type: object, properties: {owner: {type: string}, text: {type: string}}}
+              YAML
+              }
+              crd iam.miloapis.com/owner-feild spec.owner > /tmp/access-rules-crd.yaml
+              expect_invalid "misspelt annotation" "is not an access rule annotation" apply -f /tmp/access-rules-crd.yaml
+              crd iam.miloapis.com/owner-field "" > /tmp/access-rules-crd.yaml
+              expect_invalid "blank annotation" "is blank" apply -f /tmp/access-rules-crd.yaml
+              crd iam.miloapis.com/owner-field spec.text > /tmp/access-rules-crd.yaml
+              expect_invalid "field that isn't selectable" "is not a selectableField" apply -f /tmp/access-rules-crd.yaml
+              if $K get crd jottings.access-rules-test.example.com >/dev/null 2>&1; then
+                echo "FAIL: an invalid CRD was stored"; exit 1
+              fi
+
+              # Breaking an existing CRD's declaration is refused too, and its rule stays on.
+              expect_invalid "misspelt annotation on an existing CRD" "is not an access rule annotation" \
+                annotate crd notes.access-rules-test.example.com iam.miloapis.com/hiden-field=spec.hidden
+              expect_invalid "blanking an existing CRD's owner field" "is blank" \
+                annotate --overwrite crd notes.access-rules-test.example.com iam.miloapis.com/owner-field=
+              code=$(curl -sk -o /tmp/access-rules.json -w '%{http_code}' -H "Authorization: Bearer test-user-token" \
+                "https://localhost:30443/apis/iam.miloapis.com/v1alpha1/users/test-user/control-plane/apis/access-rules-test.example.com/v1alpha1/notes/note-theirs")
+              [ "$code" = 404 ] || { echo "FAIL: get another user's note after the refused changes = $code"; exit 1; }
+              echo "PASS: invalid declarations refused"

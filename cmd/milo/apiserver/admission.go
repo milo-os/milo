@@ -1,6 +1,7 @@
 package app
 
 import (
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/accessowner"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
@@ -32,6 +33,9 @@ func GetMiloOrderedPlugins() []string {
 			// client and no cache — and it is about WHO is asking, which is more
 			// fundamental than where or how much quota.
 			plugins = append(plugins, emailverification.PluginName)
+			// Also only reads the request, and runs after mutating webhooks,
+			// which may fill the owner field in.
+			plugins = append(plugins, accessowner.PluginName)
 			plugins = append(plugins, projectsuspension.PluginName)
 			plugins = append(plugins, admissionquota.PluginName)
 		}
@@ -46,6 +50,7 @@ var MiloAdmissionPlugins = sets.New[string](
 	admissionquota.PluginName,    // ResourceQuotaEnforcement
 	projectsuspension.PluginName, // ProjectSuspensionEnforcement
 	emailverification.PluginName, // EmailVerificationEnforcement — observes unless EmailVerifiedGate is on
+	accessowner.PluginName,       // AccessRuleOwnerEnforcement
 	// Add future Milo admission plugins here
 )
 

@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: notification-contact-creator
+  annotations:
+    kubernetes.io/display-name: Notification Contact Creator
+    kubernetes.io/description: Create notification contacts
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - notification.miloapis.com/contacts.create

@@ -92,6 +92,9 @@ spec:
           # Number of pooled etcd connections per transport for the shared
           # watch-cache client; tune per environment via SHARED_ETCD_CLIENT_POOL_SIZE
           - --shared-etcd-client-pool-size=$(SHARED_ETCD_CLIENT_POOL_SIZE)
+          # Hold a starting server out of traffic until every Project's
+          # ResourceClaim storage serves; turn off via QUOTA_CLAIM_CACHE_READINESS
+          - --quota-claim-cache-readiness=$(QUOTA_CLAIM_CACHE_READINESS)
         env:
           # Feature gates configuration
           # Sessions and UserIdentities are GA (enabled by default)
@@ -102,6 +105,10 @@ spec:
           # client. Override per environment to tune watch progress spread.
           - name: SHARED_ETCD_CLIENT_POOL_SIZE
             value: "32"
+          # Wait for every Project's ResourceClaim cache before the server goes
+          # ready. "false" is the rollback: the server goes ready with them cold.
+          - name: QUOTA_CLAIM_CACHE_READINESS
+            value: "true"
           - name: LOG_LEVEL
             value: "4"
           - name: LOGGING_FORMAT

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -243,6 +244,17 @@ func (s *projectStore) lookup(name string) (entry, bool) {
 	return e, ok
 }
 
+func (s *projectStore) names() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.projects))
+	for name := range s.projects {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Start begins the reflector's List/Watch loop until stopCh closes.
 func (c *Cache) Start(stopCh <-chan struct{}) {
 	c.startOnce.Do(func() {
@@ -262,6 +274,11 @@ func (c *Cache) PostStartHook() server.PostStartHookFunc {
 // HasSynced reports whether the reflector has completed its initial List.
 func (c *Cache) HasSynced() bool {
 	return c.store.hasSynced()
+}
+
+// Names returns the names of the Projects the view holds, sorted.
+func (c *Cache) Names() []string {
+	return c.store.names()
 }
 
 // ReadinessCheck keeps the server not ready until the cache has completed

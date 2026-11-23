@@ -1,0 +1,582 @@
+# resourcemanager.miloapis.com: organizations, memberships, projects and
+# project suspensions.
+policy_files:
+- ../../config/services/activity/policies
+tests:
+- name: 'resourcemanager.miloapis.com-organization: create names the object from the response'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: acme
+    responseObject:
+      metadata:
+        name: acme
+  exp_rule: create
+  exp_summary: alice@example.com created organization acme
+  exp_change_source: human
+  exp_links:
+  - marker: acme
+    apiGroup: resourcemanager.miloapis.com
+    kind: Organization
+    name: acme
+- name: 'resourcemanager.miloapis.com-organization: create without a response body uses objectRef'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 201
+    responseObject: {}
+  exp_rule: create
+  exp_summary: alice@example.com created organization acme
+- name: 'resourcemanager.miloapis.com-organization: a rejected create is not an activity'
+  policy: resourcemanager.miloapis.com-organization
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 409
+    responseObject:
+      kind: Status
+      status: Failure
+      code: 409
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-organization: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted organization acme
+- name: 'resourcemanager.miloapis.com-organization: reading is not an activity'
+  policy: resourcemanager.miloapis.com-organization
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-organization: a controller''s write is not an activity'
+  policy: resourcemanager.miloapis.com-organization
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-organization: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated organization acme
+  exp_change_source: human
+- name: 'resourcemanager.miloapis.com-organization: a status update is not a user''s edit'
+  policy: resourcemanager.miloapis.com-organization
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizations
+      name: acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-organizationmembership: add a user'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: om-1
+      spec:
+        userRef:
+          name: bob
+  exp_rule: create-with-userref
+  exp_summary: alice@example.com added bob to the organization
+- name: 'resourcemanager.miloapis.com-organizationmembership: add without a user'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: om-1
+      spec: {}
+  exp_rule: create-fallback
+  exp_summary: alice@example.com added a member to the organization
+- name: 'resourcemanager.miloapis.com-organizationmembership: remove a user'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    responseObject:
+      metadata:
+        name: om-1
+      spec:
+        userRef:
+          name: bob
+  exp_rule: delete-with-userref
+  exp_summary: alice@example.com removed bob from the organization
+- name: 'resourcemanager.miloapis.com-organizationmembership: remove when the response has no spec'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    responseObject:
+      kind: Status
+      status: Success
+  exp_rule: delete-fallback
+  exp_summary: alice@example.com removed a member from the organization
+- name: 'resourcemanager.miloapis.com-organizationmembership: reading is not an activity'
+  policy: resourcemanager.miloapis.com-organizationmembership
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-organizationmembership: a controller''s write is not an activity'
+  policy: resourcemanager.miloapis.com-organizationmembership
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-organizationmembership: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated membership om-1
+  exp_change_source: human
+- name: 'resourcemanager.miloapis.com-organizationmembership: a status update is not a user''s edit'
+  policy: resourcemanager.miloapis.com-organizationmembership
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: organizationmemberships
+      name: om-1
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-project: create names the object from the response'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: web
+    responseObject:
+      metadata:
+        name: web
+  exp_rule: create
+  exp_summary: alice@example.com created project web
+  exp_change_source: human
+  exp_links:
+  - marker: web
+    apiGroup: resourcemanager.miloapis.com
+    kind: Project
+    name: web
+    namespace: organization-acme
+- name: 'resourcemanager.miloapis.com-project: create without a response body uses objectRef'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 201
+    responseObject: {}
+  exp_rule: create
+  exp_summary: alice@example.com created project web
+- name: 'resourcemanager.miloapis.com-project: a rejected create is not an activity'
+  policy: resourcemanager.miloapis.com-project
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 409
+    responseObject:
+      kind: Status
+      status: Failure
+      code: 409
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-project: delete'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_rule: delete
+  exp_summary: alice@example.com deleted project web
+- name: 'resourcemanager.miloapis.com-project: suspended'
+  event:
+    reason: Suspended
+    type: Warning
+    reportingController: project-controller
+    regarding:
+      apiVersion: resourcemanager.miloapis.com/v1alpha1
+      kind: Project
+      name: web
+  exp_rule: suspended
+  exp_summary: Project web was suspended
+  exp_policy: resourcemanager.miloapis.com-project
+  exp_change_source: system
+- name: 'resourcemanager.miloapis.com-project: reinstated'
+  event:
+    reason: Reinstated
+    type: Normal
+    reportingController: project-controller
+    regarding:
+      apiVersion: resourcemanager.miloapis.com/v1alpha1
+      kind: Project
+      name: web
+  exp_rule: reinstated
+  exp_summary: Project web was reinstated
+- name: 'resourcemanager.miloapis.com-project: reading is not an activity'
+  policy: resourcemanager.miloapis.com-project
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-project: a controller''s write is not an activity'
+  policy: resourcemanager.miloapis.com-project
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-project: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: alice@example.com updated project web
+  exp_change_source: human
+- name: 'resourcemanager.miloapis.com-project: a status update is not a user''s edit'
+  policy: resourcemanager.miloapis.com-project
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projects
+      name: web
+      namespace: organization-acme
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-projectsuspension: suspend with a reason and authority'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 201
+    responseObject:
+      metadata:
+        name: s-1
+      spec:
+        projectRef:
+          name: web
+        reason: unpaid invoice
+        reinstateAuthority: billing
+  exp_rule: create-with-project-reason-and-authority
+  exp_summary: 'Project web suspended (reason: unpaid invoice, reinstate authority: billing)'
+- name: 'resourcemanager.miloapis.com-projectsuspension: suspend with a reason'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 201
+    responseObject:
+      metadata:
+        name: s-1
+      spec:
+        projectRef:
+          name: web
+        reason: unpaid invoice
+  exp_rule: create-with-project-and-reason
+  exp_summary: 'Project web suspended (reason: unpaid invoice)'
+- name: 'resourcemanager.miloapis.com-projectsuspension: suspend without a reason'
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 201
+    responseObject:
+      metadata:
+        name: s-1
+      spec:
+        projectRef:
+          name: web
+  exp_rule: create-fallback
+  exp_summary: Suspension s-1 created
+- name: 'resourcemanager.miloapis.com-projectsuspension: lift a suspension'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 200
+    responseObject:
+      metadata:
+        name: s-1
+      spec:
+        projectRef:
+          name: web
+  exp_rule: delete-with-project
+  exp_summary: Suspension s-1 deleted for project web
+- name: 'resourcemanager.miloapis.com-projectsuspension: lift when the response has no spec'
+  audit:
+    verb: delete
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 200
+    responseObject:
+      kind: Status
+      status: Success
+  exp_rule: delete-fallback
+  exp_summary: Suspension s-1 deleted
+- name: 'resourcemanager.miloapis.com-projectsuspension: reading is not an activity'
+  policy: resourcemanager.miloapis.com-projectsuspension
+  audit:
+    verb: get
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-projectsuspension: a controller''s write is not an activity'
+  policy: resourcemanager.miloapis.com-projectsuspension
+  audit:
+    verb: delete
+    user:
+      username: system:serviceaccount:milo-system:controller-manager
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 200
+  exp_no_match: true
+- name: 'resourcemanager.miloapis.com-projectsuspension: patch'
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+    responseStatus:
+      code: 200
+    requestObject:
+      spec: {}
+  exp_rule: update
+  exp_summary: Suspension s-1 updated
+  exp_change_source: human
+- name: 'resourcemanager.miloapis.com-projectsuspension: a status update is not a user''s edit'
+  policy: resourcemanager.miloapis.com-projectsuspension
+  audit:
+    verb: patch
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: resourcemanager.miloapis.com
+      resource: projectsuspensions
+      name: s-1
+      subresource: status
+    responseStatus:
+      code: 200
+    requestObject:
+      status: {}
+  exp_no_match: true

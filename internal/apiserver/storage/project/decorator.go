@@ -66,6 +66,7 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 			drain:     drain,
 		}
 		mux.removeListener = projects.AddListener(mux)
+		registerMux(gr, mux)
 		return mux, mux.destroyAll, nil
 	}
 }
