@@ -13,6 +13,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -490,14 +491,14 @@ func TestUserInvitationValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
-	validator := &UserInvitationValidator{}
+	validator := &UserInvitationValidator{client: inviteeClient("test@example.com")}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx := admission.NewContextWithRequest(context.Background(), admission.Request{
 				AdmissionRequest: admissionv1.AdmissionRequest{
 					Namespace: "organization-testorg",
-					UserInfo:  authenticationv1.UserInfo{Username: "tester"},
+					UserInfo:  authenticationv1.UserInfo{Username: "tester", UID: inviteeUserName},
 				},
 			})
 
@@ -515,6 +516,70 @@ func TestUserInvitationValidator_ValidateUpdate(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			assert.Empty(t, warnings)
+		})
+	}
+}
+
+const inviteeUserName = "invitee"
+
+func inviteeClient(email string, extra ...client.Object) client.Client {
+	scheme := runtime.NewScheme()
+	_ = iamv1alpha1.AddToScheme(scheme)
+	objs := append([]client.Object{&iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{Name: inviteeUserName},
+		Spec:       iamv1alpha1.UserSpec{Email: email},
+	}}, extra...)
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
+
+func TestUserInvitationValidator_ValidateUpdate_StateChangeRequiresInvitee(t *testing.T) {
+	pending := &iamv1alpha1.UserInvitation{
+		ObjectMeta: metav1.ObjectMeta{Name: "inv", Namespace: "organization-testorg"},
+		Spec: iamv1alpha1.UserInvitationSpec{
+			Email:           "Invitee@Example.com",
+			State:           iamv1alpha1.UserInvitationStatePending,
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+		},
+	}
+	withState := func(state iamv1alpha1.UserInvitationStateType) *iamv1alpha1.UserInvitation {
+		ui := pending.DeepCopy()
+		ui.Spec.State = state
+		return ui
+	}
+	otherUser := &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{Name: "org-admin"},
+		Spec:       iamv1alpha1.UserSpec{Email: "admin@example.com"},
+	}
+	validator := &UserInvitationValidator{client: inviteeClient("invitee@example.com", otherUser)}
+
+	const refusal = "only the invited user can accept or decline this invitation"
+
+	for name, tc := range map[string]struct {
+		newObj    *iamv1alpha1.UserInvitation
+		userInfo  authenticationv1.UserInfo
+		wantError bool
+	}{
+		"invitee accepts":                       {newObj: withState(iamv1alpha1.UserInvitationStateAccepted), userInfo: authenticationv1.UserInfo{UID: inviteeUserName}},
+		"invitee declines":                      {newObj: withState(iamv1alpha1.UserInvitationStateDeclined), userInfo: authenticationv1.UserInfo{UID: inviteeUserName}},
+		"platform accepts":                      {newObj: withState(iamv1alpha1.UserInvitationStateAccepted), userInfo: authenticationv1.UserInfo{UID: "admin", Groups: []string{systemMastersGroup}}},
+		"another registered user accepts":       {newObj: withState(iamv1alpha1.UserInvitationStateAccepted), userInfo: authenticationv1.UserInfo{UID: otherUser.Name}, wantError: true},
+		"another registered user declines":      {newObj: withState(iamv1alpha1.UserInvitationStateDeclined), userInfo: authenticationv1.UserInfo{UID: otherUser.Name}, wantError: true},
+		"requester with no User accepts":        {newObj: withState(iamv1alpha1.UserInvitationStateAccepted), userInfo: authenticationv1.UserInfo{UID: "ghost"}, wantError: true},
+		"requester with no uid accepts":         {newObj: withState(iamv1alpha1.UserInvitationStateAccepted), wantError: true},
+		"another user edits without state move": {newObj: pending.DeepCopy(), userInfo: authenticationv1.UserInfo{UID: otherUser.Name}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := admission.NewContextWithRequest(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{Namespace: "organization-testorg", UserInfo: tc.userInfo},
+			})
+			_, err := validator.ValidateUpdate(ctx, pending, tc.newObj)
+			if !tc.wantError {
+				assert.NoError(t, err)
+				return
+			}
+			assert.Error(t, err)
+			assert.True(t, kerrors.IsInvalid(err), "expected an Invalid API error, got: %v", err)
+			assert.Contains(t, err.Error(), refusal)
 		})
 	}
 }
