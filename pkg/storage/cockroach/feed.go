@@ -167,6 +167,8 @@ type changefeedSource interface {
 	// refused reports whether err, from a changefeed that delivered nothing,
 	// means it can't start from its cursor, rather than that it dropped.
 	refused(err error) bool
+	// earliest returns the earliest timestamp a changefeed can start from.
+	earliest(ctx context.Context) (hlc, error)
 }
 
 // changefeedStream is one running changefeed.
@@ -190,6 +192,10 @@ var feedOptions = []string{"updated", "diff", "resolved = '1s'", "min_checkpoint
 // fail again on every resume.
 var errBadMessage = errors.New("bad changefeed message")
 
+// errStartOver means a changefeed can't go on from its cursor, so the feed
+// starts again from a new baseline.
+var errStartOver = errors.New("the changefeed can't go on from its cursor")
+
 // follow runs one changefeed from cursor, or from a new baseline taken back
 // ago when cursor is zero, until it fails. It returns where the next
 // changefeed resumes and why this one stopped.
@@ -205,6 +211,9 @@ func (f *feed) follow(ctx context.Context, cursor hlc, back time.Duration) (hlc,
 	stall := time.AfterFunc(feedStallTimeout, func() { cancel(errFeedStalled) })
 	defer stall.Stop()
 	stream, err := f.source.open(ctx, cursor)
+	if errors.Is(err, errStartOver) {
+		return cursor, feedReset, err
+	}
 	if err != nil {
 		return cursor, f.startFailure(err), err
 	}
@@ -232,14 +241,15 @@ func (f *feed) follow(ctx context.Context, cursor hlc, back time.Duration) (hlc,
 			}
 		}
 		// A message with neither is a row removed outright rather than
-		// written, so there is nothing to watch.
+		// written, or a sign of life from a stream that has nothing new
+		// resolved, so there is nothing to watch.
 	}
 	err = stream.err()
 	if cause := context.Cause(ctx); errors.Is(cause, errFeedStalled) {
 		err = cause
 	}
 	switch {
-	case errors.Is(err, errBadMessage):
+	case errors.Is(err, errBadMessage), errors.Is(err, errStartOver):
 		return cursor, feedReset, err
 	case received:
 		return cursor, feedDropped, err
@@ -266,9 +276,16 @@ func (f *feed) loadBaseline(ctx context.Context, back time.Duration) (hlc, error
 	if err := f.pool.QueryRow(ctx, clusterTimeSQL).Scan(&now); err != nil {
 		return hlc{}, err
 	}
+	earliest, err := f.source.earliest(ctx)
+	if err != nil {
+		return hlc{}, err
+	}
 	ts := now
 	if back > 0 {
 		ts = hlc{wallNanos: now.wallNanos - back.Nanoseconds()}
+	}
+	if ts.before(earliest) {
+		ts = earliest
 	}
 	counters, err := f.readCounters(ctx, ts)
 	if err != nil && back > 0 {

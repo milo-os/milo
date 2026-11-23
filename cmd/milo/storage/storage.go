@@ -20,7 +20,8 @@ func NewCommand() *cobra.Command {
 }
 
 func newMigrateCommand() *cobra.Command {
-	var dsn string
+	var dsn, sinkConfig string
+	var sink cockroach.Sink
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "Apply pending CockroachDB storage migrations",
@@ -32,7 +33,10 @@ func newMigrateCommand() *cobra.Command {
 			if dsn == "" {
 				return fmt.Errorf("--cockroachdb-dsn is required")
 			}
-			if err := cockroach.Migrate(cmd.Context(), dsn); err != nil {
+			if sinkConfig != "" && sink == "" {
+				return fmt.Errorf("--cockroachdb-changefeed-sink-config needs --cockroachdb-changefeed-sink")
+			}
+			if err := cockroach.Migrate(cmd.Context(), dsn, cockroach.ChangefeedSink(sink), cockroach.ChangefeedSinkConfig(sinkConfig)); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "storage schema is up to date")
@@ -40,5 +44,7 @@ func newMigrateCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "cockroachdb-dsn", "", "Connection string for the CockroachDB database, the same as the API server's --cockroachdb-dsn.")
+	cmd.Flags().StringVar(&sinkConfig, "cockroachdb-changefeed-sink-config", "", "With --cockroachdb-changefeed-sink: Producer settings for the changefeed job, as the JSON object CockroachDB takes as kafka_sink_config, such as {\"Flush\": {\"Frequency\": \"2ms\", \"Messages\": 500}}. RequiredAcks defaults to ALL. Changing it replaces the job, which carries on from where the old one got to. Experimental.")
+	cmd.Flags().Var(&sink, "cockroachdb-changefeed-sink", "Keep one changefeed job writing every change to this kafka:// sink, for API servers with --cockroachdb-watch-feed=kafka. \"none\" cancels the job, and leaving it unset leaves any job as it is. The database user also needs the EXTERNALIOIMPLICITACCESS privilege. Experimental.")
 	return cmd
 }

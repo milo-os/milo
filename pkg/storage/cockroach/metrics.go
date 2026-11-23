@@ -23,6 +23,13 @@ var (
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 	)
+	kafkaBehind = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Name:           "cockroachstorage_watch_kafka_messages_behind",
+			Help:           "Messages in the changefeed's Kafka topic that this server hasn't read yet, as of its last fetch, with --cockroachdb-watch-feed=kafka",
+			StabilityLevel: k8smetrics.ALPHA,
+		},
+	)
 	delivery = k8smetrics.NewHistogram(
 		&k8smetrics.HistogramOpts{
 			Name: "cockroachstorage_watch_delivery_seconds",
@@ -181,7 +188,7 @@ var (
 )
 
 func init() {
-	legacyregistry.MustRegister(feedLag, delivery, batchSize, batchWait, expiredObjects, purgedTombstones, queuedTombstones, droppedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
+	legacyregistry.MustRegister(feedLag, kafkaBehind, delivery, batchSize, batchWait, expiredObjects, purgedTombstones, queuedTombstones, droppedTombstones, writeAdmissions, feedRestarts, watchEvents, pendingEvents, recentEvents,
 		recentEventBytes, dbOperations, dbErrors, retries, openWatchers, closedWatchers, bookmarks, feedWaits)
 	legacyregistry.CustomMustRegister(poolMetrics)
 }

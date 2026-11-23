@@ -16,6 +16,9 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
+	github.com/testcontainers/testcontainers-go/modules/redpanda v0.44.0
+	github.com/twmb/franz-go v1.22.3
+	github.com/twmb/franz-go/pkg/kadm v1.20.0
 	go.etcd.io/etcd/client/pkg/v3 v3.7.4
 	go.etcd.io/etcd/client/v3 v3.7.4
 	go.miloapis.com/billing v0.7.4
@@ -47,7 +50,12 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
-require go.opentelemetry.io/otel/log v1.47.0 // indirect
+require (
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.15.1 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
+)
 
 require (
 	cel.dev/expr v0.25.3 // indirect

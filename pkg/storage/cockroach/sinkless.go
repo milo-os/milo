@@ -40,6 +40,10 @@ func (sinkless) refused(err error) bool {
 	return ok && pe.Code != codeQueryCanceled
 }
 
+// earliest is zero: a sinkless changefeed starts from any cursor within the
+// GC window.
+func (sinkless) earliest(context.Context) (hlc, error) { return hlc{}, nil }
+
 type sinklessStream struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc

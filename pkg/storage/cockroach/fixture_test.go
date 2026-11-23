@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/cockroachdb"
+	"github.com/testcontainers/testcontainers-go/network"
 	"sigs.k8s.io/yaml"
 
 	"k8s.io/apimachinery/pkg/api/apitesting"
@@ -100,6 +101,10 @@ var (
 	backendErr error
 	baseDSN    string // the server; empty when there is none
 	testDBDSN  string
+	// testNetwork is the Docker network of the server TestMain started, which
+	// containers the server connects to join. It's nil when the server came
+	// from MILO_COCKROACH_TEST_DSN.
+	testNetwork *testcontainers.DockerNetwork
 )
 
 func TestMain(m *testing.M) {
@@ -117,6 +122,10 @@ func TestMain(m *testing.M) {
 	testDBDSN, drop, backendErr = createDatabase(ctx, baseDSN, fmt.Sprintf("milo_storage_test_%d", time.Now().UnixNano()))
 	if backendErr == nil {
 		if backendErr = Migrate(ctx, testDBDSN); backendErr == nil {
+			if testNetwork != nil {
+				stop := startKafka(ctx)
+				defer stop()
+			}
 			opts := []Option{testOptions()}
 			if os.Getenv(testNoGroupCommitEnv) != "" {
 				opts = append(opts, GroupCommit(false))
@@ -160,14 +169,24 @@ func startCockroach(ctx context.Context) (string, func()) {
 		fmt.Fprintf(os.Stderr, "cockroach storage tests: %v\n", err)
 		return "", func() {}
 	}
-	// The node advertises localhost, which the watch feed's balancer then
-	// reaches through the DSN's mapped port.
-	c, err := cockroachdb.Run(ctx, img, cockroachdb.WithInsecure(), testcontainers.WithCmdArgs("--advertise-host=localhost"))
+	nw, err := network.New(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cockroach storage tests: no %s and no Docker server (%v)\n", testDSNEnv, err)
 		return "", func() {}
 	}
-	stop := func() { _ = testcontainers.TerminateContainer(c) }
+	// The node advertises localhost, which the watch feed's balancer then
+	// reaches through the DSN's mapped port.
+	c, err := cockroachdb.Run(ctx, img, cockroachdb.WithInsecure(), network.WithNetwork(nil, nw), testcontainers.WithCmdArgs("--advertise-host=localhost"))
+	if err != nil {
+		_ = nw.Remove(ctx)
+		fmt.Fprintf(os.Stderr, "cockroach storage tests: %v\n", err)
+		return "", func() {}
+	}
+	testNetwork = nw
+	stop := func() {
+		_ = testcontainers.TerminateContainer(c)
+		_ = nw.Remove(context.Background())
+	}
 	// The module's ConnectionString names a registered database/sql config, not a URL.
 	host, err := c.Host(ctx)
 	if err == nil {

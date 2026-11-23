@@ -49,6 +49,8 @@ type options struct {
 	sweepInterval               time.Duration
 	backstopInterval            time.Duration
 	migrate                     bool
+	migrateOptions              []MigrateOption
+	kafka                       *KafkaConfig
 }
 
 func defaultOptions() options {
@@ -69,8 +71,11 @@ func defaultOptions() options {
 // the first finds anything to apply. The server's database user then needs the
 // rights to change the schema and cluster settings, which a separate
 // migration step keeps away from the server.
-func MigrateOnOpen() Option {
-	return func(o *options) { o.migrate = true }
+func MigrateOnOpen(opts ...MigrateOption) Option {
+	return func(o *options) {
+		o.migrate = true
+		o.migrateOptions = opts
+	}
 }
 
 // MaxConns caps the connection pool. Zero keeps the DSN's setting.
@@ -178,7 +183,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 		cfg.ConnConfig.RuntimeParams["optimizer_use_histograms"] = "false"
 	}
 	if o.migrate {
-		if err := Migrate(ctx, dsn); err != nil {
+		if err := Migrate(ctx, dsn, o.migrateOptions...); err != nil {
 			return nil, err
 		}
 	}
@@ -193,9 +198,11 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 		pool.Close()
 		return nil, err
 	}
-	if _, err := listFeedNodes(ctx, pool); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("the watch feed needs CockroachDB 26.4 or later, and the VIEWCLUSTERMETADATA privilege: %w", err)
+	if o.kafka == nil {
+		if _, err := listFeedNodes(ctx, pool); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("the watch feed needs CockroachDB 26.4 or later, and the VIEWCLUSTERMETADATA privilege: %w", err)
+		}
 	}
 	b := &Backend{
 		pool:         pool,
@@ -206,8 +213,15 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	poolMetrics.watch(pool)
 	b.onClose(func() { poolMetrics.forget(pool) })
 	b.hub = newHub(b.revTS, o.hub)
-	balancer := newFeedBalancer(pool, cfg.ConnConfig)
-	b.feed = &feed{pool: pool, source: sinkless{balancer: balancer}, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
+	var source changefeedSource
+	var balancer *feedBalancer
+	if o.kafka != nil {
+		source = kafka{config: *o.kafka, pool: pool}
+	} else {
+		balancer = newFeedBalancer(pool, cfg.ConnConfig)
+		source = sinkless{balancer: balancer}
+	}
+	b.feed = &feed{pool: pool, source: source, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
 
 	projectWrites := defaultProjectWrites
 	if o.groupCommit {
@@ -235,13 +249,15 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	})
 	running.Go(func() { b.feed.run(bg) })
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.feed.reportLag) })
-	running.Go(func() {
-		every(bg, fixed(o.hub.tickInterval), func(time.Time) {
-			if b.feed.lag() > balanceLag {
-				balancer.lagging()
-			}
+	if balancer != nil {
+		running.Go(func() {
+			every(bg, fixed(o.hub.tickInterval), func(time.Time) {
+				if b.feed.lag() > balanceLag {
+					balancer.lagging()
+				}
+			})
 		})
-	})
+	}
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.hub.tick) })
 	running.Go(func() { every(bg, jittered(o.sweepInterval), func(now time.Time) { b.sweeper.sweep(bg, now) }) })
 	// The first backstop waits an interval too, so a restart stays cheap and
