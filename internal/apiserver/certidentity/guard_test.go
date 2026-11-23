@@ -260,6 +260,17 @@ func TestOneListServesEveryUIDInAProject(t *testing.T) {
 	}
 }
 
+func TestRequestWithoutProjectReportsNoProject(t *testing.T) {
+	calls := 0
+	g := NewGuard(fakeProjects{"": {serviceAccount(saUID)}}.lookup(&calls), time.Minute)
+	if got := g.Check(context.Background(), "", saUID); got != ReasonNoProject {
+		t.Errorf("Check without a project = %s, want %s", got, ReasonNoProject)
+	}
+	if calls != 0 {
+		t.Errorf("lists = %d, want 0 without a project", calls)
+	}
+}
+
 func TestConcurrentChecksShareOneList(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})
