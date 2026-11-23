@@ -17,13 +17,12 @@ request user. In that context the webhook enforces:
 - A non-system Group subject must live in the organization's namespace. A
   Group in another namespace is refused before its uid is resolved, with the
   same error as a Group that does not exist.
-- Other subjects are unrestricted: an org holder may grant a role to a User
-  or ServiceAccount. What keeps those grants inside the organization is the
-  namespace and target containment above, not a subject-kind restriction. A
-  ServiceAccount also need not live in the target Project's
-  control plane — an organization admin can grant a ServiceAccount access
-  outside of its own project (for example, IAM admin access across the
-  whole org).
+- A User subject must be a member of the organization. A User that does
+  not exist, or is not a member, is refused with the same error.
+- A ServiceAccount subject must carry its uid; its name is never looked up.
+  A ServiceAccount need not live in the target Project's control plane: an
+  organization admin can grant a ServiceAccount access outside of its own
+  project (for example, IAM admin access across the whole org).
 
 This test verifies:
 - A ServiceAccount bound to a Project within the same organization and
@@ -32,7 +31,9 @@ This test verifies:
   targeting a Project in the organization.
 - An organization-wide grant (targeting the request organization) is
   accepted; one targeting another organization is denied.
-- User and system-group subjects are accepted.
+- Member User and system-group subjects are accepted.
+- A User subject that is not a member, or does not exist, is denied, and
+  the denial reads the same in both cases.
 - A Group subject in another organization is denied, and the denial reads
   the same whether or not that Group exists.
 - Binding a Project that belongs to another organization is denied.
@@ -60,7 +61,7 @@ and user webhooks), which would let every denied binding through.
 | 1 | [setup-organizations](#step-setup-organizations) | 0 | 4 | 0 | 0 | 0 |
 | 2 | [grant-policybinding-rbac](#step-grant-policybinding-rbac) | 0 | 1 | 0 | 0 | 0 |
 | 3 | [create-assignable-role](#step-create-assignable-role) | 0 | 2 | 0 | 0 | 0 |
-| 4 | [create-user](#step-create-user) | 0 | 2 | 0 | 0 | 0 |
+| 4 | [create-user](#step-create-user) | 0 | 4 | 0 | 0 | 0 |
 | 5 | [create-project-a](#step-create-project-a) | 0 | 2 | 0 | 0 | 0 |
 | 6 | [create-project-b](#step-create-project-b) | 0 | 2 | 0 | 0 | 0 |
 | 7 | [create-service-account-a](#step-create-service-account-a) | 0 | 2 | 0 | 0 | 0 |
@@ -77,7 +78,9 @@ and user webhooks), which would let every denied binding through.
 | 18 | [allow-system-group-subject](#step-allow-system-group-subject) | 0 | 2 | 0 | 0 | 0 |
 | 19 | [deny-group-from-another-organization](#step-deny-group-from-another-organization) | 0 | 1 | 0 | 0 | 0 |
 | 20 | [deny-missing-group-in-another-organization](#step-deny-missing-group-in-another-organization) | 0 | 1 | 0 | 0 | 0 |
-| 21 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
+| 21 | [deny-user-who-is-not-a-member](#step-deny-user-who-is-not-a-member) | 0 | 1 | 0 | 0 | 0 |
+| 22 | [deny-missing-user](#step-deny-missing-user) | 0 | 1 | 0 | 0 | 0 |
+| 23 | [deny-binding-outside-org-namespace](#step-deny-binding-outside-org-namespace) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup-organizations`
 
@@ -115,14 +118,16 @@ Create the datum-cloud assignable-roles namespace and the some-role the test bin
 
 ### Step: `create-user`
 
-Create the User used by the denied User-subject binding
+Create a User who is a member of Organization A, and one who is not
 
 #### Try
 
 | # | Operation | Bindings | Outputs | Description |
 |:-:|---|:-:|:-:|---|
 | 1 | `apply` | 0 | 0 | *No description* |
-| 2 | `wait` | 0 | 0 | *No description* |
+| 2 | `apply` | 0 | 0 | *No description* |
+| 3 | `wait` | 0 | 0 | *No description* |
+| 4 | `apply` | 0 | 0 | *No description* |
 
 ### Step: `create-project-a`
 
@@ -286,6 +291,26 @@ A Group subject in another organization is denied without resolving its uid
 ### Step: `deny-missing-group-in-another-organization`
 
 A missing Group in another organization is denied with the same error as an existing one
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
+
+### Step: `deny-user-who-is-not-a-member`
+
+A User subject who is not a member of the organization is denied
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `create` | 0 | 0 | *No description* |
+
+### Step: `deny-missing-user`
+
+A User subject that does not exist is denied with the same error as a non-member
 
 #### Try
 
