@@ -48,18 +48,18 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// TestAdmissionFlagsRegistered checks the apiserver command accepts the
-// generic admission flags, so they can be passed as container args.
+// TestAdmissionFlagsRegistered checks the apiserver command accepts
+// --admission-control-config-file as a container arg, and registers no flag
+// that changes the plugin set.
 func TestAdmissionFlagsRegistered(t *testing.T) {
 	fs := NewCommand().Flags()
-	for _, name := range []string{"admission-control-config-file", "enable-admission-plugins", "disable-admission-plugins"} {
-		if fs.Lookup(name) == nil {
-			t.Errorf("flag --%s isn't registered", name)
-		}
+	if fs.Lookup("admission-control-config-file") == nil {
+		t.Error("flag --admission-control-config-file isn't registered")
 	}
-	// Deprecated, and always refused by Validate because NewOptions sets EnablePlugins.
-	if fs.Lookup("admission-control") != nil {
-		t.Error("deprecated flag --admission-control is registered")
+	for _, name := range []string{"enable-admission-plugins", "disable-admission-plugins", "admission-control"} {
+		if fs.Lookup(name) != nil {
+			t.Errorf("flag --%s is registered; it would let one arg change the enforced plugin set", name)
+		}
 	}
 
 	if err := fs.Parse([]string{"--admission-control-config-file=/etc/milo/admission.yaml"}); err != nil {
@@ -212,8 +212,8 @@ plugins:
 	}
 }
 
-// validateThroughWebhookChain builds Milo's admission options from args, the
-// way the apiserver command does, applies them with only
+// validateThroughWebhookChain builds Milo's admission options from args
+// through the apiserver command's flags, applies them with only
 // ValidatingAdmissionWebhook enabled, and validates a ConfigMap create
 // against a webhook served at serverURL.
 func validateThroughWebhookChain(t *testing.T, args []string, serverURL *url.URL, caPEM []byte) error {
@@ -221,10 +221,10 @@ func validateThroughWebhookChain(t *testing.T, args []string, serverURL *url.URL
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Parse through the real command so the test fails if NewCommand stops
+	// wiring the flag into the options Run uses.
 	s := NewOptions()
-	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	addAdmissionFlags(fs, s)
-	if err := fs.Parse(args); err != nil {
+	if err := newCommand(s).Flags().Parse(args); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	// Leave only the webhook plugin on: the others need Milo's initializers

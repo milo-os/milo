@@ -4,17 +4,16 @@ This page is for operators who deploy the Milo apiserver. It explains how to
 give the webhook admission plugins credentials, such as a client certificate
 for a webhook that requires mutual TLS (mTLS).
 
-The Milo apiserver accepts the standard Kubernetes admission flags:
+The Milo apiserver accepts `--admission-control-config-file`, the path to an
+`AdmissionConfiguration` file with per-plugin configuration.
 
-| Flag | Purpose |
-| --- | --- |
-| `--admission-control-config-file` | Path to an `AdmissionConfiguration` file with per-plugin configuration. |
-| `--enable-admission-plugins` | Plugins to turn on in addition to the defaults. |
-| `--disable-admission-plugins` | Default plugins to turn off. |
+The flag configures plugins; it doesn't choose them. The plugin set and order
+are fixed, so no argument can turn off quota, project suspension or webhook
+enforcement. `--enable-admission-plugins`, `--disable-admission-plugins` and
+the deprecated `--admission-control` aren't available.
 
-When you leave these flags unset, the apiserver runs its default plugin set in
-its default order, and the webhook plugins present no client credentials. The
-deprecated `--admission-control` flag isn't available.
+When you leave the flag unset, the webhook plugins present no client
+credentials.
 
 ## Give webhooks a client certificate
 
@@ -36,8 +35,8 @@ certificate. The kubeconfig only supplies the apiserver's client credentials.
 
 ### Example
 
-This synthetic example gives both webhook plugins a client certificate for a
-webhook served by the `example-webhook` service in the `example-system`
+This synthetic example gives the validating webhook plugin a client
+certificate for a webhook served by the `example-webhook` service in the `example-system`
 namespace on port 443.
 
 `/etc/milo/admission/admission-config.yaml`:
@@ -47,11 +46,6 @@ apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
   - name: ValidatingAdmissionWebhook
-    configuration:
-      apiVersion: apiserver.config.k8s.io/v1
-      kind: WebhookAdmissionConfiguration
-      kubeConfigFile: /etc/milo/admission/webhook-kubeconfig.yaml
-  - name: MutatingAdmissionWebhook
     configuration:
       apiVersion: apiserver.config.k8s.io/v1
       kind: WebhookAdmissionConfiguration
@@ -71,7 +65,8 @@ users:
 ```
 
 Include only the plugins that need credentials. A plugin without an entry runs
-as it does without the flag.
+as it does without the flag. Mutating webhooks use the same entry with
+`name: MutatingAdmissionWebhook`; the tests cover only the validating plugin.
 
 Pass the flag as an ordinary container argument:
 

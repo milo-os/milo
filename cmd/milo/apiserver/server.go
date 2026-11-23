@@ -109,7 +109,12 @@ const defaultWatchCacheConsistencyCheckPeriod = time.Hour
 
 // NewCommand creates a *cobra.Command object with default parameters
 func NewCommand() *cobra.Command {
-	s := NewOptions()
+	return newCommand(NewOptions())
+}
+
+// newCommand builds the apiserver command around s, so tests can parse args
+// through the real flag wiring and inspect the options it fills in.
+func newCommand(s *options.Options) *cobra.Command {
 	var namedFlagSets cliflag.NamedFlagSets
 
 	cmd := &cobra.Command{
@@ -240,18 +245,18 @@ func NewCommand() *cobra.Command {
 	return cmd
 }
 
-// addAdmissionFlags registers the generic admission flags:
-// --admission-control-config-file, --enable-admission-plugins and
-// --disable-admission-plugins. The configuration file reaches every plugin in
-// the chain, so the webhook plugins can read a kubeconfig with client
-// credentials for each webhook.
+// addAdmissionFlags registers --admission-control-config-file. The
+// configuration file reaches every plugin in the chain, so the webhook plugins
+// can read a kubeconfig with client credentials for each webhook.
 //
-// s.Admission.AddFlags isn't used: it also registers the deprecated
-// --admission-control, which Validate always refuses here because NewOptions
-// sets EnablePlugins, and the flags of DefaultTolerationSeconds, a plugin Milo
-// leaves off.
+// Only the file flag is registered. s.Admission.GenericAdmission.AddFlags
+// would also add --enable-admission-plugins and --disable-admission-plugins,
+// and one extra arg could then turn off quota, project suspension or webhook
+// enforcement without failing startup. The plugin set stays fixed by
+// NewOptions.
 func addAdmissionFlags(fs *pflag.FlagSet, s *options.Options) {
-	s.Admission.GenericAdmission.AddFlags(fs)
+	fs.StringVar(&s.Admission.GenericAdmission.ConfigFile, "admission-control-config-file",
+		s.Admission.GenericAdmission.ConfigFile, "File with admission control configuration.")
 }
 
 func NewOptions() *options.Options {
