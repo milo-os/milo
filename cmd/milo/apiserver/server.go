@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	crd "go.miloapis.com/milo/config/crd"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/accessowner"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
@@ -165,6 +166,7 @@ func NewCommand() *cobra.Command {
 	s.Features.AddFlags(namedFlagSets.FlagSet("features"))
 	s.Authentication.AddFlags(namedFlagSets.FlagSet("authentication"))
 	s.Authorization.AddFlags(namedFlagSets.FlagSet("authorization"))
+	addAdmissionFlags(namedFlagSets.FlagSet("admission"), s)
 	s.Metrics.AddFlags(namedFlagSets.FlagSet("metrics"))
 	logsapi.AddFlags(s.Logs, namedFlagSets.FlagSet("logs"))
 	s.Traces.AddFlags(namedFlagSets.FlagSet("traces"))
@@ -236,6 +238,20 @@ func NewCommand() *cobra.Command {
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
 
 	return cmd
+}
+
+// addAdmissionFlags registers the generic admission flags:
+// --admission-control-config-file, --enable-admission-plugins and
+// --disable-admission-plugins. The configuration file reaches every plugin in
+// the chain, so the webhook plugins can read a kubeconfig with client
+// credentials for each webhook.
+//
+// s.Admission.AddFlags isn't used: it also registers the deprecated
+// --admission-control, which Validate always refuses here because NewOptions
+// sets EnablePlugins, and the flags of DefaultTolerationSeconds, a plugin Milo
+// leaves off.
+func addAdmissionFlags(fs *pflag.FlagSet, s *options.Options) {
+	s.Admission.GenericAdmission.AddFlags(fs)
 }
 
 func NewOptions() *options.Options {
