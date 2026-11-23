@@ -433,13 +433,21 @@ func childDrain(config CompletedConfig) time.Duration {
 	return 2 * config.ControlPlane.Generic.RequestTimeout
 }
 
+// childIdleTimeout frees idle etcd caches. Other storages have no cache, so their children stay.
+func childIdleTimeout(config CompletedConfig) time.Duration {
+	if config.Storage != nil {
+		return 0
+	}
+	return projectStorageIdleTimeout
+}
+
 // makeExtensionsProjectAware wraps both of apiextensions' RESTOptions getters with project-aware storage.
 func makeExtensionsProjectAware(config CompletedConfig, bootstrapper *projectstorage.NamespaceBootstrapper, opts ...projectstorage.Option) {
 	ext := config.APIExtensions
 	ext.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), projectStorageIdleTimeout, opts...)
+		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), childIdleTimeout(config), opts...)
 	ext.ExtraConfig.CRDRESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), projectStorageIdleTimeout, opts...)
+		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), childIdleTimeout(config), opts...)
 }
 
 // CreateServerChain creates the apiservers connected via delegation
@@ -514,7 +522,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 
 	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
 	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config), projectStorageIdleTimeout, storageOpts...))
+		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config), childIdleTimeout(config), storageOpts...))
 	}
 
 	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {
