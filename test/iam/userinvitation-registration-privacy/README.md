@@ -32,7 +32,8 @@ This test verifies:
 | 2 | [invite-registered-and-unregistered](#step-invite-registered-and-unregistered) | 0 | 4 | 0 | 0 | 0 |
 | 3 | [org-scope-status-is-uniform](#step-org-scope-status-is-uniform) | 0 | 2 | 0 | 0 | 0 |
 | 4 | [org-scope-cannot-answer-invitations](#step-org-scope-cannot-answer-invitations) | 0 | 1 | 0 | 0 | 0 |
-| 5 | [invitee-lists-own-invitation](#step-invitee-lists-own-invitation) | 0 | 1 | 0 | 0 | 0 |
+| 5 | [org-scope-cannot-create-accepted-invitation](#step-org-scope-cannot-create-accepted-invitation) | 0 | 1 | 0 | 0 | 0 |
+| 6 | [invitee-lists-own-invitation](#step-invitee-lists-own-invitation) | 0 | 1 | 0 | 0 | 0 |
 
 ### Step: `setup`
 
@@ -75,6 +76,16 @@ The organization reads the same status for both invitations
 ### Step: `org-scope-cannot-answer-invitations`
 
 A caller who is not the invitee cannot accept, with the same refusal for both
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `script` | 0 | 0 | *No description* |
+
+### Step: `org-scope-cannot-create-accepted-invitation`
+
+A caller who is not the platform cannot create an invitation that is already Accepted
 
 #### Try
 
