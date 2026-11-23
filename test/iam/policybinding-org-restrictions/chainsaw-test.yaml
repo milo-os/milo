@@ -325,7 +325,7 @@ spec:
             expect:
             - check:
                 ($error != null): true
-                (contains($error, 'Group "pb-group-b" does not exist in the organization''s namespace "organization-pb-org-a"')): true
+                (contains($error, 'Group "pb-group-b" does not exist in the organization\'s namespace "organization-pb-org-a"')): true
 
     - name: deny-missing-group-in-another-organization
       description: A missing Group in another organization is denied with the same error as an existing one
@@ -336,7 +336,7 @@ spec:
             expect:
             - check:
                 ($error != null): true
-                (contains($error, 'Group "pb-group-missing" does not exist in the organization''s namespace "organization-pb-org-a"')): true
+                (contains($error, 'Group "pb-group-missing" does not exist in the organization\'s namespace "organization-pb-org-a"')): true
 
     - name: deny-binding-outside-org-namespace
       description: A binding created outside the organization's namespace is denied
