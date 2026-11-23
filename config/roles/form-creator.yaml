@@ -1,0 +1,12 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: form-creator
+  annotations:
+    kubernetes.io/display-name: Form Creator
+    kubernetes.io/description: Create notification contacts and contact group memberships for forms
+spec:
+  launchStage: Beta
+  includedPermissions:
+    - notification.miloapis.com/contacts.create
+    - notification.miloapis.com/contactgroupmemberships.create
