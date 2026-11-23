@@ -103,6 +103,7 @@ var (
 	sharedETCDClientPoolSize             int
 	projectNamespaceBootstrapTimeout     time.Duration
 	watchCacheConsistencyCheckPeriod     time.Duration
+	projectStorageIdleTimeout            time.Duration
 	claimCacheReadiness                  bool
 	claimCacheReadinessBatch             int
 )
@@ -252,6 +253,7 @@ func newCommand(s *options.Options) *cobra.Command {
 	fs.DurationVar(&projectNamespaceBootstrapTimeout, "project-namespace-bootstrap-timeout", projectstorage.DefaultNamespaceBootstrapTimeout, "Maximum time to wait for the milo-system namespace to be ensured in a project control plane on first use. Requests for that project wait at most this long; other projects are never blocked.")
 	fs.BoolVar(&claimCacheReadiness, "quota-claim-cache-readiness", true, "Hold a starting server out of traffic until every Project's ResourceClaim storage serves, within --storage-initialization-timeout. Quota admission waits for a claim on a watch through this server, so a cold claim cache refuses it. Off: the server goes ready with those caches cold.")
 	fs.IntVar(&claimCacheReadinessBatch, "quota-claim-cache-readiness-batch", 50, "Project ResourceClaim storages built per readiness check at the server's start; the check runs every 100 ms. Minimum 1.")
+	fs.DurationVar(&projectStorageIdleTimeout, "project-storage-idle-timeout", projectstorage.DefaultChildIdleTimeout, "How long a project control plane's storage of one resource, a watch cache with its own etcd watch, is kept with no request and no open watch. The next request builds it again; until its cache serves, a watch on it gets 'storage is (re)initializing' with a retry. Storages that a readiness check waits for at start are kept. 0 keeps every storage until its Project is gone; otherwise at least 1m.")
 	fs.DurationVar(&watchCacheConsistencyCheckPeriod, "watch-cache-consistency-check-period", defaultWatchCacheConsistencyCheckPeriod, "How often each watch cache compares itself with etcd when the DetectCacheInconsistency feature gate is on, with up to half again as jitter. Each check lists the cache's resource from etcd. Must be positive.")
 
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
@@ -321,6 +323,14 @@ func applyStorageFlags() error {
 	return nil
 }
 
+// checkProjectStorageIdleTimeout refuses, at the server's start, an idle time the project storage cannot take.
+func checkProjectStorageIdleTimeout(d time.Duration) error {
+	if err := projectstorage.CheckChildIdleTimeout(d); err != nil {
+		return fmt.Errorf("--project-storage-idle-timeout: %w", err)
+	}
+	return nil
+}
+
 // run runs the API server, keeping its resources where storageConfig says.
 func run(ctx context.Context, opts options.CompletedOptions, storageConfig storageOptions) error {
 	klog.Infof("Version: %+v", version.Get())
@@ -330,6 +340,10 @@ func run(ctx context.Context, opts options.CompletedOptions, storageConfig stora
 	if err := applyStorageFlags(); err != nil {
 		return err
 	}
+	if err := checkProjectStorageIdleTimeout(projectStorageIdleTimeout); err != nil {
+		return err
+	}
+	klog.InfoS("Project storage idle timeout configured", "timeout", projectStorageIdleTimeout)
 
 	storage, closeStorage, storageCheck, err := storageConfig.open(ctx)
 	if err != nil {
@@ -344,10 +358,10 @@ func run(ctx context.Context, opts options.CompletedOptions, storageConfig stora
 	if storage != nil {
 		config.Storage = storage
 		// APIServices are the aggregator's own kind and every project shares
-		// them, so no project child is ever built and the drain goes unused.
+		// them, so no project child is ever built and the drain and idle time go unused.
 		config.Aggregator.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecorator(
 			config.Aggregator.GenericConfig.RESTOptionsGetter, config.ProjectStates,
-			2*config.Aggregator.GenericConfig.RequestTimeout, projectstorage.WithStorage(storage))
+			2*config.Aggregator.GenericConfig.RequestTimeout, 0, projectstorage.WithStorage(storage))
 		// The aggregator heads the server chain and answers /readyz. Its config
 		// is a copy taken in NewConfig, so a check added to the control plane's
 		// config now would never be served.
@@ -412,8 +426,8 @@ func run(ctx context.Context, opts options.CompletedOptions, storageConfig stora
 	return prepared.Run(ctx)
 }
 
-// childDrain is how long a gone Project's child storage serves the requests that picked it before its storage
-// stops: twice the request timeout, apiextensions' bound for the requests on a CRD storage it tears down
+// childDrain is how long a removed child storage, its Project gone or the storage idle, serves the requests that
+// picked it before its storage stops: twice the request timeout, apiextensions' bound for the requests on a CRD storage it tears down
 // (k8s.io/apiextensions-apiserver v0.37.1, pkg/apiserver/customresource_handler.go lines 565-583).
 func childDrain(config CompletedConfig) time.Duration {
 	return 2 * config.ControlPlane.Generic.RequestTimeout
@@ -423,9 +437,9 @@ func childDrain(config CompletedConfig) time.Duration {
 func makeExtensionsProjectAware(config CompletedConfig, bootstrapper *projectstorage.NamespaceBootstrapper, opts ...projectstorage.Option) {
 	ext := config.APIExtensions
 	ext.GenericConfig.RESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), opts...)
+		ext.GenericConfig.RESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), projectStorageIdleTimeout, opts...)
 	ext.ExtraConfig.CRDRESTOptionsGetter = projectstorage.WithProjectAwareDecoratorAndBootstrapper(
-		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), opts...)
+		ext.ExtraConfig.CRDRESTOptionsGetter, config.ProjectStates, bootstrapper, childDrain(config), projectStorageIdleTimeout, opts...)
 }
 
 // CreateServerChain creates the apiservers connected via delegation
@@ -500,7 +514,7 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 
 	wrapped := make([]controlplaneapiserver.RESTStorageProvider, 0, len(storageProviders))
 	for _, p := range storageProviders {
-		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config), storageOpts...))
+		wrapped = append(wrapped, projectstorage.WrapProvider(p, config.ProjectStates, childDrain(config), projectStorageIdleTimeout, storageOpts...))
 	}
 
 	if err := nativeAPIs.InstallAPIs(wrapped...); err != nil {

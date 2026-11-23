@@ -10,7 +10,7 @@ import (
 // TestGetRESTOptions_LeavesKindsEveryProjectSharesGlobal covers the kinds
 // projectscope keeps global: their storage is never made project-aware.
 func TestGetRESTOptions_LeavesKindsEveryProjectSharesGlobal(t *testing.T) {
-	getter := WithProjectAwareDecorator(emptyOptionsGetter{}, noProjectKnown(), testDrain)
+	getter := WithProjectAwareDecorator(emptyOptionsGetter{}, noProjectKnown(), testDrain, 0)
 	for _, tc := range []struct {
 		gr         schema.GroupResource
 		perProject bool
@@ -35,6 +35,7 @@ func TestGetRESTOptions_WithStorageCoversSharedKinds(t *testing.T) {
 	getter := WithProjectAwareDecorator(emptyOptionsGetter{},
 		noProjectKnown(),
 		testDrain,
+		0,
 		WithStorage(generic.UndecoratedStorage),
 	)
 	for _, gr := range []schema.GroupResource{

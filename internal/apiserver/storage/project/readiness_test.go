@@ -112,7 +112,7 @@ func (s readinessStorage) ReadinessCheck() error {
 func buildClaims(t *testing.T, c *claimChildren) {
 	t.Helper()
 	var inner generic.StorageDecorator = c.storage
-	_, destroy, err := ProjectAwareDecorator(claimsGR, inner, everyProjectKnown(), nil, testDrain)(
+	_, destroy, err := ProjectAwareDecorator(claimsGR, inner, everyProjectKnown(), nil, testDrain, 0)(
 		&storagebackend.ConfigForResource{}, "", nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build the claims storage: %v", err)
@@ -337,6 +337,7 @@ func (r *registrar) RegisterStorage(gvr metav1.GroupVersionResource, _ rest.Stor
 
 func TestTheFlagDecidesTheRegistration(t *testing.T) {
 	gvr := metav1.GroupVersionResource{Group: claimsGR.Group, Version: "v1alpha1", Resource: claimsGR.Resource}
+	t.Cleanup(func() { forgetHeldWarm(claimsGR) })
 	for _, enabled := range []bool{true, false} {
 		reg := &registrar{}
 		RegisterChildrenReadiness(reg, enabled, gvr, NewChildrenReadiness(claimsGR, &view{}, served, 50))
