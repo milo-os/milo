@@ -19,21 +19,28 @@ spec:
     - The membership must live in the organization's namespace.
     - spec.organizationRef.name must be the request organization itself, on
       creation and update.
+    - A membership cannot be created directly; members join by accepting a
+      UserInvitation, whose controller creates the membership outside
+      organization scope. The refusal reads the same whether or not the
+      referenced User exists.
+    - spec.userRef.name cannot be changed on update.
 
     Requests that carry no organization parent context (platform scope,
     internal controllers) are unaffected; requests made by system:masters (the
     platform superuser) bypass the restriction entirely, matching the
     organization, user, and policybinding webhooks.
 
-    This test verifies (all steps run as test-user, system:authenticated, who is
-    granted RBAC to create and update memberships in the organization namespace
-    by the setup — not the admin user, since the webhook is bypassed for
-    system:masters):
-    - Creating a membership referencing the request organization is accepted.
+    This test verifies (the org-scope steps run as test-user,
+    system:authenticated, who is granted RBAC to create and update memberships
+    in the organization namespace by the setup — not the admin user, since the
+    webhook is bypassed for system:masters):
+    - Creating a membership referencing the request organization is denied,
+      with the same error for an existing User and a missing one.
     - Creating a membership referencing another organization is denied.
     - Updating a membership while keeping organizationRef is accepted.
     - Updating a membership to repoint organizationRef at another organization
       is denied.
+    - Updating a membership to reference a different User is denied.
 
   clusters:
     main:
@@ -66,11 +73,13 @@ spec:
             file: 03-rbac-membership-creator.yaml
 
     - name: create-user
-      description: Create the User referenced by the test memberships and wait for it to be ready
+      description: Create the Users referenced by the test memberships and wait for them to be ready
       cluster: main
       try:
         - apply:
             file: 02-user.yaml
+        - apply:
+            file: 04-user-other.yaml
         - wait:
             apiVersion: iam.miloapis.com/v1alpha1
             kind: User
@@ -81,9 +90,9 @@ spec:
                 name: Ready
                 value: 'True'
 
-    - name: allow-create-matching-org
-      description: A membership referencing the request organization is accepted
-      cluster: orgAUser
+    - name: seed-membership
+      description: A platform-scope caller creates the membership the update steps edit
+      cluster: main
       try:
         - apply:
             file: membership-matching.yaml
@@ -98,6 +107,30 @@ spec:
               spec:
                 organizationRef:
                   name: om-context-a
+
+    - name: deny-create-existing-user
+      description: Creating a membership for an existing User in organization scope is denied
+      cluster: orgAUser
+      try:
+        - create:
+            file: membership-direct-existing-user.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'organizationmemberships.resourcemanager.miloapis.com "membership-direct" is forbidden')): true
+                  (contains($error, 'members join an organization by accepting a UserInvitation; memberships cannot be created directly in organization scope')): true
+
+    - name: deny-create-missing-user
+      description: Creating a membership for a missing User is denied with the same error as an existing one
+      cluster: orgAUser
+      try:
+        - create:
+            file: membership-direct-missing-user.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'organizationmemberships.resourcemanager.miloapis.com "membership-direct" is forbidden')): true
+                  (contains($error, 'members join an organization by accepting a UserInvitation; memberships cannot be created directly in organization scope')): true
 
     - name: deny-create-cross-org
       description: A membership referencing another organization is denied at admission
@@ -137,3 +170,14 @@ spec:
               - check:
                   ($error != null): true
                   (contains($error, 'does not match the request organization')): true
+
+    - name: deny-update-changes-userref
+      description: An update that points the membership at a different User is denied
+      cluster: orgAUser
+      try:
+        - apply:
+            file: membership-retarget-user.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'userRef cannot be changed in organization scope')): true

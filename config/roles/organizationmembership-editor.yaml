@@ -10,7 +10,6 @@ spec:
   inheritedRoles:
     - name: organizationmembership-reader
   includedPermissions:
-    - resourcemanager.miloapis.com/organizationmemberships.create
     - resourcemanager.miloapis.com/organizationmemberships.update
     - resourcemanager.miloapis.com/organizationmemberships.patch
     - resourcemanager.miloapis.com/organizationmemberships.delete

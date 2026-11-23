@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"time"
 
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -48,6 +51,7 @@ const (
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:path=userinvitations,scope=Namespaced
 // +kubebuilder:selectablefield:JSONPath=".status.inviteeUser.name"
+// +kubebuilder:selectablefield:JSONPath=".status.inviteeEmailHash"
 // +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Organization,User"
 type UserInvitation struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -65,6 +69,13 @@ func (ui *UserInvitation) IsExpired() bool {
 	}
 	now := metav1.NewTime(time.Now().UTC())
 	return ui.Spec.ExpirationDate.Before(&now)
+}
+
+// InviteeEmailHash returns the value UserInvitation status.inviteeEmailHash
+// holds for email: the hex SHA-256 of the trimmed, lowercased address.
+func InviteeEmailHash(email string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return hex.EncodeToString(sum[:])
 }
 
 // UserInvitationSpec defines the desired state of UserInvitation
@@ -130,10 +141,14 @@ type UserInvitationStatus struct {
 	// +kubebuilder:validation:Optional
 	InviterUser UserInvitationUserStatus `json:"inviterUser,omitempty"`
 
-	// InviteeUser contains information about the invitee user in the invitation.
-	// This value may be nil if the invitee user has not been created yet.
+	// InviteeUser is no longer set and is cleared on existing invitations.
 	// +kubebuilder:validation:Optional
 	InviteeUser *UserInvitationInviteeUserStatus `json:"inviteeUser,omitempty"`
+
+	// InviteeEmailHash is the hex SHA-256 of the trimmed, lowercased spec.email.
+	// The invited user lists their invitations by it.
+	// +kubebuilder:validation:Optional
+	InviteeEmailHash string `json:"inviteeEmailHash,omitempty"`
 }
 
 // UserInvitationOrganizationStatus contains information about the organization in the invitation.

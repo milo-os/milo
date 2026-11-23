@@ -21,13 +21,12 @@ spec:
     - A non-system Group subject must live in the organization's namespace. A
       Group in another namespace is refused before its uid is resolved, with the
       same error as a Group that does not exist.
-    - Other subjects are unrestricted: an org holder may grant a role to a User
-      or ServiceAccount. What keeps those grants inside the organization is the
-      namespace and target containment above, not a subject-kind restriction. A
-      ServiceAccount also need not live in the target Project's
-      control plane — an organization admin can grant a ServiceAccount access
-      outside of its own project (for example, IAM admin access across the
-      whole org).
+    - A User subject must be a member of the organization. A User that does
+      not exist, or is not a member, is refused with the same error.
+    - A ServiceAccount subject must carry its uid; its name is never looked up.
+      A ServiceAccount need not live in the target Project's control plane: an
+      organization admin can grant a ServiceAccount access outside of its own
+      project (for example, IAM admin access across the whole org).
 
     This test verifies:
     - A ServiceAccount bound to a Project within the same organization and
@@ -36,7 +35,9 @@ spec:
       targeting a Project in the organization.
     - An organization-wide grant (targeting the request organization) is
       accepted; one targeting another organization is denied.
-    - User and system-group subjects are accepted.
+    - Member User and system-group subjects are accepted.
+    - A User subject that is not a member, or does not exist, is denied, and
+      the denial reads the same in both cases.
     - A Group subject in another organization is denied, and the denial reads
       the same whether or not that Group exists.
     - Binding a Project that belongs to another organization is denied.
@@ -129,11 +130,13 @@ spec:
                 value: Active
 
     - name: create-user
-      description: Create the User used by the denied User-subject binding
+      description: Create a User who is a member of Organization A, and one who is not
       cluster: main
       try:
         - apply:
             file: 05-user.yaml
+        - apply:
+            file: 09-user-outsider.yaml
         - wait:
             apiVersion: iam.miloapis.com/v1alpha1
             kind: User
@@ -143,6 +146,8 @@ spec:
               condition:
                 name: Ready
                 value: 'True'
+        - apply:
+            file: 08-membership-a.yaml
 
     - name: create-project-a
       description: Create the Project that belongs to Organization A and wait for its control plane
@@ -337,6 +342,28 @@ spec:
             - check:
                 ($error != null): true
                 (contains($error, 'Group "pb-group-missing" does not exist in the organization\'s namespace "organization-pb-org-a"')): true
+
+    - name: deny-user-who-is-not-a-member
+      description: A User subject who is not a member of the organization is denied
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-user-outsider.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'User "pb-outsider" is not a member of the organization')): true
+
+    - name: deny-missing-user
+      description: A User subject that does not exist is denied with the same error as a non-member
+      cluster: orgAUser
+      try:
+        - create:
+            file: test-data/policybinding-user-missing.yaml
+            expect:
+            - check:
+                ($error != null): true
+                (contains($error, 'User "pb-missing" is not a member of the organization')): true
 
     - name: deny-binding-outside-org-namespace
       description: A binding created outside the organization's namespace is denied

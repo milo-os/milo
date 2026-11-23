@@ -185,7 +185,8 @@ func TestUserInvitationValidator_EmailDomainOfferUpdate(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			validator := &UserInvitationValidator{emailDomains: emailDomainVerifier(t, tc.verified...)}
+			validator := &UserInvitationValidator{client: inviteeClient(tc.newObj.Spec.Email), emailDomains: emailDomainVerifier(t, tc.verified...)}
+			tc.userInfo.UID = inviteeUserName
 			ctx := admission.NewContextWithRequest(context.Background(), admission.Request{
 				AdmissionRequest: admissionv1.AdmissionRequest{Namespace: "organization-acme", UserInfo: tc.userInfo},
 			})

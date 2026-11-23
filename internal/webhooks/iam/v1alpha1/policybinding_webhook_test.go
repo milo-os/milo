@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -220,6 +221,71 @@ func TestPolicyBindingMutator_DefaultGroupSubjectScope(t *testing.T) {
 	})
 }
 
+func testMembership(org, user string) *resourcemanagerv1alpha1.OrganizationMembership {
+	return &resourcemanagerv1alpha1.OrganizationMembership{
+		ObjectMeta: metav1.ObjectMeta{Name: "member-" + user, Namespace: resourcemanagerv1alpha1.OrganizationNamespace(org)},
+		Spec: resourcemanagerv1alpha1.OrganizationMembershipSpec{
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: org},
+			UserRef:         resourcemanagerv1alpha1.MemberReference{Name: user},
+		},
+	}
+}
+
+func TestPolicyBindingMutator_DefaultOrgUserAndServiceAccountScope(t *testing.T) {
+	member := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: types.UID("member-uid")}}
+	outsider := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "bob", UID: types.UID("outsider-uid")}}
+	foreignMember := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "carol", UID: types.UID("foreign-member-uid")}}
+	robot := &iamv1alpha1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "robot", UID: types.UID("robot-uid")}}
+
+	newMutator := func() *PolicyBindingMutator {
+		cl := fake.NewClientBuilder().WithScheme(runtimeScheme).
+			WithObjects(member, outsider, foreignMember, robot, testMembership("acme", "alice"), testMembership("globex", "carol")).
+			Build()
+		return &PolicyBindingMutator{client: cl}
+	}
+
+	defaultErr := func(t *testing.T, subject iamv1alpha1.Subject) string {
+		t.Helper()
+		pb := policyBinding(subject)
+		err := newMutator().Default(orgContextRequest("acme"), pb)
+		require.Error(t, err)
+		assert.Empty(t, pb.Spec.Subjects[0].UID)
+		return err.Error()
+	}
+
+	t.Run("org context resolves a member user", func(t *testing.T) {
+		pb := policyBinding(iamv1alpha1.Subject{Kind: "User", Name: "alice"})
+		require.NoError(t, newMutator().Default(orgContextRequest("acme"), pb))
+		assert.Equal(t, "member-uid", pb.Spec.Subjects[0].UID)
+	})
+
+	t.Run("org context reports a missing user, a non-member and another org's member identically", func(t *testing.T) {
+		missing := defaultErr(t, iamv1alpha1.Subject{Kind: "User", Name: "ghost"})
+		nonMember := defaultErr(t, iamv1alpha1.Subject{Kind: "User", Name: "bob"})
+		otherOrg := defaultErr(t, iamv1alpha1.Subject{Kind: "User", Name: "carol"})
+		assert.Contains(t, missing, `User "ghost" is not a member of the organization`)
+		assert.Equal(t, missing, strings.ReplaceAll(nonMember, `"bob"`, `"ghost"`))
+		assert.Equal(t, missing, strings.ReplaceAll(otherOrg, `"carol"`, `"ghost"`))
+		assert.NotContains(t, nonMember, "outsider-uid")
+		assert.NotContains(t, otherOrg, "foreign-member-uid")
+	})
+
+	t.Run("org context does not resolve a service account by name", func(t *testing.T) {
+		existing := defaultErr(t, iamv1alpha1.Subject{Kind: "ServiceAccount", Name: "robot"})
+		missing := defaultErr(t, iamv1alpha1.Subject{Kind: "ServiceAccount", Name: "ghost"})
+		assert.Contains(t, existing, "a ServiceAccount subject in organization scope must set uid")
+		assert.Equal(t, existing, missing)
+		assert.NotContains(t, existing, "robot-uid")
+	})
+
+	t.Run("platform context resolves any user and service account", func(t *testing.T) {
+		pb := policyBinding(iamv1alpha1.Subject{Kind: "User", Name: "bob"}, iamv1alpha1.Subject{Kind: "ServiceAccount", Name: "robot"})
+		require.NoError(t, newMutator().Default(platformContextRequest(), pb))
+		assert.Equal(t, "outsider-uid", pb.Spec.Subjects[0].UID)
+		assert.Equal(t, "robot-uid", pb.Spec.Subjects[1].UID)
+	})
+}
+
 func userContextRequest(userID string) context.Context {
 	return admission.NewContextWithRequest(context.Background(), admission.Request{
 		AdmissionRequest: admissionv1.AdmissionRequest{
@@ -383,7 +449,7 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			expectError: false,
 		},
 		"org context allows a user subject": {
-			preObjects: []client.Object{projectA, userObj},
+			preObjects: []client.Object{projectA, userObj, testMembership(orgA, "alice")},
 			ctx:        orgContextRequest(orgA),
 			binding: &iamv1alpha1.PolicyBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: resourcemanagerv1alpha1.OrganizationNamespace(orgA)},
@@ -563,11 +629,25 @@ func TestPolicyBindingValidator_ValidateCreate(t *testing.T) {
 			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
 		},
 		"org context denies a user subject carrying another user's uid": {
-			preObjects:  []client.Object{projectA, userObj},
+			preObjects:  []client.Object{projectA, userObj, testMembership(orgA, "alice")},
 			ctx:         orgContextRequest(orgA),
 			binding:     withSubjects(iamv1alpha1.Subject{Kind: "User", Name: "alice", UID: "someone-else"}),
 			expectError: true,
-			contains:    `uid does not match User "alice"`,
+			contains:    `User "alice" is not a member of the organization`,
+		},
+		"org context denies a user subject who is not a member": {
+			preObjects:  []client.Object{projectA, userObj, testMembership(orgB, "alice")},
+			ctx:         orgContextRequest(orgA),
+			binding:     withSubjects(*user),
+			expectError: true,
+			contains:    `User "alice" is not a member of the organization`,
+		},
+		"org context denies a user subject that does not exist": {
+			preObjects:  []client.Object{projectA},
+			ctx:         orgContextRequest(orgA),
+			binding:     withSubjects(*user),
+			expectError: true,
+			contains:    `User "alice" is not a member of the organization`,
 		},
 		"org context denies a system group subject in another namespace": {
 			preObjects:  []client.Object{projectA},
@@ -756,6 +836,12 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
+	departed := iamv1alpha1.Subject{Kind: "User", Name: "carol", UID: "carol-uid"}
+	departedBinding := saBinding.DeepCopy()
+	departedBinding.Spec.Subjects = append(departedBinding.Spec.Subjects, departed)
+	relabeled := departedBinding.DeepCopy()
+	relabeled.Labels = map[string]string{"team": "ops"}
+
 	tests := map[string]struct {
 		ctx         context.Context
 		oldPB       *iamv1alpha1.PolicyBinding
@@ -821,6 +907,30 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			expectError: true,
 			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
 		},
+		"label edit keeps a subject who has left the organization": {
+			ctx:         orgContextRequest(orgA),
+			oldPB:       departedBinding,
+			newPB:       relabeled,
+			expectError: false,
+		},
+		"update that adds a user who is not a member is denied": {
+			ctx:         orgContextRequest(orgA),
+			oldPB:       saBinding,
+			newPB:       departedBinding,
+			expectError: true,
+			contains:    `User "carol" is not a member of the organization`,
+		},
+		"update that changes the uid of a kept user subject is denied": {
+			ctx:   orgContextRequest(orgA),
+			oldPB: departedBinding,
+			newPB: func() *iamv1alpha1.PolicyBinding {
+				b := departedBinding.DeepCopy()
+				b.Spec.Subjects[1].UID = "other-uid"
+				return b
+			}(),
+			expectError: true,
+			contains:    `User "carol" is not a member of the organization`,
+		},
 		"project context fails closed on update": {
 			ctx:         projectContextRequest("project-a"),
 			oldPB:       saBinding,
@@ -832,7 +942,7 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA, assignableRole(), &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "user-uid-1"}}).Build()
+			cl := fake.NewClientBuilder().WithScheme(runtimeScheme).WithObjects(projectA, assignableRole(), &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "user-uid-1"}}, testMembership(orgA, "alice")).Build()
 			validator := &PolicyBindingValidator{client: cl, assignableRolesNamespace: testAssignableRolesNamespace}
 
 			_, err := validator.ValidateUpdate(tc.ctx, tc.oldPB, tc.newPB)

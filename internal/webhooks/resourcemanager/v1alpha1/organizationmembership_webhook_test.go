@@ -1189,10 +1189,11 @@ func TestOrganizationMembershipValidator_ValidateCreate_OrgContext(t *testing.T)
 		contains   string
 	}{
 		{
-			name:       "matching org in org context accepted",
+			name:       "matching org in org context refused",
 			ctx:        orgContextRequest("acme"),
 			membership: membershipForOrg("acme", "alice", noRoles),
-			expectErr:  false,
+			expectErr:  true,
+			contains:   "accepting a UserInvitation",
 		},
 		{
 			name:       "different org in org context rejected",
@@ -1266,6 +1267,9 @@ func TestOrganizationMembershipValidator_ValidateUpdate_OrgContext(t *testing.T)
 	repointed := oldMembership.DeepCopy()
 	repointed.Spec.OrganizationRef.Name = otherOrg
 
+	retargeted := oldMembership.DeepCopy()
+	retargeted.Spec.UserRef.Name = "bob"
+
 	// Update whose namespace is outside the request org's namespace.
 	wrongNamespace := oldMembership.DeepCopy()
 	wrongNamespace.Namespace = "some-other-ns"
@@ -1296,6 +1300,19 @@ func TestOrganizationMembershipValidator_ValidateUpdate_OrgContext(t *testing.T)
 			newMembership: wrongNamespace,
 			expectErr:     true,
 			contains:      "must be in the organization's namespace",
+		},
+		{
+			name:          "changing userRef in org context rejected",
+			ctx:           orgContextRequest("acme"),
+			newMembership: retargeted,
+			expectErr:     true,
+			contains:      "userRef cannot be changed",
+		},
+		{
+			name:          "changing userRef outside org context passes through",
+			ctx:           membershipValidationContext(),
+			newMembership: retargeted,
+			expectErr:     false,
 		},
 		{
 			name:          "repointing organizationRef outside org context passes through",
@@ -1333,5 +1350,41 @@ func TestOrganizationMembershipValidator_ValidateUpdate_OrgContext(t *testing.T)
 				t.Fatalf("expected update to succeed, got error: %v", err)
 			}
 		})
+	}
+}
+
+func TestOrganizationMembershipValidator_ValidateCreate_OrgContextSameRefusalForAnyUser(t *testing.T) {
+	existing := &iamv1alpha1.User{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "alice-uid"},
+		Spec:       iamv1alpha1.UserSpec{Email: "alice@example.com"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(getWebhookTestScheme()).
+		WithObjects(existing).
+		Build()
+	validator := &OrganizationMembershipValidator{
+		client:             c,
+		apiReader:          c,
+		ownerRoleName:      "resourcemanager.miloapis.com-organizationowner",
+		ownerRoleNamespace: "milo-system",
+	}
+
+	refusal := func(user string) error {
+		m := membershipForOrg("acme", user, nil)
+		m.Name = "probe"
+		_, err := validator.ValidateCreate(orgContextRequest("acme"), m)
+		return err
+	}
+
+	existingErr := refusal("alice")
+	missingErr := refusal("nobody")
+	if existingErr == nil || missingErr == nil {
+		t.Fatalf("expected both creates to be refused, got existing=%v missing=%v", existingErr, missingErr)
+	}
+	if !apierrors.IsForbidden(existingErr) || !apierrors.IsForbidden(missingErr) {
+		t.Fatalf("expected Forbidden for both, got existing=%v missing=%v", existingErr, missingErr)
+	}
+	if existingErr.Error() != missingErr.Error() {
+		t.Fatalf("refusal differs by user existence:\n existing: %v\n missing:  %v", existingErr, missingErr)
 	}
 }

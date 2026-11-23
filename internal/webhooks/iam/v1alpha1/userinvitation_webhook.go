@@ -147,6 +147,13 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 		))
 	}
 
+	if ui.Spec.State != iamv1alpha1.UserInvitationStatePending && !slices.Contains(req.UserInfo.Groups, systemMastersGroup) {
+		errs = append(errs, field.Forbidden(
+			field.NewPath("spec").Child("state"),
+			"a new invitation must be Pending; only the invitee can accept or decline it",
+		))
+	}
+
 	// Ensure the expiration date is in the future
 	if ui.Spec.ExpirationDate != nil {
 		now := metav1.NewTime(time.Now().UTC())
@@ -235,6 +242,12 @@ func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		)
 	}
 
+	if oldObj.Spec.State != newObj.Spec.State && !slices.Contains(req.UserInfo.Groups, systemMastersGroup) {
+		if err := v.validateRequesterIsInvitee(ctx, req, newObj); err != nil {
+			return nil, err
+		}
+	}
+
 	accepting := oldObj.Spec.State == iamv1alpha1.UserInvitationStatePending && newObj.Spec.State == iamv1alpha1.UserInvitationStateAccepted
 	if accepting && isEmailDomainOffer(newObj) {
 		if err := v.validateEmailDomainOfferAcceptance(ctx, req, newObj); err != nil {
@@ -261,6 +274,33 @@ func (v *UserInvitationValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		)
 	}
 	return nil, nil
+}
+
+func (v *UserInvitationValidator) validateRequesterIsInvitee(ctx context.Context, req admission.Request, ui *iamv1alpha1.UserInvitation) error {
+	forbidden := errors.NewInvalid(
+		iamv1alpha1.SchemeGroupVersion.WithKind("UserInvitation").GroupKind(),
+		ui.Name,
+		field.ErrorList{field.Forbidden(field.NewPath("spec").Child("state"), "only the invited user can accept or decline this invitation")},
+	)
+
+	uid := string(req.UserInfo.UID)
+	if uid == "" {
+		return forbidden
+	}
+
+	requester := &iamv1alpha1.User{}
+	if err := v.client.Get(ctx, client.ObjectKey{Name: uid}, requester); err != nil {
+		if errors.IsNotFound(err) {
+			return forbidden
+		}
+		userinvitationlog.Error(err, "failed to get requesting user", "user", uid)
+		return errors.NewInternalError(fmt.Errorf("failed to get requesting user: %w", err))
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(requester.Spec.Email), strings.TrimSpace(ui.Spec.Email)) {
+		return forbidden
+	}
+	return nil
 }
 
 // validateEmailDomainOfferAcceptance lets someone accept an email domain offer

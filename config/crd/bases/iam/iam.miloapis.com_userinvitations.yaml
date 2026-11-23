@@ -216,10 +216,14 @@ spec:
                   - type
                   type: object
                 type: array
-              inviteeUser:
+              inviteeEmailHash:
                 description: |-
-                  InviteeUser contains information about the invitee user in the invitation.
-                  This value may be nil if the invitee user has not been created yet.
+                  InviteeEmailHash is the hex SHA-256 of the trimmed, lowercased spec.email.
+                  The invited user lists their invitations by it.
+                type: string
+              inviteeUser:
+                description: InviteeUser is no longer set and is cleared on existing
+                  invitations.
                 properties:
                   name:
                     description: |-
@@ -255,6 +259,7 @@ spec:
         type: object
     selectableFields:
     - jsonPath: .status.inviteeUser.name
+    - jsonPath: .status.inviteeEmailHash
     served: true
     storage: true
     subresources:

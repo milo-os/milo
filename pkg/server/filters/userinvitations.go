@@ -1,32 +1,74 @@
 package filters
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 )
 
 const (
-	// UserInvitationInviteeUserFieldSelector is the field selector for the invitee user in a user invitation.
-	// This field contains the name of the invitee user in the invitation.
-	// Some invites may not have a created invitee user yet, so this field may be empty.
+	// UserInvitationInviteeUserFieldSelector is the retired invitee field
+	// selector. User scoped requests may not set it.
 	UserInvitationInviteeUserFieldSelector = "status.inviteeUser.name"
+
+	// UserInvitationInviteeEmailHashFieldSelector selects the invitations
+	// addressed to an email address, by InviteeEmailHash.
+	UserInvitationInviteeEmailHashFieldSelector = "status.inviteeEmailHash"
+
+	noInviteeEmailHash = "none"
 )
 
-// UserUserInvitationListConstraintDecorator intercepts requests to list or watch
-// user invitations, which are a user scoped resource, and injects a field
-// selector to limit user invitations to the user provided in the request
-// context.
+// UserEmailLookup returns the email of the named User, or found=false when
+// the User does not exist.
+type UserEmailLookup func(ctx context.Context, userName string) (email string, found bool, err error)
+
+// NewLoopbackUserEmailLookup reads Users through the API server's loopback
+// client.
+func NewLoopbackUserEmailLookup(loopbackConfig *rest.Config) UserEmailLookup {
+	var (
+		client dynamic.Interface
+		err    error
+	)
+	if loopbackConfig != nil {
+		client, err = dynamic.NewForConfig(loopbackConfig)
+	}
+	usersGVR := iamv1alpha1.SchemeGroupVersion.WithResource("users")
+	return func(ctx context.Context, userName string) (string, bool, error) {
+		if client == nil {
+			return "", false, fmt.Errorf("no loopback client for User lookups: %v", err)
+		}
+		u, getErr := client.Resource(usersGVR).Get(ctx, userName, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
+			return "", false, nil
+		}
+		if getErr != nil {
+			return "", false, fmt.Errorf("failed to get User %q: %w", userName, getErr)
+		}
+		email, _, _ := unstructured.NestedString(u.Object, "spec", "email")
+		return email, true, nil
+	}
+}
+
+// UserUserInvitationListConstraintDecorator intercepts requests to list or
+// watch user invitations in a user's context and restricts them to the
+// invitations addressed to that user's email.
 //
 // This is done so that end users can execute `kubectl get userinvitations`
-// and not need to provide a field selector.
-func UserUserInvitationListConstraintDecorator(handler http.Handler) http.Handler {
+// and not need to provide a field selector. It runs after authorization, so
+// only authorized requests cause a User lookup.
+func UserUserInvitationListConstraintDecorator(handler http.Handler, lookup UserEmailLookup) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
 		info, ok := request.RequestInfoFrom(ctx)
@@ -35,53 +77,56 @@ func UserUserInvitationListConstraintDecorator(handler http.Handler) http.Handle
 			return
 		}
 
-		if info.APIGroup == iamv1alpha1.SchemeGroupVersion.Group && info.Resource == "userinvitations" && (info.Verb == "list" || info.Verb == "watch") {
-			userID, ok := ctx.Value(UserIDContextKey).(string)
-			if ok {
-				currentSelector, err := fields.ParseSelector(info.FieldSelector)
-				if err != nil {
-					responsewriters.InternalError(w, req, fmt.Errorf("failed to parse label selector: %w", err))
-					return
-				}
-
-				// Filter out any invitee user constraints that may have been provided
-				// in the request by rebuilding the selector without them.
-				filteredSelector := fields.Nothing()
-				for _, r := range currentSelector.Requirements() {
-					if r.Field == UserInvitationInviteeUserFieldSelector {
-						// Skip any pre-existing invitee user constraint so we can
-						// replace it with the authenticated user's ID.
-						continue
-					}
-					filteredSelector = fields.AndSelectors(filteredSelector, fields.OneTermEqualSelector(r.Field, r.Value))
-				}
-
-				// Combine the filtered selector with the new invitee user requirement.
-				currentSelector = filteredSelector
-
-				// Build new selector, filtering out any user-id constraint that
-				// may have been provided in the request
-				newSelector := fields.AndSelectors(currentSelector, fields.SelectorFromSet(fields.Set{
-					UserInvitationInviteeUserFieldSelector: userID,
-				}))
-
-				// Set the new field selector on the request info.
-				info.FieldSelector = newSelector.String()
-
-				// Inject the new selector into the request
-				query, err := url.ParseQuery(req.URL.RawQuery)
-				if err != nil {
-					responsewriters.InternalError(w, req, fmt.Errorf("failed to parse url query: %w", err))
-				}
-				query.Del("fieldSelector")
-				query.Add("fieldSelector", info.FieldSelector)
-
-				req.URL.RawQuery = query.Encode()
-			}
+		if info.APIGroup != iamv1alpha1.SchemeGroupVersion.Group || info.Resource != "userinvitations" || (info.Verb != "list" && info.Verb != "watch") {
+			handler.ServeHTTP(w, req)
+			return
 		}
 
-		req = req.WithContext(request.WithRequestInfo(ctx, info))
+		userID, ok := ctx.Value(UserIDContextKey).(string)
+		if !ok {
+			handler.ServeHTTP(w, req)
+			return
+		}
 
-		handler.ServeHTTP(w, req)
+		currentSelector, err := fields.ParseSelector(info.FieldSelector)
+		if err != nil {
+			responsewriters.InternalError(w, req, fmt.Errorf("failed to parse field selector: %w", err))
+			return
+		}
+
+		email, found, err := lookup(ctx, userID)
+		if err != nil {
+			responsewriters.InternalError(w, req, err)
+			return
+		}
+		hash := noInviteeEmailHash
+		if found && email != "" {
+			hash = iamv1alpha1.InviteeEmailHash(email)
+		}
+
+		filteredSelector := fields.Nothing()
+		for _, r := range currentSelector.Requirements() {
+			if r.Field == UserInvitationInviteeUserFieldSelector || r.Field == UserInvitationInviteeEmailHashFieldSelector {
+				continue
+			}
+			filteredSelector = fields.AndSelectors(filteredSelector, fields.OneTermEqualSelector(r.Field, r.Value))
+		}
+
+		newSelector := fields.AndSelectors(filteredSelector, fields.SelectorFromSet(fields.Set{
+			UserInvitationInviteeEmailHashFieldSelector: hash,
+		}))
+
+		info.FieldSelector = newSelector.String()
+
+		query, err := url.ParseQuery(req.URL.RawQuery)
+		if err != nil {
+			responsewriters.InternalError(w, req, fmt.Errorf("failed to parse url query: %w", err))
+			return
+		}
+		query.Del("fieldSelector")
+		query.Add("fieldSelector", info.FieldSelector)
+		req.URL.RawQuery = query.Encode()
+
+		handler.ServeHTTP(w, req.WithContext(request.WithRequestInfo(ctx, info)))
 	})
 }

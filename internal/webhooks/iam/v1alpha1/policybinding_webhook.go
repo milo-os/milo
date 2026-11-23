@@ -42,6 +42,7 @@ func SetupPolicyBindingWebhooksWithManager(mgr ctrl.Manager, assignableRolesName
 // +kubebuilder:webhook:path=/validate-iam-miloapis-com-v1alpha1-policybinding,mutating=false,failurePolicy=fail,sideEffects=None,groups=iam.miloapis.com,resources=policybindings,verbs=create;update;delete,versions=v1alpha1,name=vpolicybinding.iam.miloapis.com,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects,verbs=get
+// +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=get;list;watch
 
 // PolicyBindingMutator resolves the uid of each PolicyBinding subject from its
 // name. Callers may reference a User, Group, or ServiceAccount by name without
@@ -117,12 +118,25 @@ func (m *PolicyBindingMutator) resolveSubjectUID(ctx context.Context, subject *i
 
 	switch subject.Kind {
 	case "User":
+		if orgNamespace != "" {
+			user, err := orgMemberUser(ctx, m.client, orgNamespace, subject.Name)
+			if err != nil {
+				return "", field.InternalError(namePath, err)
+			}
+			if user == nil {
+				return "", orgUserNotFoundError(namePath, subject.Name)
+			}
+			return string(user.GetUID()), nil
+		}
 		user := &iamv1alpha1.User{}
 		if err := m.client.Get(ctx, client.ObjectKey{Name: subject.Name}, user); err != nil {
 			return "", lookupFieldError(namePath, subject.Name, "User", err)
 		}
 		return string(user.GetUID()), nil
 	case "ServiceAccount":
+		if orgNamespace != "" {
+			return "", field.Required(subjectPath.Child("uid"), "a ServiceAccount subject in organization scope must set uid")
+		}
 		sa := &iamv1alpha1.ServiceAccount{}
 		if err := m.client.Get(ctx, client.ObjectKey{Name: subject.Name}, sa); err != nil {
 			return "", lookupFieldError(namePath, subject.Name, "ServiceAccount", err)
@@ -156,6 +170,37 @@ func lookupFieldError(namePath *field.Path, name, kind string, err error) *field
 		return notFound
 	}
 	return field.InternalError(namePath, fmt.Errorf("failed to get %s %q: %w", kind, name, err))
+}
+
+func orgUserNotFoundError(namePath *field.Path, name string) *field.Error {
+	notFound := field.NotFound(namePath, name)
+	notFound.Detail = fmt.Sprintf("User %q is not a member of the organization; cannot resolve subject uid", name)
+	return notFound
+}
+
+func orgMemberUser(ctx context.Context, c client.Client, orgNamespace, name string) (*iamv1alpha1.User, error) {
+	var memberships resourcemanagerv1alpha1.OrganizationMembershipList
+	if err := c.List(ctx, &memberships, client.InNamespace(orgNamespace)); err != nil {
+		return nil, fmt.Errorf("failed to list organization memberships: %w", err)
+	}
+	member := false
+	for i := range memberships.Items {
+		if memberships.Items[i].Spec.UserRef.Name == name {
+			member = true
+			break
+		}
+	}
+	if !member {
+		return nil, nil
+	}
+	user := &iamv1alpha1.User{}
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, user); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get User %q: %w", name, err)
+	}
+	return user, nil
 }
 
 func orgGroupNotFoundError(namePath *field.Path, name, orgNamespace string) *field.Error {
@@ -208,14 +253,14 @@ type PolicyBindingValidator struct {
 }
 
 func (v *PolicyBindingValidator) ValidateCreate(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
-	return v.validateOrgContextRestrictions(ctx, pb)
+	return v.validateOrgContextRestrictions(ctx, pb, nil)
 }
 
 func (v *PolicyBindingValidator) ValidateUpdate(ctx context.Context, oldPB, newPB *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
 	// roleRef and resourceSelector are immutable via CEL, but subjects are not:
 	// an org holder could update a binding to swap in a User. Re-run the same
 	// org-context restrictions on the new object.
-	return v.validateOrgContextRestrictions(ctx, newPB)
+	return v.validateOrgContextRestrictions(ctx, newPB, oldPB.Spec.Subjects)
 }
 
 func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
@@ -322,7 +367,7 @@ func otherParentKind(ctx context.Context) (string, bool) {
 // to a PolicyBinding. When the request is not made in an organization context it
 // returns nil, nil so platform-scope and internal-controller bindings pass
 // through unchanged.
-func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
+func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding, previousSubjects []iamv1alpha1.Subject) (admission.Warnings, error) {
 	orgID, isOrgContext, err := policyBindingOrgContextFromRequest(ctx)
 	if err != nil {
 		return nil, err
@@ -412,7 +457,7 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
-	errs = append(errs, v.validateOrgSubjects(ctx, pb, resourcemanagerv1alpha1.OrganizationNamespace(orgID))...)
+	errs = append(errs, v.validateOrgSubjects(ctx, pb, previousSubjects, resourcemanagerv1alpha1.OrganizationNamespace(orgID))...)
 
 	// The bound role must be an assignable role in the assignable-roles
 	// namespace, and must actually exist there. This stops an org holder from
@@ -427,9 +472,16 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	return nil, nil
 }
 
-func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *iamv1alpha1.PolicyBinding, orgNamespace string) field.ErrorList {
+func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *iamv1alpha1.PolicyBinding, previousSubjects []iamv1alpha1.Subject, orgNamespace string) field.ErrorList {
+	unchanged := make(map[iamv1alpha1.Subject]struct{}, len(previousSubjects))
+	for _, s := range previousSubjects {
+		unchanged[s] = struct{}{}
+	}
 	var errs field.ErrorList
 	for i, subject := range pb.Spec.Subjects {
+		if _, ok := unchanged[subject]; ok {
+			continue
+		}
 		subjectPath := field.NewPath("spec", "subjects").Index(i)
 		namePath := subjectPath.Child("name")
 		switch subject.Kind {
@@ -457,13 +509,13 @@ func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *ia
 				errs = append(errs, orgGroupNotFoundError(namePath, subject.Name, orgNamespace))
 			}
 		case "User":
-			user := &iamv1alpha1.User{}
-			if err := v.client.Get(ctx, client.ObjectKey{Name: subject.Name}, user); err != nil {
-				errs = append(errs, lookupFieldError(namePath, subject.Name, "User", err))
+			user, err := orgMemberUser(ctx, v.client, orgNamespace, subject.Name)
+			if err != nil {
+				errs = append(errs, field.InternalError(namePath, err))
 				continue
 			}
-			if string(user.GetUID()) != subject.UID {
-				errs = append(errs, field.Invalid(subjectPath.Child("uid"), subject.UID, fmt.Sprintf("uid does not match User %q", subject.Name)))
+			if user == nil || string(user.GetUID()) != subject.UID {
+				errs = append(errs, orgUserNotFoundError(namePath, subject.Name))
 			}
 		}
 	}

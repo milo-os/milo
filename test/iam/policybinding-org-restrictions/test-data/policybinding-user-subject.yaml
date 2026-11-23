@@ -9,9 +9,8 @@ spec:
   roleRef:
     name: some-role
     namespace: datum-cloud
-  # A User subject is allowed in organization context: the org-containment
-  # checks (namespace + in-org Project target) keep the grant inside the org,
-  # so the subject kind is unrestricted.
+  # A User subject is allowed in organization context when the user is a
+  # member of the organization.
   subjects:
     - kind: User
       name: pb-user
