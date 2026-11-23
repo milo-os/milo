@@ -43,8 +43,10 @@ func (e *feedEvent) size() int { return len(e.value) + len(e.prevValue) }
 // however the rows interleave.
 type sequencer struct {
 	highestCounter int64
-	heldBack       map[int64]*feedEvent
-	log            eventRing
+	// counterCommitted is when the counter reached highestCounter.
+	counterCommitted hlc
+	heldBack         map[int64]*feedEvent
+	log              eventRing
 }
 
 // sequenced is what one step of the sequencer did: the writes it released, in
@@ -58,10 +60,28 @@ func newSequencer(rev int64, replay replayConfig) *sequencer {
 	return &sequencer{highestCounter: rev, heldBack: map[int64]*feedEvent{}, log: eventRing{base: rev, limits: replay}}
 }
 
-// writeCounter notes the counter row at rev.
-func (s *sequencer) writeCounter(rev int64, now time.Time) sequenced {
-	s.highestCounter = max(s.highestCounter, rev)
+// writeCounter notes the counter row at rev, committed then.
+func (s *sequencer) writeCounter(rev int64, committed hlc, now time.Time) sequenced {
+	if rev > s.highestCounter {
+		s.highestCounter, s.counterCommitted = rev, committed
+	}
 	return s.release(now, 0)
+}
+
+// lost reports whether a revision the sequencer waits for can no longer
+// arrive. Revisions commit in order, and the feed has delivered every write
+// committed by resolved, so a later write committed by then means the one
+// waited for was never sent.
+func (s *sequencer) lost(resolved hlc) bool {
+	if s.log.end() < s.highestCounter && !resolved.before(s.counterCommitted) {
+		return true
+	}
+	for _, e := range s.heldBack {
+		if !resolved.before(e.committed) {
+			return true
+		}
+	}
+	return false
 }
 
 // write notes e. A write released before, which a resumed feed sends again,

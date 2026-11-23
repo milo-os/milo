@@ -35,6 +35,10 @@ func (t hlc) String() string { return fmt.Sprintf("%d.%010d", t.wallNanos, t.log
 
 func (t hlc) isZero() bool { return t == hlc{} }
 
+func (t hlc) before(u hlc) bool {
+	return t.wallNanos < u.wallNanos || t.wallNanos == u.wallNanos && t.logical < u.logical
+}
+
 func (t hlc) time() time.Time { return time.Unix(0, t.wallNanos) }
 
 // prev is the timestamp just before t. Stepping back the wall time alone would

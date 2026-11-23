@@ -34,7 +34,7 @@ func TestSequencerReleasesInOrder(t *testing.T) {
 			var released []int64
 			for _, rev := range order {
 				if rev == 0 {
-					released = append(released, revs(s.writeCounter(4, now).released)...)
+					released = append(released, revs(s.writeCounter(4, hlc{}, now).released)...)
 				} else {
 					released = append(released, revs(s.write(&feedEvent{rev: rev}, now).released)...)
 				}
@@ -56,7 +56,7 @@ func TestSequencerAccountsForHeldBackBytes(t *testing.T) {
 	require.Equal(t, 3, write(3, "abc"), "held back behind revision 2")
 	require.Equal(t, 2, write(3, "abcde"), "a resent copy replaces the first")
 	require.Equal(t, 2, write(2, "xy"), "held back until the counter passes it")
-	r := s.writeCounter(3, now)
+	r := s.writeCounter(3, hlc{}, now)
 	require.Equal(t, []int64{2, 3}, revs(r.released))
 	require.Equal(t, -7, r.heldDelta)
 	require.Zero(t, s.heldBackWrites())
@@ -432,4 +432,28 @@ func TestRevisionTimestampsExpireByCommitTime(t *testing.T) {
 	got, ok := r.get("project", 3)
 	require.True(t, ok)
 	require.Equal(t, recent, got)
+}
+
+// A revision still missing once the feed has resolved a later one's commit
+// time was never sent, so the hub reports it instead of waiting for it.
+func TestHubFindsLostRevisions(t *testing.T) {
+	ts := func(n int64) hlc { return hlc{wallNanos: n} }
+	write := func(h *hub, key string, rev, at int64) {
+		require.NoError(t, h.write(&feedRow{Project: "project", Key: key, RV: rev}, nil, ts(at)))
+	}
+
+	h := memoryHub()
+	h.reset(map[string]int64{"project": 5})
+	write(h, "/pods/b", 7, 20)
+	require.NoError(t, h.resolved(ts(19)), "revision 6 may still arrive")
+	require.ErrorIs(t, h.resolved(ts(20)), errLost, "revision 6 committed before 7")
+
+	h.reset(map[string]int64{"project": 5})
+	write(h, "", 7, 20)
+	require.ErrorIs(t, h.resolved(ts(20)), errLost, "the counter passed revisions that never came")
+
+	h.reset(map[string]int64{"project": 5})
+	write(h, "/pods/a", 6, 10)
+	write(h, "", 6, 10)
+	require.NoError(t, h.resolved(ts(30)), "everything arrived")
 }

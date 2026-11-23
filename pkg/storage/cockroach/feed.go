@@ -42,6 +42,10 @@ type feedHandler interface {
 	// and the write's commit timestamp. An error means the handler can't go on
 	// from here, and the feed starts again from a new baseline.
 	write(after, before *feedRow, committed hlc) error
+	// resolved notes that every write committed by ts has been handed over.
+	// An error means a write is missing, and the feed starts again from a new
+	// baseline.
+	resolved(ts hlc) error
 }
 
 // feed follows one changefeed over the objects table. After a drop it resumes
@@ -117,8 +121,11 @@ func (f *feed) run(ctx context.Context) {
 			cursor = hlc{}
 			failures = 0
 			reason := "reset"
-			if errors.Is(err, errHeldBack) {
+			switch {
+			case errors.Is(err, errHeldBack):
 				reason = "held_back"
+			case errors.Is(err, errLost):
+				reason = "lost"
 			}
 			feedRestarts.WithLabelValues(reason).Inc()
 		} else {
@@ -211,6 +218,9 @@ func (f *feed) follow(ctx context.Context, cursor hlc, back time.Duration) (hlc,
 		stall.Reset(feedStallTimeout)
 		switch {
 		case !msg.Resolved.isZero():
+			if err := f.handler.resolved(msg.Resolved); err != nil {
+				return cursor, feedReset, err
+			}
 			cursor = msg.Resolved
 			f.resolved.Store(msg.Resolved.wallNanos)
 			if msg.Resolved.wallNanos >= f.startupTarget.Load() {

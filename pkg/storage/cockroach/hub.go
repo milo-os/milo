@@ -61,6 +61,10 @@ const maxHeldBackBytes = 1 << 30
 // errHeldBack reports that the hub gave up holding back writes.
 var errHeldBack = errors.New("the watch hub holds back more than its bound of writes waiting for earlier revisions")
 
+// errLost reports a revision the feed will never deliver, such as one written
+// before the changefeed it reads started.
+var errLost = errors.New("the watch feed skipped a revision")
+
 // projectStream is one project's sequencer and the watches following it.
 type projectStream struct {
 	seq      *sequencer
@@ -152,7 +156,7 @@ func (h *hub) write(after, before *feedRow, committed hlc) error {
 	t := h.projectLocked(after.Project)
 	var r sequenced
 	if e == nil {
-		r = t.seq.writeCounter(after.RV, now)
+		r = t.seq.writeCounter(after.RV, committed, now)
 	} else {
 		r = t.seq.write(e, now)
 	}
@@ -167,6 +171,18 @@ func (h *hub) write(after, before *feedRow, committed hlc) error {
 	h.heldBackBytes += r.heldDelta
 	if h.heldBackBytes > h.config.maxHeldBackBytes {
 		return errHeldBack
+	}
+	return nil
+}
+
+// resolved implements feedHandler.
+func (h *hub) resolved(ts hlc) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for project, t := range h.projects {
+		if t.seq.lost(ts) {
+			return fmt.Errorf("%w: project %q waits for revision %d", errLost, project, t.seq.latest()+1)
+		}
 	}
 	return nil
 }

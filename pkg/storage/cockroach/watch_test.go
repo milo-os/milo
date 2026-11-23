@@ -343,6 +343,8 @@ func (failingHandler) reset(map[string]int64) {}
 
 func (failingHandler) write(*feedRow, *feedRow, hlc) error { return errors.New("handler failed") }
 
+func (failingHandler) resolved(hlc) error { return nil }
+
 // A row the handler can't take ends the changefeed at once, so the feed
 // resets without waiting out the stall watchdog.
 func TestFeedStopsPromptlyOnHandlerFailure(t *testing.T) {
