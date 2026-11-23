@@ -109,6 +109,41 @@ tests:
     requestObject:
       status: {}
   exp_no_match: true
+# Authorization refuses a create before the API server reads its body, so the
+# event has no object name and no request body.
+- name: 'notification.miloapis.com-contact: a refused create is not an activity'
+  policy: notification.miloapis.com-contact
+  audit:
+    verb: create
+    user:
+      username: signup-form@example.identity.miloapis.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      namespace: milo-system
+    requestURI: /apis/notification.miloapis.com/v1alpha1/namespaces/milo-system/contacts
+    responseStatus:
+      code: 403
+  exp_no_match: true
+- name: 'notification.miloapis.com-contact: a dry-run create is not an activity'
+  policy: notification.miloapis.com-contact
+  audit:
+    verb: create
+    user:
+      username: alice@example.com
+    objectRef:
+      apiGroup: notification.miloapis.com
+      resource: contacts
+      name: c-bob
+    requestURI: /apis/notification.miloapis.com/v1alpha1/namespaces/default/contacts?dryRun=All
+    responseStatus:
+      code: 201
+    requestObject:
+      metadata:
+        name: c-bob
+      spec:
+        email: bob@example.com
+  exp_no_match: true
 - name: 'notification.miloapis.com-contactgroup: create with a display name'
   audit:
     verb: create
