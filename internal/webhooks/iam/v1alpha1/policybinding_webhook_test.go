@@ -836,6 +836,12 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
+	departed := iamv1alpha1.Subject{Kind: "User", Name: "carol", UID: "carol-uid"}
+	departedBinding := saBinding.DeepCopy()
+	departedBinding.Spec.Subjects = append(departedBinding.Spec.Subjects, departed)
+	relabeled := departedBinding.DeepCopy()
+	relabeled.Labels = map[string]string{"team": "ops"}
+
 	tests := map[string]struct {
 		ctx         context.Context
 		oldPB       *iamv1alpha1.PolicyBinding
@@ -900,6 +906,30 @@ func TestPolicyBindingValidator_ValidateUpdate(t *testing.T) {
 			}(),
 			expectError: true,
 			contains:    `Group "loaders" does not exist in the organization's namespace "organization-acme"`,
+		},
+		"label edit keeps a subject who has left the organization": {
+			ctx:         orgContextRequest(orgA),
+			oldPB:       departedBinding,
+			newPB:       relabeled,
+			expectError: false,
+		},
+		"update that adds a user who is not a member is denied": {
+			ctx:         orgContextRequest(orgA),
+			oldPB:       saBinding,
+			newPB:       departedBinding,
+			expectError: true,
+			contains:    `User "carol" is not a member of the organization`,
+		},
+		"update that changes the uid of a kept user subject is denied": {
+			ctx:   orgContextRequest(orgA),
+			oldPB: departedBinding,
+			newPB: func() *iamv1alpha1.PolicyBinding {
+				b := departedBinding.DeepCopy()
+				b.Spec.Subjects[1].UID = "other-uid"
+				return b
+			}(),
+			expectError: true,
+			contains:    `User "carol" is not a member of the organization`,
 		},
 		"project context fails closed on update": {
 			ctx:         projectContextRequest("project-a"),

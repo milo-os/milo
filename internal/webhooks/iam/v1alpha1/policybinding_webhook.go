@@ -253,14 +253,14 @@ type PolicyBindingValidator struct {
 }
 
 func (v *PolicyBindingValidator) ValidateCreate(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
-	return v.validateOrgContextRestrictions(ctx, pb)
+	return v.validateOrgContextRestrictions(ctx, pb, nil)
 }
 
 func (v *PolicyBindingValidator) ValidateUpdate(ctx context.Context, oldPB, newPB *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
 	// roleRef and resourceSelector are immutable via CEL, but subjects are not:
 	// an org holder could update a binding to swap in a User. Re-run the same
 	// org-context restrictions on the new object.
-	return v.validateOrgContextRestrictions(ctx, newPB)
+	return v.validateOrgContextRestrictions(ctx, newPB, oldPB.Spec.Subjects)
 }
 
 func (v *PolicyBindingValidator) ValidateDelete(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
@@ -367,7 +367,7 @@ func otherParentKind(ctx context.Context) (string, bool) {
 // to a PolicyBinding. When the request is not made in an organization context it
 // returns nil, nil so platform-scope and internal-controller bindings pass
 // through unchanged.
-func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding) (admission.Warnings, error) {
+func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Context, pb *iamv1alpha1.PolicyBinding, previousSubjects []iamv1alpha1.Subject) (admission.Warnings, error) {
 	orgID, isOrgContext, err := policyBindingOrgContextFromRequest(ctx)
 	if err != nil {
 		return nil, err
@@ -457,7 +457,7 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 		))
 	}
 
-	errs = append(errs, v.validateOrgSubjects(ctx, pb, resourcemanagerv1alpha1.OrganizationNamespace(orgID))...)
+	errs = append(errs, v.validateOrgSubjects(ctx, pb, previousSubjects, resourcemanagerv1alpha1.OrganizationNamespace(orgID))...)
 
 	// The bound role must be an assignable role in the assignable-roles
 	// namespace, and must actually exist there. This stops an org holder from
@@ -472,9 +472,16 @@ func (v *PolicyBindingValidator) validateOrgContextRestrictions(ctx context.Cont
 	return nil, nil
 }
 
-func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *iamv1alpha1.PolicyBinding, orgNamespace string) field.ErrorList {
+func (v *PolicyBindingValidator) validateOrgSubjects(ctx context.Context, pb *iamv1alpha1.PolicyBinding, previousSubjects []iamv1alpha1.Subject, orgNamespace string) field.ErrorList {
+	unchanged := make(map[iamv1alpha1.Subject]struct{}, len(previousSubjects))
+	for _, s := range previousSubjects {
+		unchanged[s] = struct{}{}
+	}
 	var errs field.ErrorList
 	for i, subject := range pb.Spec.Subjects {
+		if _, ok := unchanged[subject]; ok {
+			continue
+		}
 		subjectPath := field.NewPath("spec", "subjects").Index(i)
 		namePath := subjectPath.Child("name")
 		switch subject.Kind {
