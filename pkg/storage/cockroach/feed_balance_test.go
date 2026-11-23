@@ -59,7 +59,7 @@ func TestFeedMovesOffACrowdedNode(t *testing.T) {
 		}
 		return list(ctx)
 	}
-	f := &feed{pool: b.pool, balancer: balancer, handler: memoryHubWith(defaultHubConfig())}
+	f := &feed{pool: b.pool, source: sinkless{balancer: balancer}, handler: memoryHubWith(defaultHubConfig())}
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := f.follow(ctx, hlc{}, 0)

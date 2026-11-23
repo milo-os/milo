@@ -207,7 +207,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	b.onClose(func() { poolMetrics.forget(pool) })
 	b.hub = newHub(b.revTS, o.hub)
 	balancer := newFeedBalancer(pool, cfg.ConnConfig)
-	b.feed = &feed{pool: pool, balancer: balancer, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
+	b.feed = &feed{pool: pool, source: sinkless{balancer: balancer}, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
 
 	projectWrites := defaultProjectWrites
 	if o.groupCommit {

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"k8s.io/klog/v2"
 )
@@ -49,7 +48,7 @@ type feedHandler interface {
 // from its cursor, and when it can't, it starts again from a new baseline.
 type feed struct {
 	pool       *pgxpool.Pool
-	balancer   *feedBalancer
+	source     changefeedSource
 	retryDelay time.Duration
 	handler    feedHandler
 	// prefill is how far back the first baseline goes, so a replica that
@@ -153,6 +152,37 @@ const (
 	feedReset
 )
 
+// changefeedSource opens changefeeds over the objects table.
+type changefeedSource interface {
+	// open starts a changefeed of every write committed after cursor. It
+	// stops when ctx ends.
+	open(ctx context.Context, cursor hlc) (changefeedStream, error)
+	// refused reports whether err, from a changefeed that delivered nothing,
+	// means it can't start from its cursor, rather than that it dropped.
+	refused(err error) bool
+}
+
+// changefeedStream is one running changefeed.
+type changefeedStream interface {
+	// next waits for the next message, and returns false once the changefeed
+	// has ended.
+	next() (feedMessage, bool)
+	// err returns why the changefeed ended.
+	err() error
+	close()
+}
+
+// feedOptions make a changefeed send the messages the hub reads: each row's
+// value before and after a write, its commit timestamp, and resolved
+// timestamps every second. min_checkpoint_frequency defaults to 30s, which
+// would hold resolved timestamps, and with them the readiness lag, back that
+// long.
+var feedOptions = []string{"updated", "diff", "resolved = '1s'", "min_checkpoint_frequency = '1s'"}
+
+// errBadMessage ends a changefeed whose message can't be decoded, which would
+// fail again on every resume.
+var errBadMessage = errors.New("bad changefeed message")
+
 // follow runs one changefeed from cursor, or from a new baseline taken back
 // ago when cursor is zero, until it fails. It returns where the next
 // changefeed resumes and why this one stopped.
@@ -163,24 +193,22 @@ func (f *feed) follow(ctx context.Context, cursor hlc, back time.Duration) (hlc,
 			return hlc{}, feedRefused, fmt.Errorf("load the watch baseline: %w", err)
 		}
 	}
-	stream, kind, err := f.openChangefeed(ctx, cursor)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stall := time.AfterFunc(feedStallTimeout, func() { cancel(errFeedStalled) })
+	defer stall.Stop()
+	stream, err := f.source.open(ctx, cursor)
 	if err != nil {
-		return cursor, kind, err
+		return cursor, f.startFailure(err), err
 	}
 	defer stream.close()
 	f.setRunning(true)
 	defer f.setRunning(false)
 
 	received := false
-	for values, ok := stream.next(); ok; values, ok = stream.next() {
+	for msg, ok := stream.next(); ok; msg, ok = stream.next() {
 		received = true
-		if len(values) != 3 {
-			return cursor, feedReset, fmt.Errorf("changefeed row has %d columns, want 3", len(values))
-		}
-		msg, err := decodeFeedMessage(values[2])
-		if err != nil {
-			return cursor, feedReset, err
-		}
+		stall.Reset(feedStallTimeout)
 		switch {
 		case !msg.Resolved.isZero():
 			cursor = msg.Resolved
@@ -197,87 +225,21 @@ func (f *feed) follow(ctx context.Context, cursor hlc, back time.Duration) (hlc,
 		// written, so there is nothing to watch.
 	}
 	err = stream.err()
-	if received {
+	if cause := context.Cause(ctx); errors.Is(cause, errFeedStalled) {
+		err = cause
+	}
+	switch {
+	case errors.Is(err, errBadMessage):
+		return cursor, feedReset, err
+	case received:
 		return cursor, feedDropped, err
-	}
-	return cursor, classifyStartError(err), err
-}
-
-// changefeedStream is one running changefeed: the connection it holds, the
-// rows it streams, and a watchdog that cancels it when the rows stop coming.
-type changefeedStream struct {
-	ctx    context.Context
-	cancel context.CancelCauseFunc
-	stall  *time.Timer
-	conn   *pgx.Conn
-	rows   pgx.Rows
-}
-
-// openChangefeed starts a changefeed over the objects table from cursor, and
-// says why it couldn't.
-func (f *feed) openChangefeed(ctx context.Context, cursor hlc) (*changefeedStream, feedFailure, error) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	s := &changefeedStream{ctx: ctx, cancel: cancel}
-	s.stall = time.AfterFunc(feedStallTimeout, func() { cancel(errFeedStalled) })
-	// A changefeed holds its connection for as long as it runs, so it gets one
-	// of its own rather than one from the pool.
-	conn, err := f.balancer.dial(ctx, func() { cancel(errFeedRebalanced) })
-	if err != nil {
-		s.close()
-		return nil, feedDropped, err
-	}
-	s.conn = conn
-	// min_checkpoint_frequency defaults to 30s, which would hold resolved
-	// timestamps, and with them the readiness lag, back that long.
-	rows, err := conn.Query(ctx, `CREATE CHANGEFEED FOR TABLE objects WITH updated, diff, resolved = '1s', min_checkpoint_frequency = '1s', cursor = '`+cursor.String()+`'`)
-	if err != nil {
-		s.close()
-		return nil, classifyStartError(err), err
-	}
-	s.rows = rows
-	return s, 0, nil
-}
-
-// next waits for the changefeed's next row and returns its columns, or false
-// once the changefeed has ended.
-func (s *changefeedStream) next() ([][]byte, bool) {
-	if !s.rows.Next() {
-		return nil, false
-	}
-	s.stall.Reset(feedStallTimeout)
-	return s.rows.RawValues(), true
-}
-
-// err returns why the changefeed ended.
-func (s *changefeedStream) err() error {
-	if cause := context.Cause(s.ctx); errors.Is(cause, errFeedStalled) || errors.Is(cause, errFeedRebalanced) {
-		return cause
-	}
-	if err := s.rows.Err(); err != nil {
-		return err
-	}
-	return errors.New("the changefeed ended")
-}
-
-// close ends the changefeed and releases its connection.
-func (s *changefeedStream) close() {
-	// Closing rows reads until the query ends, and a changefeed never does,
-	// so the query is cancelled first.
-	s.cancel(nil)
-	s.stall.Stop()
-	if s.rows != nil {
-		s.rows.Close()
-	}
-	if s.conn != nil {
-		_ = s.conn.Close(context.WithoutCancel(s.ctx))
+	default:
+		return cursor, f.startFailure(err), err
 	}
 }
 
-// classifyStartError classifies an error from a changefeed that sent no row.
-// A database error other than a cancelled query means the database refused
-// the changefeed.
-func classifyStartError(err error) feedFailure {
-	if pe, ok := errors.AsType[*pgconn.PgError](err); ok && pe.Code != codeQueryCanceled {
+func (f *feed) startFailure(err error) feedFailure {
+	if f.source.refused(err) {
 		return feedRefused
 	}
 	return feedDropped
@@ -391,7 +353,7 @@ type feedMessage struct {
 func decodeFeedMessage(data []byte) (feedMessage, error) {
 	var msg feedMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		return msg, fmt.Errorf("decode changefeed message: %w", err)
+		return msg, fmt.Errorf("%w: %w", errBadMessage, err)
 	}
 	return msg, nil
 }
