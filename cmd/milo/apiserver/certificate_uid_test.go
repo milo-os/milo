@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	x509request "k8s.io/apiserver/pkg/authentication/request/x509"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/server"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
@@ -36,6 +38,7 @@ const (
 	inactiveUID   = "9e2d7f40-1c55-4b8e-9a0d-3f6b2c7d8e22"
 	deletedUID    = "c4a1e9b3-7d22-4f0a-b6c5-8e9f0a1b2c33"
 	personUID     = "340583683847097652"
+	rootUID       = "7d1b4c66-2e0f-4a39-8c71-5a9e3b0d4f44"
 )
 
 type testCA struct {
@@ -143,6 +146,7 @@ func TestCertificateUIDsThroughTheHandlerChain(t *testing.T) {
 			serviceAccountWith(notOptedInUID, nil, "Active"),
 			serviceAccountWith(inactiveUID, optIn, "Inactive"),
 		},
+		"": {serviceAccountWith(rootUID, optIn, "Active")},
 	}
 	lookup := func(_ context.Context, project string) ([]unstructured.Unstructured, error) {
 		return controlPlanes[project], nil
@@ -163,7 +167,12 @@ func TestCertificateUIDsThroughTheHandlerChain(t *testing.T) {
 	c.Authentication.Authenticator = x509request.New(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, x509request.CommonNameUserConversion)
 	c.Authorization.Authorizer = authorizer.AuthorizerFunc(bindings.Authorize)
 
-	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	var seenUID atomic.Value
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, _ := genericapirequest.UserFrom(r.Context())
+		seenUID.Store(u.GetUID())
+		w.WriteHeader(http.StatusOK)
+	})
 	guard := certidentity.NewGuard(lookup, time.Minute)
 	handler := datumfilters.ProjectRouterWithRequestInfo(DefaultBuildHandlerChain(ok, c, nil, guard), c.RequestInfoResolver)
 
@@ -207,5 +216,55 @@ func TestCertificateUIDsThroughTheHandlerChain(t *testing.T) {
 				t.Errorf("status = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCertificateUIDIsRemovedOutsideProjects(t *testing.T) {
+	ca := newTestCA(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.cert)
+
+	optIn := map[string]string{certidentity.OptInAnnotation: certidentity.OptInValue}
+	lookup := func(_ context.Context, project string) ([]unstructured.Unstructured, error) {
+		if project == "" {
+			return []unstructured.Unstructured{serviceAccountWith(rootUID, optIn, "Active")}, nil
+		}
+		return nil, nil
+	}
+
+	c := server.NewConfig(legacyscheme.Codecs)
+	c.RequestInfoResolver = server.NewRequestInfoResolver(c)
+	c.FeatureGate = utilfeature.DefaultFeatureGate
+	c.Authentication.Authenticator = x509request.New(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, x509request.CommonNameUserConversion)
+	c.Authorization.Authorizer = authorizer.AuthorizerFunc(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+		return authorizer.DecisionAllow, "", nil
+	})
+
+	var seenUID atomic.Value
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, _ := genericapirequest.UserFrom(r.Context())
+		seenUID.Store(u.GetUID())
+		w.WriteHeader(http.StatusOK)
+	})
+	guard := certidentity.NewGuard(lookup, time.Minute)
+	handler := datumfilters.ProjectRouterWithRequestInfo(DefaultBuildHandlerChain(ok, c, nil, guard), c.RequestInfoResolver)
+
+	srv := httptest.NewUnstartedServer(handler)
+	srv.TLS = &tls.Config{ClientAuth: tls.RequestClientCert}
+	srv.StartTLS()
+	defer srv.Close()
+
+	transport := srv.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig.Certificates = []tls.Certificate{ca.clientCert(t, "system:controller@example.miloapis.com", rootUID)}
+	resp, err := (&http.Client{Transport: transport}).Get(srv.URL + "/api/v1/namespaces/default/configmaps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want the request to reach the handler", resp.StatusCode)
+	}
+	if got := seenUID.Load(); got != "" {
+		t.Errorf("UID on a root request = %q, want it removed", got)
 	}
 }

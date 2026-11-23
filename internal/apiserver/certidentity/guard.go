@@ -3,8 +3,8 @@
 // subject, and Milo's authorizer trusts any UID it is given, so anyone who
 // can get a certificate signed by the client CA could otherwise claim any
 // user's or service account's identity. The guard keeps a certificate UID
-// only when it names an active ServiceAccount in the request's control plane
-// that has opted in to certificate authentication.
+// only when it names an active ServiceAccount in the project control plane the
+// request targets that has opted in to certificate authentication.
 package certidentity
 
 import (
@@ -35,6 +35,10 @@ const (
 	// working.
 	DefaultTTL = 30 * time.Second
 
+	// FailureTTL bounds how long a failed lookup is reused, so an outage costs
+	// one lookup per project in that time rather than one per request.
+	FailureTTL = 5 * time.Second
+
 	certificateCredentialPrefix = "X509SHA256="
 	cacheSize                   = 4096
 	lookupTimeout               = 5 * time.Second
@@ -45,6 +49,7 @@ type Reason string
 
 const (
 	ReasonAllowed      Reason = "Allowed"
+	ReasonNoProject    Reason = "NoProject"
 	ReasonNotFound     Reason = "NotFound"
 	ReasonNotOptedIn   Reason = "NotOptedIn"
 	ReasonInactive     Reason = "Inactive"
@@ -52,29 +57,35 @@ const (
 	ReasonLookupFailed Reason = "LookupFailed"
 )
 
-// Lookup lists the ServiceAccounts in a project's control plane, or in the
-// root control plane when project is empty. A control plane that does not
-// serve ServiceAccounts has none.
+// Lookup lists the ServiceAccounts in a project's control plane. A control
+// plane that does not serve ServiceAccounts has none.
 type Lookup func(ctx context.Context, project string) ([]unstructured.Unstructured, error)
 
-// Guard checks certificate UIDs against ServiceAccounts and caches each
-// decision for its TTL.
+// Guard checks certificate UIDs against the ServiceAccounts of the request's
+// project. It lists each project's ServiceAccounts once per TTL and matches
+// UIDs in memory.
 type Guard struct {
 	lookup   Lookup
 	ttl      time.Duration
+	failTTL  time.Duration
 	cache    *utilcache.LRUExpireCache
 	inFlight singleflight.Group
 }
 
-// NewGuard returns a Guard that resolves UIDs with lookup and reuses each
-// decision for ttl.
+type listing struct {
+	accounts []unstructured.Unstructured
+	err      error
+}
+
+// NewGuard returns a Guard that lists a project's ServiceAccounts with lookup
+// and reuses the list for ttl.
 func NewGuard(lookup Lookup, ttl time.Duration) *Guard {
 	return NewGuardWithClock(lookup, ttl, realClock{})
 }
 
 // NewGuardWithClock is NewGuard with the cache's clock supplied.
 func NewGuardWithClock(lookup Lookup, ttl time.Duration, clock utilcache.Clock) *Guard {
-	return &Guard{lookup: lookup, ttl: ttl, cache: utilcache.NewLRUExpireCacheWithClock(cacheSize, clock)}
+	return &Guard{lookup: lookup, ttl: ttl, failTTL: FailureTTL, cache: utilcache.NewLRUExpireCacheWithClock(cacheSize, clock)}
 }
 
 // Authenticator wraps delegate so that a UID taken from a client certificate
@@ -107,39 +118,49 @@ func (g *Guard) Authenticator(delegate authenticator.Request) authenticator.Requ
 }
 
 // Check reports whether uid may stand for a client certificate's holder in
-// project's control plane.
+// project's control plane. A request with no project never keeps a UID.
 func (g *Guard) Check(ctx context.Context, project, uid string) Reason {
-	key := project + "/" + uid
-	if cached, ok := g.cache.Get(key); ok {
-		return cached.(Reason)
+	reason := g.check(ctx, project, uid)
+	if reason == ReasonAllowed {
+		klog.V(2).InfoS("Client certificate UID accepted", "project", project, "uid", uid)
+	} else {
+		klog.InfoS("Client certificate UID removed; the request continues without it", "project", project, "uid", uid, "reason", reason)
 	}
-	result, _, _ := g.inFlight.Do(key, func() (any, error) {
-		reason := g.resolve(ctx, project, uid)
-		if reason != ReasonLookupFailed {
-			g.cache.Add(key, reason, g.ttl)
-		}
-		if reason == ReasonAllowed {
-			klog.V(2).InfoS("Client certificate UID accepted", "project", project, "uid", uid)
-		} else {
-			klog.InfoS("Client certificate UID removed; the request continues without it", "project", project, "uid", uid, "reason", reason)
-		}
-		return reason, nil
-	})
-	return result.(Reason)
+	return reason
 }
 
-func (g *Guard) resolve(ctx context.Context, project, uid string) Reason {
-	if project != "" && len(validation.IsDNS1123Subdomain(project)) > 0 {
+func (g *Guard) check(ctx context.Context, project, uid string) Reason {
+	if project == "" {
+		return ReasonNoProject
+	}
+	if len(validation.IsDNS1123Subdomain(project)) > 0 {
 		return ReasonNotFound
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lookupTimeout)
-	defer cancel()
-	accounts, err := g.lookup(ctx, project)
-	if err != nil {
-		klog.ErrorS(err, "Failed to look up ServiceAccounts for a client certificate UID", "project", project, "uid", uid)
+	l := g.list(ctx, project)
+	if l.err != nil {
 		return ReasonLookupFailed
 	}
-	return Decide(accounts, uid)
+	return Decide(l.accounts, uid)
+}
+
+func (g *Guard) list(ctx context.Context, project string) listing {
+	if cached, ok := g.cache.Get(project); ok {
+		return cached.(listing)
+	}
+	result, _, _ := g.inFlight.Do(project, func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lookupTimeout)
+		defer cancel()
+		accounts, err := g.lookup(ctx, project)
+		l := listing{accounts: accounts, err: err}
+		if err != nil {
+			klog.ErrorS(err, "Failed to look up ServiceAccounts for a client certificate UID", "project", project)
+			g.cache.Add(project, l, g.failTTL)
+		} else {
+			g.cache.Add(project, l, g.ttl)
+		}
+		return l, nil
+	})
+	return result.(listing)
 }
 
 // Decide reports whether uid names an opted-in, active ServiceAccount among
@@ -158,7 +179,7 @@ func Decide(accounts []unstructured.Unstructured, uid string) Reason {
 		}
 		specState, _, _ := unstructured.NestedString(sa.Object, "spec", "state")
 		statusState, _, _ := unstructured.NestedString(sa.Object, "status", "state")
-		if specState == "Inactive" || statusState == "Inactive" {
+		if (specState != "" && specState != "Active") || statusState == "Inactive" {
 			return ReasonInactive
 		}
 		return ReasonAllowed

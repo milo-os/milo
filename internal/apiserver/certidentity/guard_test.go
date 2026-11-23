@@ -3,8 +3,11 @@ package certidentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,6 +51,14 @@ func inactive(sa *unstructured.Unstructured) {
 	_ = unstructured.SetNestedField(sa.Object, "Inactive", "spec", "state")
 }
 
+func unknownState(sa *unstructured.Unstructured) {
+	_ = unstructured.SetNestedField(sa.Object, "Suspended", "spec", "state")
+}
+
+func noState(sa *unstructured.Unstructured) {
+	unstructured.RemoveNestedField(sa.Object, "spec", "state")
+}
+
 func statusInactive(sa *unstructured.Unstructured) {
 	_ = unstructured.SetNestedField(sa.Object, "Inactive", "status", "state")
 }
@@ -70,6 +81,8 @@ func TestDecide(t *testing.T) {
 		{"service account without the annotation", []unstructured.Unstructured{serviceAccount(saUID, notOptedIn)}, saUID, ReasonNotOptedIn},
 		{"annotation with another value", []unstructured.Unstructured{serviceAccount(saUID, optInValue("true"))}, saUID, ReasonNotOptedIn},
 		{"inactive in spec", []unstructured.Unstructured{serviceAccount(saUID, inactive)}, saUID, ReasonInactive},
+		{"unknown state in spec", []unstructured.Unstructured{serviceAccount(saUID, unknownState)}, saUID, ReasonInactive},
+		{"no state in spec", []unstructured.Unstructured{serviceAccount(saUID, noState)}, saUID, ReasonAllowed},
 		{"inactive in status", []unstructured.Unstructured{serviceAccount(saUID, statusInactive)}, saUID, ReasonInactive},
 		{"being deleted", []unstructured.Unstructured{serviceAccount(saUID, deleting)}, saUID, ReasonDeleting},
 		{"matches the right one of several", []unstructured.Unstructured{serviceAccount("other", notOptedIn), serviceAccount(saUID)}, saUID, ReasonAllowed},
@@ -132,7 +145,9 @@ func TestAuthenticatorKeepsUIDOfOptedInServiceAccountInItsProject(t *testing.T) 
 func TestAuthenticatorRemovesUID(t *testing.T) {
 	projects := fakeProjects{
 		"datum-cloud": {serviceAccount(saUID)},
+		"":            {serviceAccount(saUID)},
 		"opted-out":   {serviceAccount(saUID, notOptedIn)},
+		"unknown":     {serviceAccount(saUID, unknownState)},
 		"inactive":    {serviceAccount(saUID, inactive)},
 	}
 	cases := []struct {
@@ -142,9 +157,10 @@ func TestAuthenticatorRemovesUID(t *testing.T) {
 	}{
 		{"user UID", userUID, "datum-cloud"},
 		{"service account from another project", saUID, "other-project"},
-		{"root control plane without the service account", saUID, ""},
+		{"root request with an opted-in root service account", saUID, ""},
 		{"service account not opted in", saUID, "opted-out"},
 		{"inactive service account", saUID, "inactive"},
+		{"service account with an unknown state", saUID, "unknown"},
 		{"project name that is not a DNS subdomain", saUID, "../datum-cloud"},
 	}
 	for _, tc := range cases {
@@ -226,25 +242,77 @@ func TestDecisionsExpire(t *testing.T) {
 	}
 }
 
-func TestLookupFailureRemovesUIDAndIsRetried(t *testing.T) {
+func TestOneListServesEveryUIDInAProject(t *testing.T) {
+	calls := 0
+	other := "7d1b4c66-2e0f-4a39-8c71-5a9e3b0d4f44"
+	g := NewGuard(fakeProjects{"datum-cloud": {serviceAccount(saUID), serviceAccount(other, notOptedIn)}}.lookup(&calls), time.Minute)
+	if got := g.Check(context.Background(), "datum-cloud", saUID); got != ReasonAllowed {
+		t.Errorf("first UID = %s", got)
+	}
+	if got := g.Check(context.Background(), "datum-cloud", other); got != ReasonNotOptedIn {
+		t.Errorf("second UID = %s", got)
+	}
+	if got := g.Check(context.Background(), "datum-cloud", userUID); got != ReasonNotFound {
+		t.Errorf("third UID = %s", got)
+	}
+	if calls != 1 {
+		t.Errorf("lists = %d, want 1 for the project", calls)
+	}
+}
+
+func TestConcurrentChecksShareOneList(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	g := NewGuard(func(context.Context, string) ([]unstructured.Unstructured, error) {
+		calls.Add(1)
+		<-release
+		return []unstructured.Unstructured{serviceAccount(saUID)}, nil
+	}, time.Minute)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			g.Check(context.Background(), "datum-cloud", fmt.Sprintf("uid-%d", i))
+		}(i)
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if n := calls.Load(); n != 1 {
+		t.Errorf("lists = %d, want 1 for concurrent checks in one project", n)
+	}
+}
+
+func TestLookupFailureRemovesUIDAndIsRetriedAfterFailureTTL(t *testing.T) {
+	clock := testingclock.NewFakeClock(time.Now())
 	calls := 0
 	fail := true
-	g := NewGuard(func(context.Context, string) ([]unstructured.Unstructured, error) {
+	g := NewGuardWithClock(func(context.Context, string) ([]unstructured.Unstructured, error) {
 		calls++
 		if fail {
 			return nil, errors.New("unavailable")
 		}
 		return []unstructured.Unstructured{serviceAccount(saUID)}, nil
-	}, time.Minute)
+	}, DefaultTTL, clock)
 
 	if got := g.Check(context.Background(), "datum-cloud", saUID); got != ReasonLookupFailed {
 		t.Fatalf("during the outage = %s", got)
 	}
 	fail = false
+	clock.Step(FailureTTL - time.Second)
+	if got := g.Check(context.Background(), "datum-cloud", saUID); got != ReasonLookupFailed {
+		t.Errorf("within the failure TTL = %s, want the cached failure", got)
+	}
+	if calls != 1 {
+		t.Errorf("lookups within the failure TTL = %d, want 1", calls)
+	}
+	clock.Step(2 * time.Second)
 	if got := g.Check(context.Background(), "datum-cloud", saUID); got != ReasonAllowed {
-		t.Errorf("after the outage = %s, want a fresh lookup", got)
+		t.Errorf("after the failure TTL = %s, want a fresh lookup", got)
 	}
 	if calls != 2 {
-		t.Errorf("lookups = %d, want 2: a failure is not cached", calls)
+		t.Errorf("lookups = %d, want 2", calls)
 	}
 }
