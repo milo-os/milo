@@ -556,8 +556,8 @@ func (m *projectMux) startIdleSweep() {
 // watch used for the idle time, as ProjectGone retires a gone Project's; the
 // next request into the Project builds it again. The root plane's child
 // stays, and so does a child whose cache has not served yet: its first list
-// is still running, and a request is waiting for it. A resource that a
-// readiness check holds warm keeps every child.
+// is still running, and a request is waiting for it. A resource that has a
+// readiness check, on or off, keeps every child.
 func (m *projectMux) retireIdle() {
 	if isHeldWarm(m.groupResource()) {
 		return

@@ -28,10 +28,10 @@ type ReadinessRegistrar interface {
 // muxes hands a readiness check the mux the decorator built for its resource.
 // apiextensions builds a definition's storage on the first request for it,
 // through a decorator this package never calls itself. heldWarm holds the
-// resources whose children a readiness check waits for at the server's start:
-// quota admission watches a ResourceClaim right after its create, and a cache
-// that is still starting refuses that watch with a Retry-After of up to 30 s,
-// so the idle sweep never retires these children.
+// resources that have a readiness check, on or off: quota admission watches a
+// ResourceClaim right after its create, and a cache that is still starting
+// refuses that watch with a Retry-After of up to 30 s, so the idle sweep never
+// retires these children.
 var muxes = struct {
 	sync.Mutex
 	byResource map[schema.GroupResource]*projectMux
@@ -166,11 +166,12 @@ func (r *ChildrenReadiness) record(reason string, err error) error {
 }
 
 // RegisterChildrenReadiness registers r with the hook under gvr, unless the
-// operator turned the check off. The idle sweep then keeps the resource's
-// children too: the server went ready only once they served.
+// operator turned the check off. The idle sweep keeps the resource's children
+// in both cases: the check off gives up only the wait at the server's start,
+// and quota admission still watches a claim right after its create.
 func RegisterChildrenReadiness(reg ReadinessRegistrar, enabled bool, gvr metav1.GroupVersionResource, r *ChildrenReadiness) {
+	holdWarm(r.gr)
 	if enabled {
 		reg.RegisterStorage(gvr, r)
-		holdWarm(r.gr)
 	}
 }

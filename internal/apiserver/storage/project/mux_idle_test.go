@@ -286,13 +286,16 @@ func TestRootChildIsNeverIdle(t *testing.T) {
 	}
 }
 
-// TestChildrenAReadinessCheckHoldsAreKept covers a resource whose children
-// the server waits for at its start, the ResourceClaims that quota admission
-// watches: the sweep keeps them warm too, and keeps retiring other kinds.
-func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
+// TestChildrenOfAReadinessResourceAreKept covers a resource whose children
+// the server can wait for at its start, the ResourceClaims that quota
+// admission watches: the sweep keeps them warm whether or not the check is
+// on, as turning the check off gives up only the wait at the start, and
+// keeps retiring other kinds.
+func TestChildrenOfAReadinessResourceAreKept(t *testing.T) {
 	held := schema.GroupResource{Group: "idle.test.miloapis.com", Resource: "held"}
-	// The enabled case runs first: the disabled one must pass after it too.
-	for _, enabled := range []bool{true, false} {
+	// The disabled case runs first, so no mark the enabled case leaves can
+	// make it pass.
+	for _, enabled := range []bool{false, true} {
 		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
 			gvr := metav1.GroupVersionResource{Group: held.Group, Version: "v1", Resource: held.Resource}
 			RegisterChildrenReadiness(&registrar{}, enabled, gvr, NewChildrenReadiness(held, &view{}, served, 50))
@@ -303,8 +306,8 @@ func TestChildrenAReadinessCheckHoldsAreKept(t *testing.T) {
 			get(t, m, "p")
 			clk.Step(10 * testIdle)
 			m.retireIdle()
-			if want := map[bool]int{false: 1, true: 2}[enabled]; m.childCount() != want {
-				t.Fatalf("readiness check enabled=%v: expected %d children, got %d", enabled, want, m.childCount())
+			if n := m.childCount(); n != 2 {
+				t.Fatalf("readiness check enabled=%v: expected the root's and the project's children to stay, got %d children", enabled, n)
 			}
 		})
 	}
