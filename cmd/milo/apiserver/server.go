@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	crd "go.miloapis.com/milo/config/crd"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/accessowner"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
@@ -108,7 +109,12 @@ const defaultWatchCacheConsistencyCheckPeriod = time.Hour
 
 // NewCommand creates a *cobra.Command object with default parameters
 func NewCommand() *cobra.Command {
-	s := NewOptions()
+	return newCommand(NewOptions())
+}
+
+// newCommand builds the apiserver command around s, so tests can parse args
+// through the real flag wiring and inspect the options it fills in.
+func newCommand(s *options.Options) *cobra.Command {
 	var namedFlagSets cliflag.NamedFlagSets
 
 	cmd := &cobra.Command{
@@ -165,6 +171,7 @@ func NewCommand() *cobra.Command {
 	s.Features.AddFlags(namedFlagSets.FlagSet("features"))
 	s.Authentication.AddFlags(namedFlagSets.FlagSet("authentication"))
 	s.Authorization.AddFlags(namedFlagSets.FlagSet("authorization"))
+	addAdmissionFlags(namedFlagSets.FlagSet("admission"), s)
 	s.Metrics.AddFlags(namedFlagSets.FlagSet("metrics"))
 	logsapi.AddFlags(s.Logs, namedFlagSets.FlagSet("logs"))
 	s.Traces.AddFlags(namedFlagSets.FlagSet("traces"))
@@ -236,6 +243,20 @@ func NewCommand() *cobra.Command {
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
 
 	return cmd
+}
+
+// addAdmissionFlags registers --admission-control-config-file. The
+// configuration file reaches every plugin in the chain, so the webhook plugins
+// can read a kubeconfig with client credentials for each webhook.
+//
+// Only the file flag is registered. s.Admission.GenericAdmission.AddFlags
+// would also add --enable-admission-plugins and --disable-admission-plugins,
+// and one extra arg could then turn off quota, project suspension or webhook
+// enforcement without failing startup. The plugin set stays fixed by
+// NewOptions.
+func addAdmissionFlags(fs *pflag.FlagSet, s *options.Options) {
+	fs.StringVar(&s.Admission.GenericAdmission.ConfigFile, "admission-control-config-file",
+		s.Admission.GenericAdmission.ConfigFile, "File with admission control configuration.")
 }
 
 func NewOptions() *options.Options {
