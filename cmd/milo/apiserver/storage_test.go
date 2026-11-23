@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
+
+	"go.miloapis.com/milo/pkg/storage/cockroach"
 )
 
 func TestStorageOptionsAreCommandLocal(t *testing.T) {
@@ -31,6 +33,16 @@ func TestStorageOptionsAreCommandLocal(t *testing.T) {
 	require.Equal(t, 10*time.Minute, first.replayWindow)
 	require.Equal(t, 2*time.Minute, first.lagReadiness)
 	require.Equal(t, newStorageOptions(), second)
+}
+
+func TestStorageOptionsDSNFlagHidesPassword(t *testing.T) {
+	const dsn = "postgresql://milo:secret@cockroachdb:26257/milo"
+	o := newStorageOptions()
+	flags := pflag.NewFlagSet(t.Name(), pflag.ContinueOnError)
+	o.addFlags(flags)
+	require.NoError(t, flags.Parse([]string{"--cockroachdb-dsn=" + dsn}))
+	require.Equal(t, cockroach.DSN(dsn), o.dsn)
+	require.Equal(t, "cockroachdb:26257/milo", flags.Lookup("cockroachdb-dsn").Value.String())
 }
 
 func TestStorageOptionsValidation(t *testing.T) {

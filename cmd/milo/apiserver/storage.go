@@ -24,7 +24,7 @@ const (
 
 type storageOptions struct {
 	engine        string
-	dsn           string
+	dsn           cockroach.DSN
 	maxConns      int32
 	groupCommit   bool
 	projectWrites int
@@ -49,7 +49,7 @@ func newStorageOptions() storageOptions {
 
 func (o *storageOptions) addFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.engine, "storage-engine", o.engine, "Where the API server stores resources: etcd, or cockroachdb (experimental). Before switching to cockroachdb, apply its schema with \"milo storage migrate\" or --cockroachdb-migrate-on-start.")
-	fs.StringVar(&o.dsn, "cockroachdb-dsn", o.dsn, "Connection string for the CockroachDB database, such as postgresql://milo@cockroachdb:26257/milo?sslmode=verify-full. Required with --storage-engine=cockroachdb.")
+	fs.Var(&o.dsn, "cockroachdb-dsn", "Connection string for the CockroachDB database, such as postgresql://milo@cockroachdb:26257/milo?sslmode=verify-full. Required with --storage-engine=cockroachdb.")
 	fs.BoolVar(&o.migrate, "cockroachdb-migrate-on-start", o.migrate, "Apply pending schema migrations when the server starts, as \"milo storage migrate\" does. Servers starting together take turns. The database user then needs permission to change the schema and cluster settings.")
 	fs.Int32Var(&o.maxConns, "cockroachdb-max-conns", o.maxConns, "Maximum number of connections the server opens to CockroachDB.")
 
@@ -111,7 +111,7 @@ func (o storageOptions) open(ctx context.Context) (generic.StorageDecorator, fun
 	if o.migrate {
 		opts = append(opts, cockroach.MigrateOnOpen())
 	}
-	backend, err := cockroach.Open(ctx, o.dsn, opts...)
+	backend, err := cockroach.Open(ctx, string(o.dsn), opts...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
