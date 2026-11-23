@@ -6,7 +6,7 @@ metadata:
 rules:
   - apiGroups: ["iam.miloapis.com"]
     resources: ["userinvitations"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

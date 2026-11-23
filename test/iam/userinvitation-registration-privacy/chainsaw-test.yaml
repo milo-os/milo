@@ -146,6 +146,37 @@ spec:
               done
               echo "PASS: a non-invitee cannot accept either invitation"
 
+    - name: org-scope-cannot-create-accepted-invitation
+      description: A caller who is not the platform cannot create an invitation that is already Accepted
+      cluster: orgUser
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              if OUT=$(cat <<'YAML' | kubectl --kubeconfig=kubeconfig-org-user create -f - 2>&1
+              apiVersion: iam.miloapis.com/v1alpha1
+              kind: UserInvitation
+              metadata:
+                name: ui-priv-preaccepted
+                namespace: organization-ui-priv-org
+              spec:
+                organizationRef:
+                  name: ui-priv-org
+                email: invitee@ui-priv-test.local
+                roles:
+                  - name: resourcemanager.miloapis.com-organization-viewer
+                    namespace: milo-system
+                state: Accepted
+              YAML
+              ); then
+                echo "FAIL: creating an Accepted invitation as a non-platform caller succeeded"
+                exit 1
+              fi
+              echo "$OUT" | grep -q "a new invitation must be Pending" \
+                || { echo "FAIL: unexpected refusal: $OUT"; exit 1; }
+              echo "PASS: a non-platform caller cannot create an Accepted invitation"
+
     - name: invitee-lists-own-invitation
       description: The invitee's user context lists only the invitation addressed to them
       cluster: invitee
