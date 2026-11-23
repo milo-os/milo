@@ -147,6 +147,13 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 		))
 	}
 
+	if ui.Spec.State != iamv1alpha1.UserInvitationStatePending && !slices.Contains(req.UserInfo.Groups, systemMastersGroup) {
+		errs = append(errs, field.Forbidden(
+			field.NewPath("spec").Child("state"),
+			"a new invitation must be Pending; only the invitee can accept or decline it",
+		))
+	}
+
 	// Ensure the expiration date is in the future
 	if ui.Spec.ExpirationDate != nil {
 		now := metav1.NewTime(time.Now().UTC())

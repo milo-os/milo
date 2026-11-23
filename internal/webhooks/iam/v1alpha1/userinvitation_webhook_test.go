@@ -583,3 +583,53 @@ func TestUserInvitationValidator_ValidateUpdate_StateChangeRequiresInvitee(t *te
 		})
 	}
 }
+
+func TestUserInvitationValidator_ValidateCreate_StateMustBePending(t *testing.T) {
+	tests := map[string]struct {
+		state       iamv1alpha1.UserInvitationStateType
+		groups      []string
+		expectError bool
+	}{
+		"pending":                  {state: iamv1alpha1.UserInvitationStatePending},
+		"accepted":                 {state: iamv1alpha1.UserInvitationStateAccepted, expectError: true},
+		"declined":                 {state: iamv1alpha1.UserInvitationStateDeclined, expectError: true},
+		"empty":                    {state: "", expectError: true},
+		"accepted by the platform": {state: iamv1alpha1.UserInvitationStateAccepted, groups: []string{systemMastersGroup}},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			fakeClient := fake.NewClientBuilder().WithScheme(runtimeScheme).
+				WithIndex(&iamv1alpha1.UserInvitation{}, userInvitationCompositeKey, func(raw client.Object) []string {
+					return []string{buildUserInvitationCompositeKey(*raw.(*iamv1alpha1.UserInvitation))}
+				}).
+				WithIndex(&iamv1alpha1.User{}, userEmailKey, func(raw client.Object) []string {
+					return []string{strings.ToLower(raw.(*iamv1alpha1.User).Spec.Email)}
+				}).
+				WithIndex(&resourcemanagerv1alpha1.OrganizationMembership{}, organizationMembershipCompositeKey, func(raw client.Object) []string {
+					om := raw.(*resourcemanagerv1alpha1.OrganizationMembership)
+					return []string{buildOrganizationMembershipCompositeKey(om.Spec.OrganizationRef.Name, om.Spec.UserRef.Name)}
+				}).Build()
+			validator := &UserInvitationValidator{client: fakeClient}
+			req := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				Namespace: "organization-testorg",
+				UserInfo:  authenticationv1.UserInfo{Username: "tester", Groups: tc.groups},
+			}}
+			ctx := admission.NewContextWithRequest(context.Background(), req)
+			_, err := validator.ValidateCreate(ctx, &iamv1alpha1.UserInvitation{
+				ObjectMeta: metav1.ObjectMeta{Name: "inv"},
+				Spec: iamv1alpha1.UserInvitationSpec{
+					Email:           "someone@example.com",
+					State:           tc.state,
+					OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				},
+			})
+			if tc.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "a new invitation must be Pending")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
