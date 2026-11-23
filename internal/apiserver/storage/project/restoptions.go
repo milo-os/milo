@@ -13,17 +13,17 @@ import (
 )
 
 // Wrap the upstream RESTOptionsGetter to install a per-project decorator that looks each request's
-// Project up in projects, and destroys a gone Project's children after drain.
+// Project up in projects, and destroys a gone Project's children, and those unused for idle, after drain.
 func WithProjectAwareDecorator(inner generic.RESTOptionsGetter, projects ProjectLookup,
-	drain time.Duration) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, projects: projects, drain: drain}
+	drain, idle time.Duration) generic.RESTOptionsGetter {
+	return roGetter{inner: inner, projects: projects, drain: drain, idle: idle}
 }
 
 // WithProjectAwareDecoratorAndBootstrapper wraps the RESTOptionsGetter with project-aware storage
 // and bootstraps project namespaces through the shared bootstrapper.
 func WithProjectAwareDecoratorAndBootstrapper(inner generic.RESTOptionsGetter, projects ProjectLookup,
-	bootstrapper *NamespaceBootstrapper, drain time.Duration) generic.RESTOptionsGetter {
-	return roGetter{inner: inner, projects: projects, bootstrapper: bootstrapper, drain: drain}
+	bootstrapper *NamespaceBootstrapper, drain, idle time.Duration) generic.RESTOptionsGetter {
+	return roGetter{inner: inner, projects: projects, bootstrapper: bootstrapper, drain: drain, idle: idle}
 }
 
 type roGetter struct {
@@ -32,6 +32,7 @@ type roGetter struct {
 	bootstrapper *NamespaceBootstrapper
 	storage      generic.StorageDecorator // the per-project child's storage; nil is the shared etcd cacher
 	drain        time.Duration
+	idle         time.Duration
 }
 
 // NOTE: matches your two-arg signature (GroupResource, runtime.Object).
@@ -50,6 +51,6 @@ func (g roGetter) GetRESTOptions(gr schema.GroupResource, example runtime.Object
 	if storage == nil {
 		storage = etcdshared.StorageWithSharedCacher()
 	}
-	opts.Decorator = ProjectAwareDecorator(gr, storage, g.projects, g.bootstrapper, g.drain)
+	opts.Decorator = ProjectAwareDecorator(gr, storage, g.projects, g.bootstrapper, g.drain, g.idle)
 	return opts, nil
 }

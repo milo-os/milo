@@ -95,6 +95,9 @@ spec:
           # Hold a starting server out of traffic until every Project's
           # ResourceClaim storage serves; turn off via QUOTA_CLAIM_CACHE_READINESS
           - --quota-claim-cache-readiness=$(QUOTA_CLAIM_CACHE_READINESS)
+          # Free a project's storage of one resource after it had no request
+          # and no watch for this long; tune via PROJECT_STORAGE_IDLE_TIMEOUT
+          - --project-storage-idle-timeout=$(PROJECT_STORAGE_IDLE_TIMEOUT)
         env:
           # Feature gates configuration
           # Sessions and UserIdentities are GA (enabled by default)
@@ -109,6 +112,11 @@ spec:
           # ready. "false" is the rollback: the server goes ready with them cold.
           - name: QUOTA_CLAIM_CACHE_READINESS
             value: "true"
+          # How long a project's storage of one resource is kept with no
+          # request and no watch. "0s" is the rollback: every storage is kept
+          # until its Project is gone.
+          - name: PROJECT_STORAGE_IDLE_TIMEOUT
+            value: "15m"
           - name: LOG_LEVEL
             value: "4"
           - name: LOGGING_FORMAT

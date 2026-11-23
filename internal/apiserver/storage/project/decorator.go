@@ -13,14 +13,23 @@ import (
 	factory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
 
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/clock"
 )
 
 // ProjectAwareDecorator builds per-project storage isolation using etcd prefix separation.
-// Every request into a project's control plane looks its Project up in projects, and a child whose
-// Project leaves the view is destroyed after drain. When bootstrapper is non-nil, it ensures the
-// milo-system namespace exists in project control planes.
+// Every request into a project's control plane looks its Project up in projects. A child whose
+// Project leaves the view, or that no request and no watch used for idle, is destroyed after drain;
+// an idle of 0 keeps a child until its Project goes. When bootstrapper is non-nil, it ensures the
+// milo-system namespace exists in project control planes. An idle time CheckChildIdleTimeout
+// refuses is refused before any child is built.
 func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, projects ProjectLookup,
-	bootstrapper *NamespaceBootstrapper, drain time.Duration) generic.StorageDecorator {
+	bootstrapper *NamespaceBootstrapper, drain, idle time.Duration) generic.StorageDecorator {
+	return projectAwareDecorator(gr, inner, projects, bootstrapper, drain, idle, clock.RealClock{})
+}
+
+// projectAwareDecorator is ProjectAwareDecorator on clk, the clock its muxes mark each use and sweep by.
+func projectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorator, projects ProjectLookup,
+	bootstrapper *NamespaceBootstrapper, drain, idle time.Duration, clk clock.WithTicker) generic.StorageDecorator {
 	if gr.Group == "" && gr.Resource == "namespaces" {
 		bootstrapper = nil
 	}
@@ -34,6 +43,9 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 		triggerFn storage.IndexerFuncs, // <— changed type
 		indexers *cache.Indexers, // <— from client-go/tools/cache
 	) (storage.Interface, factory.DestroyFunc, error) {
+		if err := CheckChildIdleTimeout(idle); err != nil {
+			return nil, nil, err
+		}
 
 		// Build default child (no project in ctx).
 		defS, defDestroy, err := inner(cfg, resourcePrefix, keyFunc, newFunc, newListFunc, getAttrs, triggerFn, indexers)
@@ -60,13 +72,16 @@ func ProjectAwareDecorator(gr schema.GroupResource, inner generic.StorageDecorat
 				indexers:    indexers,
 			},
 			children: map[string]*child{
-				"": {s: defS, destroy: defDestroy},
+				"": {s: defS, destroy: defDestroy, clock: clk},
 			},
-			versioner: defS.Versioner(),
-			drain:     drain,
+			versioner:   defS.Versioner(),
+			drain:       drain,
+			idleTimeout: idle,
+			clock:       clk,
 		}
 		mux.removeListener = projects.AddListener(mux)
 		registerMux(gr, mux)
+		mux.startIdleSweep()
 		return mux, mux.destroyAll, nil
 	}
 }
