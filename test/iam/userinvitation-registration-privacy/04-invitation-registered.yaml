@@ -1,0 +1,17 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: UserInvitation
+metadata:
+  name: ui-priv-registered
+  namespace: organization-ui-priv-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-registration-privacy"
+spec:
+  organizationRef:
+    name: ui-priv-org
+  email: invitee@ui-priv-test.local
+  givenName: Invitee
+  familyName: User
+  roles:
+    - name: resourcemanager.miloapis.com-organization-viewer
+      namespace: milo-system
+  state: Pending

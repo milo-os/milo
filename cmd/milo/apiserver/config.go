@@ -553,6 +553,8 @@ func openAPIDefinitions(ref openapicommon.ReferenceCallback) map[string]openapic
 func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbackConfig *rest.Config) http.Handler {
 	handler := apiHandler
 
+	handler = datumfilters.UserUserInvitationListConstraintDecorator(handler, datumfilters.NewLoopbackUserEmailLookup(loopbackConfig))
+
 	handler = filterlatency.TrackCompleted(handler)
 	handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authorization")
@@ -624,7 +626,6 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *server.Config, loopbac
 
 	handler = datumfilters.OrganizationProjectListConstraintDecorator(handler)
 	handler = datumfilters.UserOrganizationMembershipListConstraintDecorator(handler)
-	handler = datumfilters.UserUserInvitationListConstraintDecorator(handler)
 	handler = datumfilters.UserContactListConstraintDecorator(handler)
 	handler = datumfilters.UserContactGroupMembershipListConstraintDecorator(handler)
 	handler = datumfilters.UserContactGroupMembershipRemovalListConstraintDecorator(handler)

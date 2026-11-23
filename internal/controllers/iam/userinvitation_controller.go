@@ -165,11 +165,9 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 
 	log.Info("reconciling UserInvitation", "name", ui.Name, "email", ui.Spec.Email)
 
-	// Update the UserInvitation status with the invitee user information
-	// Done here for migration purposes, to ensure that the UserInvitation status is updated with the invitee user information.
-	if err := r.updateUserInvitationInviteeUserStatus(ctx, ui); err != nil {
-		log.Error(err, "Failed to update UserInvitation status with invitee user information")
-		return ctrl.Result{}, fmt.Errorf("failed to update UserInvitation status with invitee user information: %w", err)
+	if err := r.updateUserInvitationInviteeStatus(ctx, ui); err != nil {
+		log.Error(err, "Failed to update UserInvitation invitee status")
+		return ctrl.Result{}, fmt.Errorf("failed to update UserInvitation invitee status: %w", err)
 	}
 
 	// Honor an accepted invitation, but only while it is still live. The
@@ -292,11 +290,6 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("failed to send invitation email to user: %w", err)
 	}
 
-	if user == nil {
-		log.Info("Invitee User not found, skipping reconciliation. Reconciliation will be triggered again when the User is created.")
-		return requeueAtExpiry(ui), nil
-	}
-
 	if isUserInvitationDeclined(ui) {
 		// Delete the PolicyBindings for the invitation-related roles
 		log.Info("Deleting PolicyBindings for accepting the invitation, as the invitation is declined", "userInvitation", ui.GetName())
@@ -322,21 +315,16 @@ func (r *UserInvitationController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Check if the UserInvitation is pending
-	if meta.IsStatusConditionTrue(ui.Status.Conditions, string(iamv1alpha1.UserInvitationPendingCondition)) {
-		log.Info("UserInvitation is pending, skipping reconciliation")
-		return requeueAtExpiry(ui), nil
-	}
-
-	// Grant permissions to the invitee user so they can accept the invitation
-	for _, role := range r.uiRelatedRoles {
-		err := r.createPolicyBinding(ctx, user, ui, &iamv1alpha1.RoleReference{
-			Name:      role.Name,
-			Namespace: role.Namespace,
-		})
-		if err != nil {
-			log.Error(err, "Failed to create policy binding with %s role", role, "userInvitation", ui.GetName())
-			return ctrl.Result{}, fmt.Errorf("failed to create policy binding with %s role: %w", role, err)
+	if user != nil {
+		for _, role := range r.uiRelatedRoles {
+			err := r.createPolicyBinding(ctx, user, ui, &iamv1alpha1.RoleReference{
+				Name:      role.Name,
+				Namespace: role.Namespace,
+			})
+			if err != nil {
+				log.Error(err, "Failed to create policy binding with %s role", role, "userInvitation", ui.GetName())
+				return ctrl.Result{}, fmt.Errorf("failed to create policy binding with %s role: %w", role, err)
+			}
 		}
 	}
 
@@ -998,47 +986,18 @@ func isUserInvitationExpired(ui *iamv1alpha1.UserInvitation) bool {
 	return ui.IsExpired()
 }
 
-func (r *UserInvitationController) updateUserInvitationInviteeUserStatus(ctx context.Context, ui *iamv1alpha1.UserInvitation) error {
-	log := logf.FromContext(ctx).WithName("userinvitation-update-invitee-user-status")
-	log.Info("Updating UserInvitationInviteeUserStatus status", "name", ui.GetName())
+func (r *UserInvitationController) updateUserInvitationInviteeStatus(ctx context.Context, ui *iamv1alpha1.UserInvitation) error {
+	original := ui.Status.DeepCopy()
+	ui.Status.InviteeEmailHash = iamv1alpha1.InviteeEmailHash(ui.Spec.Email)
+	ui.Status.InviteeUser = nil
+	meta.RemoveStatusCondition(&ui.Status.Conditions, inviteeUserStatusUpdateConditionType)
 
-	if ui.Status.InviteeUser != nil {
-		log.Info("Invitee User status already set, skipping update", "name", ui.GetName())
+	if equality.Semantic.DeepEqual(&ui.Status, original) {
 		return nil
 	}
 
-	// Attempt to resolve the invitee user
-	user, err := r.getInviteeUser(ctx, ui.Spec.Email)
-	if err != nil {
-		return fmt.Errorf("failed to get Invitee User: %w", err)
-	}
-
-	// Condition to update the UserInvitation status
-	var cond metav1.Condition
-
-	if user == nil {
-		// Invitee user not found yet
-		cond = metav1.Condition{
-			Type:    inviteeUserStatusUpdateConditionType,
-			Status:  metav1.ConditionFalse,
-			Reason:  "InvitedUserNotRegistered",
-			Message: "The invited user has not registered their account yet.",
-		}
-	} else {
-		// Invitee user found – update the Status field on the invitation
-		ui.Status.InviteeUser = &iamv1alpha1.UserInvitationInviteeUserStatus{
-			Name: user.Name,
-		}
-		cond = metav1.Condition{
-			Type:    inviteeUserStatusUpdateConditionType,
-			Status:  metav1.ConditionTrue,
-			Reason:  "InvitedUserRegistered",
-			Message: "Confirmed the invited user has an account registered with the platform.",
-		}
-	}
-
-	if updateErr := r.updateUserInvitationStatus(ctx, ui, cond); updateErr != nil {
-		return fmt.Errorf("failed to update UserInvitation status: %w", updateErr)
+	if err := r.Client.Status().Update(ctx, ui); err != nil {
+		return fmt.Errorf("failed to update UserInvitation status: %w", err)
 	}
 
 	return nil

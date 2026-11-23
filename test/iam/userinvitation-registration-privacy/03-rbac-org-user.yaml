@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: userinvitation-editor
+  namespace: organization-ui-priv-org
+rules:
+  - apiGroups: ["iam.miloapis.com"]
+    resources: ["userinvitations"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: userinvitation-editor
+  namespace: organization-ui-priv-org
+subjects:
+  - kind: User
+    name: test-user
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: userinvitation-editor
+  apiGroup: rbac.authorization.k8s.io

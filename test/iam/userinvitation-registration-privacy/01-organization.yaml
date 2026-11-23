@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: ui-priv-org
+  labels:
+    test.miloapis.com/scenario: "userinvitation-registration-privacy"
+  annotations:
+    kubernetes.io/display-name: "UserInvitation Registration Privacy Test Organization"
+spec:
+  type: Standard

@@ -3086,11 +3086,18 @@ UserInvitationStatus defines the observed state of UserInvitation
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>inviteeEmailHash</b></td>
+        <td>string</td>
+        <td>
+          InviteeEmailHash is the hex SHA-256 of the trimmed, lowercased spec.email.
+The invited user lists their invitations by it.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#userinvitationstatusinviteeuser">inviteeUser</a></b></td>
         <td>object</td>
         <td>
-          InviteeUser contains information about the invitee user in the invitation.
-This value may be nil if the invitee user has not been created yet.<br/>
+          InviteeUser is no longer set and is cleared on existing invitations.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3193,8 +3200,7 @@ with respect to the current state of the instance.<br/>
 
 
 
-InviteeUser contains information about the invitee user in the invitation.
-This value may be nil if the invitee user has not been created yet.
+InviteeUser is no longer set and is cleared on existing invitations.
 
 <table>
     <thead>

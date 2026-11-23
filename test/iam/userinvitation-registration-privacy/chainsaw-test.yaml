@@ -1,0 +1,173 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: userinvitation-registration-privacy
+spec:
+  description: |
+    Tests that an organization can invite any email address without learning
+    whether that address belongs to a registered user, while the invited user
+    still finds and answers the invitation.
+
+    The invitation an organization reads looks the same for a registered and
+    an unregistered address: both reach Pending, neither carries the invitee's
+    User name or a registered/not-registered condition, and selecting by a
+    User name finds nothing. Only the invited user can accept or decline, so
+    an organization cannot probe by moving the state itself. The invited user
+    lists their invitations in their own user context, where the API server
+    matches them by the hash of the user's email.
+
+    This test verifies:
+    - Invitations to a registered and an unregistered address both become
+      Pending, with the same conditions and no invitee User.
+    - An organization-scope field selector on status.inviteeUser.name returns
+      nothing.
+    - An organization-scope caller who is not the invitee cannot accept
+      either invitation, and the refusal reads the same for both.
+    - In the invitee's user context, listing invitations returns only the one
+      addressed to their email, even when the caller asks for another
+      address's hash.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    orgUser:
+      kubeconfig: kubeconfig-org-user
+    invitee:
+      kubeconfig: kubeconfig-invitee
+
+  steps:
+    - name: setup
+      description: Create the organization, the registered invitee, and RBAC for the organization-scope caller
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-ui-priv-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+        - apply:
+            file: 02-invitee-user.yaml
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: User
+            name: ui-priv-invitee
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+        - apply:
+            file: 03-rbac-org-user.yaml
+
+    - name: invite-registered-and-unregistered
+      description: Invite a registered and an unregistered address; both become Pending
+      cluster: main
+      try:
+        - apply:
+            file: 04-invitation-registered.yaml
+        - apply:
+            file: 05-invitation-unregistered.yaml
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: UserInvitation
+            name: ui-priv-registered
+            namespace: organization-ui-priv-org
+            timeout: 60s
+            for:
+              condition:
+                name: Pending
+                value: 'True'
+        - wait:
+            apiVersion: iam.miloapis.com/v1alpha1
+            kind: UserInvitation
+            name: ui-priv-unregistered
+            namespace: organization-ui-priv-org
+            timeout: 60s
+            for:
+              condition:
+                name: Pending
+                value: 'True'
+
+    - name: org-scope-status-is-uniform
+      description: The organization reads the same status for both invitations
+      cluster: orgUser
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              shape() {
+                kubectl --kubeconfig=kubeconfig-org-user get userinvitation "$1" -n organization-ui-priv-org -o json \
+                  | jq -c '{inviteeUser: .status.inviteeUser, conditions: ([.status.conditions[] | {type, status, reason, message}] | sort_by(.type))}'
+              }
+              REG=$(shape ui-priv-registered)
+              UNREG=$(shape ui-priv-unregistered)
+              echo "registered:   $REG"
+              echo "unregistered: $UNREG"
+              test "$REG" = "$UNREG" \
+                || { echo "FAIL: status differs by registration"; exit 1; }
+              echo "$REG" | jq -e '.inviteeUser == null' >/dev/null \
+                || { echo "FAIL: status.inviteeUser is set"; exit 1; }
+              echo "$REG" | jq -e '[.conditions[] | select(.type == "InviteeUserStatusUpdate")] | length == 0' >/dev/null \
+                || { echo "FAIL: registration condition present"; exit 1; }
+              echo "PASS: status is the same for a registered and an unregistered address"
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              COUNT=$(kubectl --kubeconfig=kubeconfig-org-user get userinvitations -n organization-ui-priv-org \
+                --field-selector status.inviteeUser.name=ui-priv-invitee -o json | jq '.items | length')
+              test "$COUNT" = "0" \
+                || { echo "FAIL: selecting by User name found $COUNT invitations"; exit 1; }
+              echo "PASS: selecting by User name finds nothing"
+
+    - name: org-scope-cannot-answer-invitations
+      description: A caller who is not the invitee cannot accept, with the same refusal for both
+      cluster: orgUser
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              for NAME in ui-priv-registered ui-priv-unregistered; do
+                if OUT=$(kubectl --kubeconfig=kubeconfig-org-user patch userinvitation "$NAME" -n organization-ui-priv-org \
+                      --type=merge -p '{"spec":{"state":"Accepted"}}' 2>&1); then
+                  echo "FAIL: accepting $NAME as a non-invitee succeeded"
+                  exit 1
+                fi
+                echo "$OUT" | grep -q "only the invited user can accept or decline this invitation" \
+                  || { echo "FAIL: unexpected refusal for $NAME: $OUT"; exit 1; }
+              done
+              echo "PASS: a non-invitee cannot accept either invitation"
+
+    - name: invitee-lists-own-invitation
+      description: The invitee's user context lists only the invitation addressed to them
+      cluster: invitee
+      try:
+        - script:
+            timeout: 60s
+            content: |
+              set -eu
+              if command -v sha256sum >/dev/null 2>&1; then
+                OTHER=$(printf '%s' nobody@ui-priv-test.local | sha256sum | cut -d' ' -f1)
+              else
+                OTHER=$(printf '%s' nobody@ui-priv-test.local | shasum -a 256 | cut -d' ' -f1)
+              fi
+              for SELECTOR in "" "--field-selector=status.inviteeEmailHash=$OTHER"; do
+                NAMES=""
+                for _ in $(seq 1 20); do
+                  NAMES=$(kubectl --kubeconfig=kubeconfig-invitee get userinvitations -A $SELECTOR -o json \
+                    | jq -r '[.items[] | select(.metadata.namespace == "organization-ui-priv-org") | .metadata.name] | sort | join(",")')
+                  [ "$NAMES" = "ui-priv-registered" ] && break
+                  sleep 2
+                done
+                test "$NAMES" = "ui-priv-registered" \
+                  || { echo "FAIL: invitee list ($SELECTOR) = '$NAMES', want ui-priv-registered"; exit 1; }
+              done
+              echo "PASS: the invitee sees only their own invitation"

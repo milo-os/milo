@@ -10,6 +10,7 @@ import (
 	notificationv1alpha1 "go.miloapis.com/milo/pkg/apis/notification/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -709,9 +710,11 @@ func TestUserInvitationController_Reconcile_StateTransitionCreatesBindings(t *te
 	if meta.IsStatusConditionTrue(afterFirst.Status.Conditions, string(iamv1alpha1.UserInvitationReadyCondition)) {
 		t.Fatalf("Ready condition should not be true before acceptance")
 	}
-	// Verify invitee user name is populated
-	if afterFirst.Status.InviteeUser == nil || afterFirst.Status.InviteeUser.Name != user.Name {
-		t.Fatalf("expected InviteeUser name to be %s, got %+v", user.Name, afterFirst.Status.InviteeUser)
+	if afterFirst.Status.InviteeUser != nil {
+		t.Fatalf("expected InviteeUser unset, got %+v", afterFirst.Status.InviteeUser)
+	}
+	if afterFirst.Status.InviteeEmailHash != iamv1alpha1.InviteeEmailHash(user.Spec.Email) {
+		t.Fatalf("expected InviteeEmailHash for %s, got %q", user.Spec.Email, afterFirst.Status.InviteeEmailHash)
 	}
 
 	// Verify organization display name is set
@@ -842,13 +845,12 @@ func TestUserInvitationController_Reconcile_UserCreatedLater(t *testing.T) {
 		t.Fatalf("third reconcile error: %v", err)
 	}
 
-	// Verify InviteeUser now populated after user appears (before acceptance)
 	afterSecond := &iamv1alpha1.UserInvitation{}
 	if err := c.Get(ctx, types.NamespacedName{Name: ui.Name, Namespace: ui.Namespace}, afterSecond); err != nil {
 		t.Fatalf("failed to get UserInvitation after second reconcile: %v", err)
 	}
-	if afterSecond.Status.InviteeUser == nil || afterSecond.Status.InviteeUser.Name == "" {
-		t.Fatalf("InviteeUser should be populated after second reconcile, got %+v", afterSecond.Status.InviteeUser)
+	if afterSecond.Status.InviteeUser != nil {
+		t.Fatalf("InviteeUser should stay unset after the user appears, got %+v", afterSecond.Status.InviteeUser)
 	}
 
 	if err := c.Get(ctx, types.NamespacedName{Name: pbInviteName, Namespace: invitationRoleRef.Namespace}, &iamv1alpha1.PolicyBinding{}); err != nil {
@@ -1374,5 +1376,147 @@ func TestUserInvitationController_createMemberJoinedEmails_EmailDomainOffer(t *t
 				t.Errorf("EmailDomain = %q (present %v), want present %v", got, ok, tc.wantEmailDomain)
 			}
 		})
+	}
+}
+
+func newInviteeStatusTestController(t *testing.T, objs ...client.Object) (*UserInvitationController, client.Client) {
+	t.Helper()
+	builder := fake.NewClientBuilder().WithScheme(getTestScheme()).
+		WithStatusSubresource(&iamv1alpha1.UserInvitation{}).
+		WithObjects(objs...)
+	builder = builder.WithIndex(&iamv1alpha1.User{}, userEmailIndexKey, func(obj client.Object) []string {
+		return []string{strings.ToLower(obj.(*iamv1alpha1.User).Spec.Email)}
+	})
+	builder = builder.WithIndex(&iamv1alpha1.UserInvitation{}, userEmailIndexKey, func(obj client.Object) []string {
+		return []string{strings.ToLower(obj.(*iamv1alpha1.UserInvitation).Spec.Email)}
+	})
+	c := builder.Build()
+	uic := &UserInvitationController{
+		Client:          c,
+		SystemNamespace: "milo-system",
+		uiRelatedRoles:  []iamv1alpha1.RoleReference{{Name: "get-invitation-role", Namespace: "milo-system"}},
+	}
+	initFinalizer(t, uic)
+	return uic, c
+}
+
+func reconcileInvitation(t *testing.T, uic *UserInvitationController, c client.Client, key types.NamespacedName, times int) *iamv1alpha1.UserInvitation {
+	t.Helper()
+	for i := 0; i < times; i++ {
+		if _, err := uic.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d of %s: %v", i+1, key, err)
+		}
+	}
+	got := &iamv1alpha1.UserInvitation{}
+	if err := c.Get(context.TODO(), key, got); err != nil {
+		t.Fatalf("get %s: %v", key, err)
+	}
+	return got
+}
+
+func comparableInvitationStatus(s iamv1alpha1.UserInvitationStatus) iamv1alpha1.UserInvitationStatus {
+	out := *s.DeepCopy()
+	out.InviteeEmailHash = ""
+	for i := range out.Conditions {
+		out.Conditions[i].LastTransitionTime = metav1.Time{}
+		out.Conditions[i].ObservedGeneration = 0
+	}
+	return out
+}
+
+func TestUserInvitationController_Reconcile_StatusIndependentOfRegistration(t *testing.T) {
+	inviter := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "inviter", UID: "inviter-uid"}, Spec: iamv1alpha1.UserSpec{GivenName: "Ada", FamilyName: "Admin", Email: "inviter@example.com"}}
+	registered := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "registered-user", UID: "registered-uid"}, Spec: iamv1alpha1.UserSpec{Email: "Registered@Example.com"}}
+	org := &resourcemanagerv1alpha1.Organization{ObjectMeta: metav1.ObjectMeta{Name: "org", UID: "org-uid"}}
+	newInvitation := func(name, email string) *iamv1alpha1.UserInvitation {
+		return &iamv1alpha1.UserInvitation{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "organization-org", UID: types.UID(name + "-uid")},
+			Spec: iamv1alpha1.UserInvitationSpec{
+				Email:           email,
+				OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "org"},
+				State:           iamv1alpha1.UserInvitationStatePending,
+				Roles:           []iamv1alpha1.RoleReference{{Name: "org-viewer", Namespace: "milo-system"}},
+				InvitedBy:       iamv1alpha1.UserReference{Name: inviter.Name},
+			},
+		}
+	}
+	toRegistered := newInvitation("to-registered", "registered@example.com")
+	toUnregistered := newInvitation("to-unregistered", "nobody@example.com")
+
+	uic, c := newInviteeStatusTestController(t, inviter, registered, org, toRegistered, toUnregistered)
+
+	gotRegistered := reconcileInvitation(t, uic, c, client.ObjectKeyFromObject(toRegistered), 3)
+	gotUnregistered := reconcileInvitation(t, uic, c, client.ObjectKeyFromObject(toUnregistered), 3)
+
+	for _, got := range []*iamv1alpha1.UserInvitation{gotRegistered, gotUnregistered} {
+		if got.Status.InviteeUser != nil {
+			t.Errorf("%s: InviteeUser = %+v, want unset", got.Name, got.Status.InviteeUser)
+		}
+		if meta.FindStatusCondition(got.Status.Conditions, inviteeUserStatusUpdateConditionType) != nil {
+			t.Errorf("%s: unexpected %s condition", got.Name, inviteeUserStatusUpdateConditionType)
+		}
+		if !meta.IsStatusConditionTrue(got.Status.Conditions, string(iamv1alpha1.UserInvitationPendingCondition)) {
+			t.Errorf("%s: Pending condition not true: %+v", got.Name, got.Status.Conditions)
+		}
+		if got.Status.InviteeEmailHash != iamv1alpha1.InviteeEmailHash(got.Spec.Email) {
+			t.Errorf("%s: InviteeEmailHash = %q, want hash of %q", got.Name, got.Status.InviteeEmailHash, got.Spec.Email)
+		}
+	}
+
+	if a, b := comparableInvitationStatus(gotRegistered.Status), comparableInvitationStatus(gotUnregistered.Status); !equality.Semantic.DeepEqual(a, b) {
+		t.Fatalf("status differs by registration:\nregistered:   %+v\nunregistered: %+v", a, b)
+	}
+
+	pb := &iamv1alpha1.PolicyBinding{}
+	roleRef := uic.uiRelatedRoles[0]
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: getDeterministicRoleName(&roleRef, *gotRegistered), Namespace: roleRef.Namespace}, pb); err != nil {
+		t.Fatalf("registered invitee should get the invitation PolicyBinding: %v", err)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: getDeterministicRoleName(&roleRef, *gotUnregistered), Namespace: roleRef.Namespace}, pb); !apierr.IsNotFound(err) {
+		t.Fatalf("unregistered invitee must not get a PolicyBinding, got err=%v", err)
+	}
+}
+
+func TestUserInvitationController_Reconcile_ClearsLegacyInviteeStatus(t *testing.T) {
+	inviter := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "inviter", UID: "inviter-uid"}, Spec: iamv1alpha1.UserSpec{Email: "inviter@example.com"}}
+	invitee := &iamv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "invitee", UID: "invitee-uid"}, Spec: iamv1alpha1.UserSpec{Email: "invitee@example.com"}}
+	org := &resourcemanagerv1alpha1.Organization{ObjectMeta: metav1.ObjectMeta{Name: "org", UID: "org-uid"}}
+	ui := &iamv1alpha1.UserInvitation{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "organization-org", UID: "legacy-uid", Finalizers: []string{userInvitationFinalizerKey}},
+		Spec: iamv1alpha1.UserInvitationSpec{
+			Email:           invitee.Spec.Email,
+			OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "org"},
+			State:           iamv1alpha1.UserInvitationStatePending,
+			InvitedBy:       iamv1alpha1.UserReference{Name: inviter.Name},
+		},
+		Status: iamv1alpha1.UserInvitationStatus{
+			InviteeUser: &iamv1alpha1.UserInvitationInviteeUserStatus{Name: invitee.Name},
+			Conditions: []metav1.Condition{
+				{Type: inviteeUserStatusUpdateConditionType, Status: metav1.ConditionTrue, Reason: "InvitedUserRegistered", Message: "registered", LastTransitionTime: metav1.Now()},
+				{Type: string(iamv1alpha1.UserInvitationPendingCondition), Status: metav1.ConditionTrue, Reason: "Pending", Message: "Waiting for user to accept the invitation", LastTransitionTime: metav1.Now()},
+			},
+		},
+	}
+
+	uic, c := newInviteeStatusTestController(t, inviter, invitee, org, ui)
+	got := reconcileInvitation(t, uic, c, client.ObjectKeyFromObject(ui), 1)
+
+	if got.Status.InviteeUser != nil {
+		t.Errorf("InviteeUser = %+v, want cleared", got.Status.InviteeUser)
+	}
+	if meta.FindStatusCondition(got.Status.Conditions, inviteeUserStatusUpdateConditionType) != nil {
+		t.Errorf("legacy %s condition not removed", inviteeUserStatusUpdateConditionType)
+	}
+	if got.Status.InviteeEmailHash != iamv1alpha1.InviteeEmailHash(invitee.Spec.Email) {
+		t.Errorf("InviteeEmailHash = %q, want hash of %q", got.Status.InviteeEmailHash, invitee.Spec.Email)
+	}
+}
+
+func TestInviteeEmailHash_NormalizesEmail(t *testing.T) {
+	if iamv1alpha1.InviteeEmailHash(" Person@Example.COM ") != iamv1alpha1.InviteeEmailHash("person@example.com") {
+		t.Fatalf("InviteeEmailHash must ignore case and surrounding space")
+	}
+	if iamv1alpha1.InviteeEmailHash("a@example.com") == iamv1alpha1.InviteeEmailHash("b@example.com") {
+		t.Fatalf("InviteeEmailHash must differ for different emails")
 	}
 }
