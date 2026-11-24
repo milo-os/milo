@@ -90,4 +90,3 @@ resources:
   - identity-passkey-registration-links-viewer.yaml
   - identity-passkey-registration-links-editor.yaml
   - identity-passkey-registration-links-admin.yaml
-  - form-creator.yaml
