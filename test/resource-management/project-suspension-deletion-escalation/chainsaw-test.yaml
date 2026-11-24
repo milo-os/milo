@@ -124,3 +124,20 @@ spec:
         - assert:
             cluster: org
             file: assertions/assert-escalation-cancelled.yaml
+
+    - name: delete-project
+      description: Delete the project and wait for its resource-cleanup finalizer
+      cluster: org
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              name: suspension-escalation-test-project
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: suspension-escalation-test-project
+            timeout: 120s
+            for:
+              deletion: {}

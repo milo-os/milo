@@ -29,6 +29,7 @@ require the suite to block for the configured retention window.
 | 4 | [suspend-project](#step-suspend-project) | 0 | 2 | 0 | 0 | 0 |
 | 5 | [verify-deletion-warning-email-sent](#step-verify-deletion-warning-email-sent) | 0 | 1 | 0 | 0 | 0 |
 | 6 | [reinstate-project](#step-reinstate-project) | 0 | 2 | 0 | 0 | 0 |
+| 7 | [delete-project](#step-delete-project) | 0 | 2 | 0 | 0 | 0 |
 
 ### Step: `setup-prerequisites`
 
@@ -103,6 +104,17 @@ Lift the suspension and verify the escalation is cancelled
 |:-:|---|:-:|:-:|---|
 | 1 | `delete` | 0 | 0 | *No description* |
 | 2 | `assert` | 0 | 0 | *No description* |
+
+### Step: `delete-project`
+
+Delete the project and wait for its resource-cleanup finalizer
+
+#### Try
+
+| # | Operation | Bindings | Outputs | Description |
+|:-:|---|:-:|:-:|---|
+| 1 | `delete` | 0 | 0 | *No description* |
+| 2 | `wait` | 0 | 0 | *No description* |
 
 ---
 
