@@ -21,7 +21,15 @@ type KafkaConfig struct {
 	Topic   string
 	// TLS is nil for plaintext connections.
 	TLS *tls.Config
+	// FetchMaxWait is how long a broker holds a fetch for more messages. Zero
+	// answers as soon as one arrives.
+	FetchMaxWait time.Duration
 }
+
+// kafkaFetchMinBytes is what a held fetch waits for. It's more than a few
+// milliseconds of messages, so the fetch returns early only under heavy
+// load.
+const kafkaFetchMinBytes = 1 << 20
 
 // KafkaFeed has watches read the objects table's changes from the topic that
 // one changefeed job writes, which every API server shares, instead of
@@ -86,6 +94,9 @@ func (k kafka) open(ctx context.Context, cursor hlc) (changefeedStream, error) {
 	}
 	if k.config.TLS != nil {
 		opts = append(opts, kgo.DialTLSConfig(k.config.TLS))
+	}
+	if k.config.FetchMaxWait > 0 {
+		opts = append(opts, kgo.FetchMaxWait(k.config.FetchMaxWait), kgo.FetchMinBytes(kafkaFetchMinBytes))
 	}
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
