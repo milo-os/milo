@@ -193,6 +193,10 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 		pool.Close()
 		return nil, err
 	}
+	if _, err := listFeedNodes(ctx, pool); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("the watch feed needs CockroachDB 26.4 or later, and the VIEWCLUSTERMETADATA privilege: %w", err)
+	}
 	b := &Backend{
 		pool:         pool,
 		revTS:        revisionTimestamps{c: cache.NewExpiring(), window: o.hub.replay.window},
@@ -202,7 +206,8 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	poolMetrics.watch(pool)
 	b.onClose(func() { poolMetrics.forget(pool) })
 	b.hub = newHub(b.revTS, o.hub)
-	b.feed = &feed{pool: pool, connConfig: cfg.ConnConfig, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
+	balancer := newFeedBalancer(pool, cfg.ConnConfig)
+	b.feed = &feed{pool: pool, balancer: balancer, retryDelay: o.feedRetry, handler: b.hub, prefill: o.hub.replay.window}
 
 	projectWrites := defaultProjectWrites
 	if o.groupCommit {
@@ -230,6 +235,13 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	})
 	running.Go(func() { b.feed.run(bg) })
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.feed.reportLag) })
+	running.Go(func() {
+		every(bg, fixed(o.hub.tickInterval), func(time.Time) {
+			if b.feed.lag() > balanceLag {
+				balancer.lagging()
+			}
+		})
+	})
 	running.Go(func() { every(bg, fixed(o.hub.tickInterval), b.hub.tick) })
 	running.Go(func() { every(bg, jittered(o.sweepInterval), func(now time.Time) { b.sweeper.sweep(bg, now) }) })
 	// The first backstop waits an interval too, so a restart stays cheap and

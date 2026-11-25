@@ -160,7 +160,9 @@ func startCockroach(ctx context.Context) (string, func()) {
 		fmt.Fprintf(os.Stderr, "cockroach storage tests: %v\n", err)
 		return "", func() {}
 	}
-	c, err := cockroachdb.Run(ctx, img, cockroachdb.WithInsecure())
+	// The node advertises localhost, which the watch feed's balancer then
+	// reaches through the DSN's mapped port.
+	c, err := cockroachdb.Run(ctx, img, cockroachdb.WithInsecure(), testcontainers.WithCmdArgs("--advertise-host=localhost"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cockroach storage tests: no %s and no Docker server (%v)\n", testDSNEnv, err)
 		return "", func() {}

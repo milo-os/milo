@@ -348,7 +348,7 @@ func (failingHandler) write(*feedRow, *feedRow, hlc) error { return errors.New("
 func TestFeedStopsPromptlyOnHandlerFailure(t *testing.T) {
 	b := testBackend(t)
 	ctx := t.Context()
-	f := &feed{pool: b.pool, connConfig: b.pool.Config().ConnConfig, handler: failingHandler{}}
+	f := &feed{pool: b.pool, balancer: newFeedBalancer(b.pool, b.pool.Config().ConnConfig), handler: failingHandler{}}
 	done := make(chan feedFailure, 1)
 	go func() {
 		_, kind, _ := f.follow(ctx, hlc{}, 0)
@@ -371,7 +371,7 @@ func TestWatchNotReadyUntilTheFeedDelivers(t *testing.T) {
 	broken := b.pool.Config().ConnConfig.Copy()
 	broken.Database = "missing"
 	h := memoryHubWith(defaultHubConfig())
-	other := &Backend{hub: h, feed: &feed{pool: b.pool, connConfig: broken, handler: h}}
+	other := &Backend{hub: h, feed: &feed{pool: b.pool, balancer: newFeedBalancer(b.pool, broken), handler: h}}
 	_, kind, err := other.feed.follow(ctx, hlc{}, 0)
 	require.Error(t, err)
 	require.NotEqual(t, feedReset, kind)
@@ -383,7 +383,7 @@ func TestWatchNotReadyUntilTheFeedDelivers(t *testing.T) {
 func TestBaselineKeepsTheFeedsLag(t *testing.T) {
 	b := testBackend(t)
 	h := memoryHubWith(defaultHubConfig())
-	f := &feed{pool: b.pool, connConfig: b.pool.Config().ConnConfig, handler: h}
+	f := &feed{pool: b.pool, balancer: newFeedBalancer(b.pool, b.pool.Config().ConnConfig), handler: h}
 	f.resolved.Store(time.Now().Add(-time.Hour).UnixNano())
 	_, err := f.loadBaseline(t.Context(), 0)
 	require.NoError(t, err)

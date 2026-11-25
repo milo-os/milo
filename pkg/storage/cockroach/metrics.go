@@ -88,7 +88,7 @@ var (
 	feedRestarts = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Name:           "cockroachstorage_watch_feed_restarts_total",
-			Help:           "Watch feed restarts, by kind: resume from the cursor, or reset to the current state, which makes open watches relist",
+			Help:           "Watch feed restarts, by kind: resume from the cursor, rebalance onto a node running fewer feeds, or reset to the current state, which makes open watches relist",
 			StabilityLevel: k8smetrics.ALPHA,
 		},
 		[]string{"kind"},

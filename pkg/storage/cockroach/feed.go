@@ -49,7 +49,7 @@ type feedHandler interface {
 // from its cursor, and when it can't, it starts again from a new baseline.
 type feed struct {
 	pool       *pgxpool.Pool
-	connConfig *pgx.ConnConfig
+	balancer   *feedBalancer
 	retryDelay time.Duration
 	handler    feedHandler
 	// prefill is how far back the first baseline goes, so a replica that
@@ -101,6 +101,12 @@ func (f *feed) run(ctx context.Context) {
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if errors.Is(err, errFeedRebalanced) {
+			klog.InfoS("Moving the CockroachDB watch feed to a node running fewer feeds", "cursor", cursor)
+			feedRestarts.WithLabelValues("rebalance").Inc()
+			failures = 0
+			continue
 		}
 		if kind == feedRefused {
 			failures++
@@ -215,7 +221,7 @@ func (f *feed) openChangefeed(ctx context.Context, cursor hlc) (*changefeedStrea
 	s.stall = time.AfterFunc(feedStallTimeout, func() { cancel(errFeedStalled) })
 	// A changefeed holds its connection for as long as it runs, so it gets one
 	// of its own rather than one from the pool.
-	conn, err := pgx.ConnectConfig(ctx, f.connConfig.Copy())
+	conn, err := f.balancer.dial(ctx, func() { cancel(errFeedRebalanced) })
 	if err != nil {
 		s.close()
 		return nil, feedDropped, err
@@ -244,7 +250,7 @@ func (s *changefeedStream) next() ([][]byte, bool) {
 
 // err returns why the changefeed ended.
 func (s *changefeedStream) err() error {
-	if cause := context.Cause(s.ctx); errors.Is(cause, errFeedStalled) {
+	if cause := context.Cause(s.ctx); errors.Is(cause, errFeedStalled) || errors.Is(cause, errFeedRebalanced) {
 		return cause
 	}
 	if err := s.rows.Err(); err != nil {

@@ -10,7 +10,7 @@ spec:
   chart:
     spec:
       chart: cockroachdb-chart
-      version: "26.3.4"
+      version: "26.4.0"
       sourceRef:
         kind: HelmRepository
         name: cockroachdb
