@@ -143,6 +143,10 @@ func (v *ProjectValidator) ValidateCreate(ctx context.Context, project *v1alpha1
 		return nil, errors.NewInvalid(project.GroupVersionKind().GroupKind(), project.Name, errs)
 	}
 
+	if err := v.checkOrganizationOnboarded(ctx, project); err != nil {
+		return nil, err
+	}
+
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get request from context: %w", err)
