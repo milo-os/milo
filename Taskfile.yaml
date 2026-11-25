@@ -492,6 +492,21 @@ tasks:
         echo "✅ Test documentation generated in test directories"
     silent: true
 
+  install-e2e-tools:
+    desc: Install the Go tools that the end-to-end workflow runs, Chainsaw and controller-gen, so that CI can cache them
+    deps:
+      - task: install-go-tool
+        vars:
+          NAME: chainsaw
+          PACKAGE: github.com/kyverno/chainsaw
+          VERSION: "{{.CHAINSAW_VERSION}}"
+      - task: install-go-tool
+        vars:
+          NAME: controller-gen
+          PACKAGE: sigs.k8s.io/controller-tools/cmd/controller-gen
+          VERSION: "{{.CONTROLLER_TOOLS_VERSION}}"
+    silent: true
+
   install-go-tool:
     desc: Install a Go tool to {{.TOOL_DIR}}/{{.NAME}} (symlinked from {{.TOOL_DIR}}/{{.NAME}}-{{.VERSION}})
     silent: true

@@ -1,0 +1,68 @@
+name: Cache the end-to-end tools
+
+# The end-to-end workflow runs Chainsaw and controller-gen, two Go programs that
+# the Taskfile installs with go install. Compiling them takes minutes on each
+# run. This workflow installs them on main and saves them, and a pull request
+# run restores them. A cache that a pull request run saves can be restored only
+# by runs of that pull request, so only a run on main saves this one.
+#
+# The key is the same as the key of the "Name the test tools cache" step of
+# test-environment-validation.yaml. It names the runner image and the Go version
+# that compile the tools, and the hash of the Taskfile, which pins their
+# versions and says how to install them. A change to any of these gives a new
+# key, and the next run on main installs the tools again and saves them under it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  # Enable experimental remote taskfiles feature, which the Taskfile includes.
+  TASK_X_REMOTE_TASKFILES: 1
+
+jobs:
+  cache-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Install Task
+        uses: go-task/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Name the test tools cache
+        id: tools-cache
+        run: |
+          echo "key=e2e-tools-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS}-$(go env GOVERSION)-$(sha256sum Taskfile.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Restores the tools when the key exists, and saves them at the end of the
+      # job when it does not.
+      - name: Restore or save the test tools
+        id: tools
+        uses: actions/cache@v6
+        with:
+          path: bin
+          key: ${{ steps.tools-cache.outputs.key }}
+
+      - name: Install the test tools
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: task install-e2e-tools
+
+      - name: Check the test tools
+        run: |
+          test -x bin/chainsaw
+          test -x bin/controller-gen
+          ls -l bin
