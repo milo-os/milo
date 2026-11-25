@@ -42,7 +42,7 @@ This command orchestrates the entire setup process:
 1. Creates a Kind cluster named `test-infra`
 2. Installs required Kubernetes components (cert-manager, Gateway API)
 3. Builds the Milo container image
-4. Deploys etcd for storage
+4. Deploys storage: etcd, or CockroachDB with `TEST_INFRA_OVERLAY=config/overlays/test-infra-cockroachdb/`
 5. Deploys the Milo API server
 6. Deploys the Milo controller manager
 7. Installs all Custom Resource Definitions (CRDs)
@@ -257,8 +257,16 @@ task test-infra:kubectl -- logs -n milo-system -l app.kubernetes.io/name=milo-ap
 # Controller Manager logs (use test-infra kubectl for infrastructure cluster)
 task test-infra:kubectl -- logs -n milo-system -l app.kubernetes.io/name=milo-controller-manager -f
 
-# etcd logs (use test-infra kubectl for infrastructure cluster)
+# Storage logs (use test-infra kubectl for infrastructure cluster): etcd, or
+# CockroachDB with the test-infra-cockroachdb overlay
 task test-infra:kubectl -- logs -n milo-system -l app.kubernetes.io/component=etcd
+task test-infra:kubectl -- logs -n milo-system -l app=cockroachdb -c cockroachdb
+
+# With the test-infra-cockroachdb overlay: a SQL shell, and the CockroachDB
+# console on https://localhost:8090 (miloadmin / miloadmin), or another port
+# with PORT=<port>
+task cockroachdb:sql
+task cockroachdb:ui
 ```
 
 ### Observability and Monitoring
