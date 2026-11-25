@@ -219,23 +219,15 @@ Migrations set up the schema and the cluster settings. They run either as a sepa
 
 A server won't start on a schema older than the one it was built for. Migrations only add, so older and newer servers both run against the same schema during a rollout and after a rollback.
 
-The switch from etcd is one coordinated cutover, rehearsed on staging first:
-
-1. Copy an etcd snapshot into CockroachDB, keeping resource versions, then follow etcd's changes to stay current. Every project's counter starts above the highest etcd revision, so any revision a client holds is smaller than any new one.
-2. Mirror read traffic to the new backend and compare its answers with etcd's.
-3. Pause writes for a few seconds with `429`, well short of the time it takes controllers to lose their leases. Let the copy catch up, then switch the API servers over.
-
-Watches relist once after the switch, because their old revisions fall outside the new replay history.
+The switch from etcd is one coordinated cutover with no downtime: reads keep working and writes pause for a few minutes. It is rehearsed in a production-like environment, then on staging. [Moving Milo's storage from etcd to CockroachDB](etcd-to-cockroachdb-migration.md) describes it, along with how it runs and rolls back.
 
 ### Before enabling in production
 
-- **Migration tooling.** The snapshot-and-follow copy from etcd, keeping resource versions.
-- **Comparison criteria.** What counts as a matching answer when mirrored reads are compared, and how long they must match before the switch.
+- **Migration tooling.** The read-only mode and the migration controller from the migration RFC.
 - **Backups.** A schedule, a destination and a retention period for the cluster, and a tested restore.
 - **A rehearsed rollback.** A way back to etcd after the switch, practiced on staging.
 - **A multi-zone benchmark.** Write latency, delivery and read capacity, measured on a real cluster spread across zones.
 
 ## Open questions
 
-- **Rollback after the switch.** A reverse copy into etcd, or a rehearsed restore.
 - **Per-watch cost.** Once per-project caches are gone, each open watch's HTTP state is the largest remaining cost per project, and the server's watch handling could shrink it.
