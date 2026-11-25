@@ -1,0 +1,15 @@
+apiVersion: quota.miloapis.com/v1alpha1
+kind: ResourceGrant
+metadata:
+  name: crm-note-lifecycle-test-grant
+  namespace: milo-system
+  labels:
+    test.miloapis.com/scenario: "crm-note-contact-lifecycle"
+spec:
+  consumerRef:
+    kind: ""
+    name: ""
+  allowances:
+    - resourceType: notes.miloapis.com/notes
+      buckets:
+        - amount: 10
