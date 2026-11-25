@@ -6,6 +6,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/client-go/rest"
 
+	"go.miloapis.com/milo/internal/apiserver/orgstate"
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	"go.miloapis.com/milo/pkg/server/access"
 )
@@ -59,6 +60,23 @@ type ProjectStatesInitializer struct {
 func (i ProjectStatesInitializer) Initialize(p admission.Interface) {
 	if w, ok := p.(wantsProjectStates); ok && i.States != nil {
 		w.SetProjectStates(i.States)
+	}
+}
+
+// Local duck-typed interface: any plugin with this method will match.
+type wantsOrganizationStates interface {
+	SetOrganizationStates(*orgstate.Cache)
+}
+
+// OrganizationStatesInitializer injects the API server's shared view of
+// Organizations into admission plugins that want one.
+type OrganizationStatesInitializer struct {
+	States *orgstate.Cache
+}
+
+func (i OrganizationStatesInitializer) Initialize(p admission.Interface) {
+	if w, ok := p.(wantsOrganizationStates); ok && i.States != nil {
+		w.SetOrganizationStates(i.States)
 	}
 }
 

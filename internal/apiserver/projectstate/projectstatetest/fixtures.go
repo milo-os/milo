@@ -72,6 +72,18 @@ func NewProject(name string, suspended bool, reasons ...resourcemanagerv1alpha1.
 	return u
 }
 
+// NewOwnedProject returns an active Project owned by the named Organization.
+func NewOwnedProject(name, organization string) *unstructured.Unstructured {
+	p := NewProject(name, false)
+	p.Object["spec"] = map[string]interface{}{
+		"ownerRef": map[string]interface{}{
+			"kind": "Organization",
+			"name": organization,
+		},
+	}
+	return p
+}
+
 // NewProjectWithUID returns an active Project named name with the given UID.
 func NewProjectWithUID(name string, uid types.UID) *unstructured.Unstructured {
 	p := NewProject(name, false)

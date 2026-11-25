@@ -24,6 +24,13 @@ const (
 	// existing consumers.
 	OrganizationOnboardingCompleteReasonPaymentMethodNotReady = "PaymentMethodNotReady"
 
+	// OrganizationOnboardingIncompleteCause is the metav1.StatusCause Type set
+	// on the 403 the OrganizationOnboardingEnforcement admission plugin returns
+	// when it refuses a write in a project whose organization has not finished
+	// onboarding. Clients match on it to send the user to finish setup instead
+	// of showing a permission error.
+	OrganizationOnboardingIncompleteCause metav1.CauseType = "OrganizationOnboardingIncomplete"
+
 	// OrganizationConditionEmailDomainsVerified reports whether every domain in
 	// spec.emailDomainJoining is verified by a Domain in one of the
 	// organization's projects. Membership is offered only for verified

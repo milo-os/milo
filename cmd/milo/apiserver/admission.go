@@ -4,6 +4,7 @@ import (
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/accessowner"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/organizationonboarding"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	"k8s.io/apimachinery/pkg/util/sets"
 	validatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/validating"
@@ -37,6 +38,7 @@ func GetMiloOrderedPlugins() []string {
 			// which may fill the owner field in.
 			plugins = append(plugins, accessowner.PluginName)
 			plugins = append(plugins, projectsuspension.PluginName)
+			plugins = append(plugins, organizationonboarding.PluginName)
 			plugins = append(plugins, admissionquota.PluginName)
 		}
 		plugins = append(plugins, plugin)
@@ -47,10 +49,11 @@ func GetMiloOrderedPlugins() []string {
 
 // MiloAdmissionPlugins lists all Milo-specific admission plugins
 var MiloAdmissionPlugins = sets.New[string](
-	admissionquota.PluginName,    // ResourceQuotaEnforcement
-	projectsuspension.PluginName, // ProjectSuspensionEnforcement
-	emailverification.PluginName, // EmailVerificationEnforcement — observes unless EmailVerifiedGate is on
-	accessowner.PluginName,       // AccessRuleOwnerEnforcement
+	admissionquota.PluginName,         // ResourceQuotaEnforcement
+	projectsuspension.PluginName,      // ProjectSuspensionEnforcement
+	emailverification.PluginName,      // EmailVerificationEnforcement — observes unless EmailVerifiedGate is on
+	accessowner.PluginName,            // AccessRuleOwnerEnforcement
+	organizationonboarding.PluginName, // OrganizationOnboardingEnforcement — observes unless OrganizationOnboardingGate is on
 	// Add future Milo admission plugins here
 )
 

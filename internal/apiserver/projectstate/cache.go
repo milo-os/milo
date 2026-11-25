@@ -153,10 +153,12 @@ type projectStore struct {
 }
 
 // entry is what the store keeps of one Project object: its identity and
-// deletion mark, and its suspension only while it is suspended.
+// deletion mark, the Organization that owns it, and its suspension only while
+// it is suspended.
 type entry struct {
-	project    Project
-	suspension *Suspension
+	project      Project
+	organization string
+	suspension   *Suspension
 }
 
 func newProjectStore() *projectStore {
@@ -164,7 +166,18 @@ func newProjectStore() *projectStore {
 }
 
 func newEntry(u *unstructured.Unstructured) entry {
-	return entry{project: projectOf(u), suspension: parseSuspension(u)}
+	return entry{project: projectOf(u), organization: owningOrganization(u), suspension: parseSuspension(u)}
+}
+
+// owningOrganization returns the name of the Organization in the Project's
+// spec.ownerRef, or "" when the owner is not an Organization.
+func owningOrganization(u *unstructured.Unstructured) string {
+	kind, _, _ := unstructured.NestedString(u.Object, "spec", "ownerRef", "kind")
+	if kind != "Organization" {
+		return ""
+	}
+	name, _, _ := unstructured.NestedString(u.Object, "spec", "ownerRef", "name")
+	return name
 }
 
 func projectOf(u *unstructured.Unstructured) Project {
@@ -355,6 +368,17 @@ func (c *Cache) ForceLiveLookup(name string) {
 func (c *Cache) Project(name string) (Project, bool) {
 	e, ok := c.store.lookup(name)
 	return e.project, ok
+}
+
+// Organization returns the name of the Organization that owns the named
+// Project, and false when the cache holds no Project of that name or its
+// owner is not an Organization.
+func (c *Cache) Organization(name string) (string, bool) {
+	e, ok := c.store.lookup(name)
+	if !ok || e.organization == "" {
+		return "", false
+	}
+	return e.organization, true
 }
 
 // Suspension returns the suspension state of the named Project, or nil when

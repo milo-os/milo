@@ -14,6 +14,7 @@ import (
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/accessowner"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/emailverification"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/namespace/lifecycle"
+	"go.miloapis.com/milo/internal/apiserver/admission/plugin/organizationonboarding"
 	"go.miloapis.com/milo/internal/apiserver/admission/plugin/projectsuspension"
 	"go.miloapis.com/milo/internal/apiserver/storage/etcdshared"
 	projectstorage "go.miloapis.com/milo/internal/apiserver/storage/project"
@@ -274,6 +275,7 @@ func NewOptions() *options.Options {
 	// API calls, so it has nothing to be ready for.
 	emailverification.Register(s.Admission.GenericAdmission.Plugins)
 	accessowner.Register(s.Admission.GenericAdmission.Plugins)
+	organizationonboarding.Register(s.Admission.GenericAdmission.Plugins)
 
 	s.Admission.GenericAdmission.RecommendedPluginOrder = GetMiloOrderedPlugins()
 

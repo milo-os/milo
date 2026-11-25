@@ -56,6 +56,7 @@ import (
 	serviceaccountkeysbackend "go.miloapis.com/milo/internal/apiserver/identity/serviceaccountkeys"
 	sessionsbackend "go.miloapis.com/milo/internal/apiserver/identity/sessions"
 	useridentitiesbackend "go.miloapis.com/milo/internal/apiserver/identity/useridentities"
+	"go.miloapis.com/milo/internal/apiserver/orgstate"
 	"go.miloapis.com/milo/internal/apiserver/projectstate"
 	identitystorage "go.miloapis.com/milo/internal/apiserver/storage/identity"
 	discoveryapi "go.miloapis.com/milo/pkg/apis/discovery"
@@ -463,7 +464,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	}
 	projectStates := projectstate.NewCache(projectClient)
 	c.ProjectStates = projectStates
-	miloInits := miloInitializers(genericConfig.LoopbackClientConfig, projectStates, accessRules)
+	orgStates := orgstate.NewCache(projectClient)
+	miloInits := miloInitializers(genericConfig.LoopbackClientConfig, projectStates, orgStates, accessRules)
 
 	kubeAPIs, upstreamInits, err := controlplaneapiserver.CreateConfig(opts, genericConfig, versionedInformers, nil, storageFactory, serviceResolver, miloInits)
 	if err != nil {
@@ -494,6 +496,8 @@ func NewConfig(opts options.CompletedOptions) (*Config, error) {
 	// Start the shared view of Projects once the server serves, and hold traffic until it has synced
 	kubeAPIs.Generic.AddPostStartHookOrDie("start-project-state-cache", projectStates.PostStartHook())
 	kubeAPIs.Generic.AddReadyzChecks(projectStates.ReadinessCheck())
+	kubeAPIs.Generic.AddPostStartHookOrDie("start-organization-state-cache", orgStates.PostStartHook())
+	kubeAPIs.Generic.AddReadyzChecks(orgStates.ReadinessCheck())
 
 	// Hold traffic until every CRD's access rules are known. Requests that
 	// arrive anyway are refused by the access filter rather than served
@@ -692,13 +696,14 @@ func getSpanNameFromRequestInfo(info *request.RequestInfo, r *http.Request) stri
 
 // miloInitializers returns Milo's own admission plugin initializers: the
 // loopback client, the legacy scheme for converting internal types (quota),
-// the shared Project cache and the access rules. Every server in the chain
-// gets this one list.
-func miloInitializers(loopback *rest.Config, states *projectstate.Cache, rules *access.Rules) []admission.PluginInitializer {
+// the shared Project and Organization caches and the access rules. Every
+// server in the chain gets this one list.
+func miloInitializers(loopback *rest.Config, states *projectstate.Cache, orgs *orgstate.Cache, rules *access.Rules) []admission.PluginInitializer {
 	return []admission.PluginInitializer{
 		initializer.LoopbackInitializer{Loopback: rest.CopyConfig(loopback)},
 		initializer.ObjectConvertorInitializer{Convertor: legacyscheme.Scheme},
 		initializer.ProjectStatesInitializer{States: states},
+		initializer.OrganizationStatesInitializer{States: orgs},
 		initializer.AccessRulesInitializer{Rules: rules},
 	}
 }

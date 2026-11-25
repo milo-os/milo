@@ -142,6 +142,20 @@ const (
 	// owner: @datum-cloud/platform
 	// alpha: v0.1.0
 	EmailVerifiedGate featuregate.Feature = "EmailVerifiedGate"
+
+	// OrganizationOnboardingGate makes OrganizationOnboardingEnforcement deny,
+	// rather than only observe, writes in projects whose organization has not
+	// finished onboarding: contact information, a billing account, and a
+	// payment method or payment terms.
+	//
+	// Like EmailVerifiedGate, it selects between two behaviours. Disabled, the
+	// plugin admits and counts what it would have denied in
+	// milo_organization_onboarding_denials_total{enforced="false"}. Read that
+	// before enabling: it is the population that will start being denied.
+	//
+	// owner: @datum-cloud/platform
+	// alpha: v0.40.0
+	OrganizationOnboardingGate featuregate.Feature = "OrganizationOnboardingGate"
 )
 
 func init() {
@@ -172,6 +186,10 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		PreRelease: featuregate.Alpha,
 	},
 	MemberJoinedEmails: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
+	OrganizationOnboardingGate: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
