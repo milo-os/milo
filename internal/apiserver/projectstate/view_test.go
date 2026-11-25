@@ -68,20 +68,3 @@ func lookupCounts(t *testing.T) map[string]float64 {
 	}
 	return out
 }
-
-func TestOrganization_ReturnsTheOwningOrganization(t *testing.T) {
-	c, _ := projectstatetest.NewCache(t,
-		projectstatetest.NewOwnedProject("owned", "org-1"),
-		projectstatetest.NewProject("unowned", false),
-	)
-
-	if org, ok := c.Organization("owned"); !ok || org != "org-1" {
-		t.Errorf("Organization(owned) = %q, %v; want org-1, true", org, ok)
-	}
-	if _, ok := c.Organization("unowned"); ok {
-		t.Errorf("Organization(unowned) found, want not found")
-	}
-	if _, ok := c.Organization("missing"); ok {
-		t.Errorf("Organization(missing) found, want not found")
-	}
-}

@@ -19,7 +19,7 @@ import (
 // plugin fails its initialization check and the server doesn't start.
 func TestMiloInitializersSetAccessRules(t *testing.T) {
 	plugin := accessowner.NewPlugin()
-	admission.PluginInitializers(miloInitializers(&rest.Config{}, nil, nil, access.NewRules())).Initialize(plugin)
+	admission.PluginInitializers(miloInitializers(&rest.Config{}, nil, access.NewRules())).Initialize(plugin)
 	if err := plugin.ValidateInitialization(); err != nil {
 		t.Errorf("AccessRuleOwnerEnforcement after Milo's initializers: %v", err)
 	}

@@ -143,13 +143,13 @@ const (
 	// alpha: v0.1.0
 	EmailVerifiedGate featuregate.Feature = "EmailVerifiedGate"
 
-	// OrganizationOnboardingGate makes OrganizationOnboardingEnforcement deny,
-	// rather than only observe, writes in projects whose organization has not
-	// finished onboarding: contact information, a billing account, and a
-	// payment method or payment terms.
+	// OrganizationOnboardingGate makes the Project webhook deny, rather than
+	// only observe, creating a Project in an organization that has not finished
+	// onboarding: contact information, a billing account, and a payment method
+	// or payment terms. Existing Projects are not affected.
 	//
 	// Like EmailVerifiedGate, it selects between two behaviours. Disabled, the
-	// plugin admits and counts what it would have denied in
+	// webhook admits and counts what it would have denied in
 	// milo_organization_onboarding_denials_total{enforced="false"}. Read that
 	// before enabling: it is the population that will start being denied.
 	//
