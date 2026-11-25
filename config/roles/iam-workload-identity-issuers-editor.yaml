@@ -1,0 +1,16 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: Role
+metadata:
+  name: iam-workload-identity-issuers-editor
+  annotations:
+    kubernetes.io/display-name: IAM Workload Identity Issuers Editor
+    kubernetes.io/description: "Allows creating, editing and deleting workload identity issuers. Their status is written only by the controller that verifies key sets."
+spec:
+  launchStage: Beta
+  inheritedRoles:
+    - name: iam-workload-identity-issuers-viewer
+  includedPermissions:
+    - iam.miloapis.com/workloadidentityissuers.create
+    - iam.miloapis.com/workloadidentityissuers.update
+    - iam.miloapis.com/workloadidentityissuers.patch
+    - iam.miloapis.com/workloadidentityissuers.delete
