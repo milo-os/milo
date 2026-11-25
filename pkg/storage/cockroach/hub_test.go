@@ -112,6 +112,18 @@ func TestEventRing(t *testing.T) {
 	require.Equal(t, 3, r.valueBytes)
 }
 
+// The ring knows each key's newest event until that event ages out.
+func TestEventRingNewest(t *testing.T) {
+	now := time.Now()
+	r := eventRing{limits: replayConfig{window: time.Minute, events: 8, bytes: 1 << 20}}
+	r.push(&feedEvent{key: "a", rev: 1, releasedAt: now.Add(-time.Hour)})
+	r.push(&feedEvent{key: "b", rev: 2, releasedAt: now.Add(-time.Hour)})
+	r.push(&feedEvent{key: "a", rev: 3, releasedAt: now})
+	r.trim(now)
+	require.Equal(t, int64(3), r.newest["a"].rev)
+	require.NotContains(t, r.newest, "b")
+}
+
 func TestDecodeFeedMessage(t *testing.T) {
 	msg, err := decodeFeedMessage([]byte(`{"after":{"project":"t","key":"/pods/p","rv":3,"value":"\\x0aff"},"before":null,"updated":"123.0000000001"}`))
 	require.NoError(t, err)

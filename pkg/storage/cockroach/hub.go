@@ -330,6 +330,22 @@ func (h *hub) compactRevision(project string) int64 {
 	return t.seq.oldest()
 }
 
+// recent returns key's newest version among project's recent writes, or nil
+// when they don't hold a live one. A later write may have replaced it already.
+func (h *hub) recent(project, key string) *row {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	t, ok := h.projects[project]
+	if !ok {
+		return nil
+	}
+	e := t.seq.newest(key)
+	if e == nil || e.op == watch.Deleted {
+		return nil
+	}
+	return &row{key: key, rev: e.rev, value: e.value}
+}
+
 // releasedRevision returns the last revision of project that the hub has
 // released.
 func (h *hub) releasedRevision(project string) int64 {

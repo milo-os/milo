@@ -104,6 +104,25 @@ func (s *store) getCurrentState(ctx context.Context, key string, v reflect.Value
 	}
 }
 
+// initialState returns the state an update or delete starts from, and whether
+// it's known to be current: the caller's cached object, or else the key's
+// newest version among the hub's recent writes, either of which a later write
+// may have replaced, or else the current row. A replaced state fails the
+// write's revision check, which returns the current row to retry with.
+func (s *store) initialState(ctx context.Context, key string, v reflect.Value, cached runtime.Object, current func() (*objState, error)) (*objState, bool, error) {
+	if cached != nil {
+		state, err := s.getStateFromObject(cached)
+		return state, false, err
+	}
+	if live := s.b.hub.recent(s.project, key); live != nil {
+		if state, err := s.getState(ctx, live, key, v, false, false); err == nil {
+			return state, false, nil
+		}
+	}
+	state, err := current()
+	return state, true, err
+}
+
 func (s *store) getStateFromObject(obj runtime.Object) (*objState, error) {
 	state := &objState{obj: obj, meta: &storage.ResponseMeta{}}
 	rv, err := s.versioner.ObjectResourceVersion(obj)
@@ -144,11 +163,11 @@ func (s *store) Delete(ctx context.Context, key string, out runtime.Object, prec
 
 	var origState *objState
 	var origStateIsCurrent bool
-	if cachedExistingObject != nil && !expectCorrupt {
-		origState, err = s.getStateFromObject(cachedExistingObject)
-	} else {
+	if expectCorrupt {
 		origState, err = getCurrentState()
 		origStateIsCurrent = true
+	} else {
+		origState, origStateIsCurrent, err = s.initialState(ctx, preparedKey, v, cachedExistingObject, getCurrentState)
 	}
 	if err != nil {
 		return err
@@ -204,14 +223,7 @@ func (s *store) GuaranteedUpdate(ctx context.Context, key string, destination ru
 	}
 	getCurrentState := s.getCurrentState(ctx, preparedKey, v, ignoreNotFound, false)
 
-	var origState *objState
-	var origStateIsCurrent bool
-	if cachedExistingObject != nil {
-		origState, err = s.getStateFromObject(cachedExistingObject)
-	} else {
-		origState, err = getCurrentState()
-		origStateIsCurrent = true
-	}
+	origState, origStateIsCurrent, err := s.initialState(ctx, preparedKey, v, cachedExistingObject, getCurrentState)
 	if err != nil {
 		return err
 	}

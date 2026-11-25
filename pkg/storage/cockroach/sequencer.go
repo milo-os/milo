@@ -121,11 +121,15 @@ func (s *sequencer) latest() int64 { return s.log.end() }
 // oldest and latest.
 func (s *sequencer) replayAfter(rev int64) []*feedEvent { return s.log.since(rev) }
 
+// newest returns key's last released event, or nil once it has aged out.
+func (s *sequencer) newest(key string) *feedEvent { return s.log.newest[key] }
+
 // eventRing holds released events. events[i] is at revision base+1+i, and
 // the last one is the last revision released.
 type eventRing struct {
 	base       int64
 	events     []*feedEvent
+	newest     map[string]*feedEvent
 	valueBytes int
 	limits     replayConfig
 }
@@ -140,6 +144,10 @@ func (r *eventRing) end() int64 { return r.base + int64(len(r.events)) }
 func (r *eventRing) push(e *feedEvent) {
 	r.events = append(r.events, e)
 	r.valueBytes += e.size()
+	if r.newest == nil {
+		r.newest = map[string]*feedEvent{}
+	}
+	r.newest[e.key] = e
 }
 
 // since returns the events after rev, which must be at or after start.
@@ -149,6 +157,9 @@ func (r *eventRing) since(rev int64) []*feedEvent { return r.events[rev-r.base:]
 func (r *eventRing) drop(n int) {
 	for _, e := range r.events[:n] {
 		r.valueBytes -= e.size()
+		if r.newest[e.key] == e {
+			delete(r.newest, e.key)
+		}
 	}
 	clear(r.events[:n])
 	r.events = r.events[n:]
