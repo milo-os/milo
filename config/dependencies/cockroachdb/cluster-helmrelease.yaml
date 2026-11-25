@@ -23,11 +23,20 @@ spec:
         postInitSQL:
           inline:
             - CREATE DATABASE IF NOT EXISTS milo
+            # The console needs a user with a password; root has only its
+            # certificate. These are test credentials.
+            - CREATE USER IF NOT EXISTS miloadmin WITH PASSWORD 'miloadmin'
+            - GRANT admin TO miloadmin
         regions:
           - code: local
             nodes: 1
             # Kubernetes does not let a value here follow the overlay's namespace.
             namespace: milo-system
+        # The node's hostname is its locality. The default maps the region and
+        # zone labels, which kind nodes don't have.
+        localityMappings:
+          - nodeLabel: kubernetes.io/hostname
+            localityLabel: host
         dataStore:
           volumeClaimTemplate:
             spec:
@@ -38,6 +47,9 @@ spec:
                   storage: 2Gi
         podTemplate:
           spec:
+            # One node has nothing to spread across. The default spreads over
+            # the zone label, which kind nodes don't have.
+            topologySpreadConstraints: []
             containers:
               - name: cockroachdb
                 resources:
