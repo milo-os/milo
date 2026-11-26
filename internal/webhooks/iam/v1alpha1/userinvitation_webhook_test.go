@@ -633,3 +633,111 @@ func TestUserInvitationValidator_ValidateCreate_StateMustBePending(t *testing.T)
 		})
 	}
 }
+
+func TestUserInvitationValidator_ValidateCreate_OrgContextAssignableRoles(t *testing.T) {
+	const assignableNS = "datum-cloud"
+	const systemNS = "milo-system"
+	const orgNS = "organization-testorg"
+
+	datumRole := &iamv1alpha1.Role{ObjectMeta: metav1.ObjectMeta{Name: "org-viewer", Namespace: assignableNS}}
+	systemRole := &iamv1alpha1.Role{ObjectMeta: metav1.ObjectMeta{Name: "internal-admin", Namespace: systemNS}}
+	orgRole := &iamv1alpha1.Role{ObjectMeta: metav1.ObjectMeta{Name: "local-role", Namespace: orgNS}}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(runtimeScheme).
+		WithObjects(datumRole, systemRole, orgRole).
+		WithIndex(&iamv1alpha1.UserInvitation{}, userInvitationCompositeKey, func(raw client.Object) []string {
+			return []string{buildUserInvitationCompositeKey(*raw.(*iamv1alpha1.UserInvitation))}
+		}).
+		WithIndex(&iamv1alpha1.User{}, userEmailKey, func(raw client.Object) []string {
+			return []string{strings.ToLower(raw.(*iamv1alpha1.User).Spec.Email)}
+		}).
+		WithIndex(&resourcemanagerv1alpha1.OrganizationMembership{}, organizationMembershipCompositeKey, func(raw client.Object) []string {
+			om := raw.(*resourcemanagerv1alpha1.OrganizationMembership)
+			return []string{buildOrganizationMembershipCompositeKey(om.Spec.OrganizationRef.Name, om.Spec.UserRef.Name)}
+		}).Build()
+
+	validator := &UserInvitationValidator{
+		client:                   fakeClient,
+		systemNamespace:          systemNS,
+		assignableRolesNamespace: assignableNS,
+	}
+
+	orgReq := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Namespace: orgNS,
+		UserInfo: authenticationv1.UserInfo{
+			Username: "org-admin",
+			Extra: map[string]authenticationv1.ExtraValue{
+				iamv1alpha1.ParentNameExtraKey:     {"testorg"},
+				iamv1alpha1.ParentKindExtraKey:     {"Organization"},
+				iamv1alpha1.ParentAPIGroupExtraKey: {resourcemanagerv1alpha1.GroupVersion.Group},
+			},
+		},
+	}}
+	platformReq := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Namespace: orgNS,
+		UserInfo:  authenticationv1.UserInfo{Username: "controller"},
+	}}
+
+	inviteWithRole := func(role iamv1alpha1.RoleReference) *iamv1alpha1.UserInvitation {
+		return &iamv1alpha1.UserInvitation{
+			ObjectMeta: metav1.ObjectMeta{Name: "inv", Namespace: orgNS},
+			Spec: iamv1alpha1.UserInvitationSpec{
+				Email:           "someone@example.com",
+				State:           iamv1alpha1.UserInvitationStatePending,
+				OrganizationRef: resourcemanagerv1alpha1.OrganizationReference{Name: "testorg"},
+				Roles:           []iamv1alpha1.RoleReference{role},
+			},
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		req         admission.Request
+		role        iamv1alpha1.RoleReference
+		expectError bool
+		contains    string
+	}{
+		"org context allows datum-cloud role": {
+			req:  orgReq,
+			role: iamv1alpha1.RoleReference{Name: "org-viewer", Namespace: assignableNS},
+		},
+		"org context rejects milo-system role": {
+			req:         orgReq,
+			role:        iamv1alpha1.RoleReference{Name: "internal-admin", Namespace: systemNS},
+			expectError: true,
+			contains:    `supported values: "datum-cloud"`,
+		},
+		"org context rejects org-namespace role": {
+			req:         orgReq,
+			role:        iamv1alpha1.RoleReference{Name: "local-role", Namespace: orgNS},
+			expectError: true,
+			contains:    `supported values: "datum-cloud"`,
+		},
+		"org context rejects empty role namespace": {
+			req:         orgReq,
+			role:        iamv1alpha1.RoleReference{Name: "org-viewer"},
+			expectError: true,
+			contains:    `supported values: "datum-cloud"`,
+		},
+		"org context rejects missing role in datum-cloud": {
+			req:         orgReq,
+			role:        iamv1alpha1.RoleReference{Name: "missing", Namespace: assignableNS},
+			expectError: true,
+			contains:    "datum-cloud/missing",
+		},
+		"platform context still allows milo-system role": {
+			req:  platformReq,
+			role: iamv1alpha1.RoleReference{Name: "internal-admin", Namespace: systemNS},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := admission.NewContextWithRequest(context.Background(), tc.req)
+			_, err := validator.ValidateCreate(ctx, inviteWithRole(tc.role))
+			if tc.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tc.contains)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

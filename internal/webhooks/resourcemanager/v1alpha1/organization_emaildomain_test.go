@@ -37,7 +37,9 @@ func TestOrganizationValidator_validateEmailDomainJoining(t *testing.T) {
 		},
 	}
 	viewer := &iamv1alpha1.Role{ObjectMeta: metav1.ObjectMeta{Name: "viewer", Namespace: "datum-cloud"}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project, viewer).Build()
+	sysRole := &iamv1alpha1.Role{ObjectMeta: metav1.ObjectMeta{Name: "internal", Namespace: "milo-system"}}
+	orgRole := &iamv1alpha1.Role{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: "organization-acme"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project, viewer, sysRole, orgRole).Build()
 
 	validator := &OrganizationValidator{
 		client:                   c,
@@ -65,6 +67,7 @@ func TestOrganizationValidator_validateEmailDomainJoining(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
+		ctx        context.Context
 		gate       bool
 		oldOrg     *resourcemanagerv1alpha1.Organization
 		newOrg     *resourcemanagerv1alpha1.Organization
@@ -122,11 +125,42 @@ func TestOrganizationValidator_validateEmailDomainJoining(t *testing.T) {
 			newOrg:     org([]resourcemanagerv1alpha1.RoleReference{{Name: "missing", Namespace: "datum-cloud"}}, "example.com"),
 			wantErrors: []string{"datum-cloud/missing"},
 		},
+		{
+			name:   "org context allows datum-cloud role",
+			ctx:    orgContextRequest("acme"),
+			gate:   true,
+			newOrg: org(viewerRole, "example.com"),
+		},
+		{
+			name:       "org context rejects milo-system role",
+			ctx:        orgContextRequest("acme"),
+			gate:       true,
+			newOrg:     org([]resourcemanagerv1alpha1.RoleReference{{Name: "internal", Namespace: "milo-system"}}, "example.com"),
+			wantErrors: []string{"roles[0].namespace", `supported values: "datum-cloud"`},
+		},
+		{
+			name:       "org context rejects org-namespace role",
+			ctx:        orgContextRequest("acme"),
+			gate:       true,
+			newOrg:     org([]resourcemanagerv1alpha1.RoleReference{{Name: "local", Namespace: "organization-acme"}}, "example.com"),
+			wantErrors: []string{"roles[0].namespace", `supported values: "datum-cloud"`},
+		},
+		{
+			name:       "org context rejects empty role namespace",
+			ctx:        orgContextRequest("acme"),
+			gate:       true,
+			newOrg:     org([]resourcemanagerv1alpha1.RoleReference{{Name: "local"}}, "example.com"),
+			wantErrors: []string{"roles[0].namespace", `supported values: "datum-cloud"`},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EmailDomainJoining, tc.gate)
 
-			errs, err := validator.validateEmailDomainJoining(context.Background(), tc.oldOrg, tc.newOrg)
+			ctx := tc.ctx
+			if ctx == nil {
+				ctx = membershipValidationContext()
+			}
+			errs, err := validator.validateEmailDomainJoining(ctx, tc.oldOrg, tc.newOrg)
 			if err != nil {
 				t.Fatalf("validateEmailDomainJoining error: %v", err)
 			}

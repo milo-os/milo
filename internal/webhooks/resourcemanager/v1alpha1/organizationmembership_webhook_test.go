@@ -1388,3 +1388,118 @@ func TestOrganizationMembershipValidator_ValidateCreate_OrgContextSameRefusalFor
 		t.Fatalf("refusal differs by user existence:\n existing: %v\n missing:  %v", existingErr, missingErr)
 	}
 }
+
+func TestOrganizationMembershipValidator_ValidateUpdate_OrgContextAssignableRoles(t *testing.T) {
+	const assignableNS = "datum-cloud"
+
+	datumRole := &iamv1alpha1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "org-viewer", Namespace: assignableNS},
+		Spec:       iamv1alpha1.RoleSpec{LaunchStage: "Stable"},
+	}
+	systemRole := &iamv1alpha1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "internal-admin", Namespace: "milo-system"},
+		Spec:       iamv1alpha1.RoleSpec{LaunchStage: "Stable"},
+	}
+	ownerRole := &iamv1alpha1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "resourcemanager.miloapis.com-organizationowner", Namespace: "milo-system"},
+		Spec:       iamv1alpha1.RoleSpec{LaunchStage: "Stable"},
+	}
+	otherOrgRole := &iamv1alpha1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "secret-role", Namespace: "organization-other"},
+		Spec:       iamv1alpha1.RoleSpec{LaunchStage: "Stable"},
+	}
+
+	newValidator := func() *OrganizationMembershipValidator {
+		c := fake.NewClientBuilder().
+			WithScheme(getWebhookTestScheme()).
+			WithObjects(datumRole, systemRole, ownerRole, otherOrgRole).
+			Build()
+		return &OrganizationMembershipValidator{
+			client:                   c,
+			apiReader:                c,
+			ownerRoleName:            "resourcemanager.miloapis.com-organizationowner",
+			ownerRoleNamespace:       "milo-system",
+			assignableRolesNamespace: assignableNS,
+		}
+	}
+
+	t.Run("adding role in datum-cloud in org context succeeds", func(t *testing.T) {
+		oldM := membershipForOrg("acme", "alice", nil)
+		newM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "org-viewer", Namespace: assignableNS},
+		})
+		if _, err := newValidator().ValidateUpdate(orgContextRequest("acme"), oldM, newM); err != nil {
+			t.Fatalf("expected update to succeed, got: %v", err)
+		}
+	})
+
+	t.Run("adding role in milo-system in org context is rejected", func(t *testing.T) {
+		oldM := membershipForOrg("acme", "alice", nil)
+		newM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "internal-admin", Namespace: "milo-system"},
+		})
+		_, err := newValidator().ValidateUpdate(orgContextRequest("acme"), oldM, newM)
+		if err == nil {
+			t.Fatal("expected update with milo-system role to be rejected")
+		}
+		if !containsErrorMessage(err, `supported values: "datum-cloud"`) {
+			t.Fatalf("expected unsupported namespace error, got: %v", err)
+		}
+	})
+
+	t.Run("adding role with empty namespace in org context is rejected", func(t *testing.T) {
+		oldM := membershipForOrg("acme", "alice", nil)
+		newM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "org-viewer"},
+		})
+		_, err := newValidator().ValidateUpdate(orgContextRequest("acme"), oldM, newM)
+		if err == nil {
+			t.Fatal("expected update with empty role namespace to be rejected")
+		}
+		if !containsErrorMessage(err, `supported values: "datum-cloud"`) {
+			t.Fatalf("expected unsupported namespace error, got: %v", err)
+		}
+	})
+
+	t.Run("disallowed namespace error is identical whether role exists or not", func(t *testing.T) {
+		v := newValidator()
+		oldM := membershipForOrg("acme", "alice", nil)
+		existingM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "secret-role", Namespace: "organization-other"},
+		})
+		missingM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "does-not-exist", Namespace: "organization-other"},
+		})
+		_, existingErr := v.ValidateUpdate(orgContextRequest("acme"), oldM, existingM)
+		_, missingErr := v.ValidateUpdate(orgContextRequest("acme"), oldM, missingM)
+		if existingErr == nil || missingErr == nil {
+			t.Fatalf("expected both updates to be rejected, got existing=%v missing=%v", existingErr, missingErr)
+		}
+		if existingErr.Error() != missingErr.Error() {
+			t.Fatalf("error differs by role existence:\n existing: %v\n missing:  %v", existingErr, missingErr)
+		}
+	})
+
+	t.Run("keeping existing non-datum-cloud role while adding datum-cloud role succeeds", func(t *testing.T) {
+		oldM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "resourcemanager.miloapis.com-organizationowner", Namespace: "milo-system"},
+		})
+		newM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "resourcemanager.miloapis.com-organizationowner", Namespace: "milo-system"},
+			{Name: "org-viewer", Namespace: assignableNS},
+		})
+		if _, err := newValidator().ValidateUpdate(orgContextRequest("acme"), oldM, newM); err != nil {
+			t.Fatalf("expected update keeping existing owner role to succeed, got: %v", err)
+		}
+	})
+
+	t.Run("adding role outside datum-cloud in platform context still succeeds", func(t *testing.T) {
+		oldM := membershipForOrg("acme", "alice", nil)
+		newM := membershipForOrg("acme", "alice", []resourcemanagerv1alpha1.RoleReference{
+			{Name: "internal-admin", Namespace: "milo-system"},
+		})
+		if _, err := newValidator().ValidateUpdate(membershipValidationContext(), oldM, newM); err != nil {
+			t.Fatalf("expected platform-context update to succeed, got: %v", err)
+		}
+	})
+}
