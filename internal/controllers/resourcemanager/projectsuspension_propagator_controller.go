@@ -32,32 +32,27 @@ type ProjectSuspensionPropagatorController struct {
 	// scope-tag them; see ProjectEventEmitter for why the manager's shared
 	// EventRecorder cannot. Defaulted in SetupWithManager.
 	EventEmitter projectEventEmitter
+
+	// ProjectEventUser is the user EventEmitter impersonates. Empty means
+	// DefaultProjectEventUser. Ignored when EventEmitter is set.
+	ProjectEventUser string
 }
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects,verbs=get;list;watch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projectsuspensions,verbs=get;list;watch
 
-// Consumer-facing Suspended/Reinstated events are created through a client
-// that impersonates the controller's own service account plus the target
-// project's parent context, so the events proxy can scope-tag them
-// (see ProjectEventEmitter). That needs impersonate on the service account
-// itself — a username of the form system:serviceaccount:<ns>:<name> is
-// authorized against the serviceaccounts resource, not users — and on each
-// parent-context extra key, which are checked individually as
-// userextras/<key> subresources.
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=impersonate
-// +kubebuilder:rbac:groups=authentication.k8s.io,resources=userextras/iam.miloapis.com/parent-type,verbs=impersonate
-// +kubebuilder:rbac:groups=authentication.k8s.io,resources=userextras/iam.miloapis.com/parent-name,verbs=impersonate
-// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create
-
 const projectRefNameIndex = "spec.projectRef.name"
 const controllerOwnerName = "project-suspension-controller"
 
-// defaultImpersonateUser is the principal the event emitter asserts when none
-// is configured. The controller-manager must hold `impersonate` on it, plus on
-// userextras/iam.miloapis.com/parent-type and .../parent-name.
-const defaultImpersonateUser = "system:serviceaccount:milo-system:milo-controller-manager"
+// DefaultProjectEventUser is the user the event emitter impersonates when none
+// is configured. It is a Milo-only identity: nothing in the hosting cluster
+// authenticates as it, so its name does not depend on the namespace the
+// controller manager is deployed into. Milo authorizes each event create as
+// this user (the impersonation drops the controller's own groups), and
+// config/services/resourcemanager/project-events binds it to the one role it
+// needs.
+const DefaultProjectEventUser = "system:milo:project-event-emitter"
 
 // getProjectSuspendedStatus returns true if the project is suspended, false otherwise.
 func getProjectSuspendedStatus(project *resourcemanagerv1alpha.Project) bool {
@@ -203,6 +198,14 @@ func (r *ProjectSuspensionPropagatorController) Reconcile(ctx context.Context, r
 	return ctrl.Result{}, nil
 }
 
+// projectEventUser returns the user the event emitter impersonates.
+func (r *ProjectSuspensionPropagatorController) projectEventUser() string {
+	if r.ProjectEventUser == "" {
+		return DefaultProjectEventUser
+	}
+	return r.ProjectEventUser
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *ProjectSuspensionPropagatorController) SetupWithManager(mgr ctrl.Manager) error {
 	if r.EventEmitter == nil {
@@ -210,7 +213,7 @@ func (r *ProjectSuspensionPropagatorController) SetupWithManager(mgr ctrl.Manage
 		// mgr.GetEventRecorderFor: the recorder is backed by a single
 		// broadcaster over one static identity, but scope requires per-Project
 		// parent context on the request.
-		r.EventEmitter = NewProjectEventEmitter(mgr.GetConfig(), defaultImpersonateUser, controllerOwnerName)
+		r.EventEmitter = NewProjectEventEmitter(mgr.GetConfig(), r.projectEventUser(), controllerOwnerName)
 	}
 
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &resourcemanagerv1alpha.ProjectSuspension{}, projectRefNameIndex, func(rawObj client.Object) []string {

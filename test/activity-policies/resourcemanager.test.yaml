@@ -354,6 +354,20 @@ tests:
   exp_summary: Project web was suspended
   exp_policy: resourcemanager.miloapis.com-project
   exp_change_source: system
+- name: 'resourcemanager.miloapis.com-project: suspended, with the category the suspension controller sends'
+  event:
+    reason: Suspended
+    type: Normal
+    reportingController: project-suspension-controller
+    note: Abuse, Billing
+    regarding:
+      apiVersion: resourcemanager.miloapis.com/v1alpha1
+      kind: Project
+      name: web
+  exp_rule: suspended
+  exp_summary: 'Project web was suspended (category: Abuse, Billing)'
+  exp_policy: resourcemanager.miloapis.com-project
+  exp_change_source: system
 - name: 'resourcemanager.miloapis.com-project: reinstated'
   event:
     reason: Reinstated

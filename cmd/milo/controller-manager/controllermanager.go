@@ -181,6 +181,13 @@ var (
 	// window; only the customer-facing warning e-mail is suppressed.
 	ProjectSuspensionWarningExcludedReasons []string
 
+	// ProjectEventUser is the user the controller manager impersonates, with
+	// the target project's parent context, when it creates Project lifecycle
+	// events in Milo. Milo authorizes the event create as this user alone, so
+	// it must be bound to a role in Milo that allows creating events (see
+	// config/services/resourcemanager/project-events).
+	ProjectEventUser string
+
 	QuotaMaxConcurrentReconciles int
 	// QuotaProviderMaxConcurrentReconciles is how many projects the quota system's provider engages at once.
 	QuotaProviderMaxConcurrentReconciles int
@@ -348,6 +355,7 @@ func NewCommand() *cobra.Command {
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailTemplate, "project-suspension-deletion-warning-email-template", "emailtemplates.notification.miloapis.com-projectsuspensiondeletionwarningemailtemplate", "The name of the template used to warn a suspended project's organization about upcoming deletion.")
 	fs.StringVar(&ProjectSuspensionDeletionWarningEmailNamespace, "project-suspension-deletion-warning-email-namespace", "milo-system", "The namespace suspension deletion warning Email resources are created in, kept as a stable, centralized audit trail.")
 	fs.StringSliceVar(&ProjectSuspensionWarningExcludedReasons, "project-suspension-warning-excluded-reasons", []string{"Fraud", "Abuse"}, "Comma-separated suspension reasons for which countdown deletion warning e-mails are NOT sent (e.g. Fraud,Abuse). Projects suspended for these reasons still auto-delete after the retention window.")
+	fs.StringVar(&ProjectEventUser, "project-event-user", resourcemanagercontroller.DefaultProjectEventUser, "The user the controller manager impersonates in Milo when it creates Project lifecycle events, such as Suspended and Reinstated. Milo must let this user create core/v1 events; the binding shipped in config/services/resourcemanager/project-events names the default.")
 	fs.IntVar(&QuotaMaxConcurrentReconciles, "quota-max-concurrent-reconciles", 1, "The number of AllowanceBuckets and the number of ResourceClaims the quota controllers reconcile in parallel.")
 	fs.IntVar(&QuotaProviderMaxConcurrentReconciles, "quota-provider-max-concurrent-reconciles", 1, "The number of projects the quota system's provider engages at once after this controller manager takes the lease.")
 	fs.StringVar(&WaitlistRelatedResourcesNamespace, "waitlist-related-resources-namespace", "milo-system", "The namespace that contains the waitlist related resources.")
@@ -564,7 +572,8 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 			}
 
 			projectSuspensionCtrl := resourcemanagercontroller.ProjectSuspensionPropagatorController{
-				Client: ctrl.GetClient(),
+				Client:           ctrl.GetClient(),
+				ProjectEventUser: ProjectEventUser,
 			}
 			if err := projectSuspensionCtrl.SetupWithManager(ctrl); err != nil {
 				logger.Error(err, "Error setting up project suspension controller")

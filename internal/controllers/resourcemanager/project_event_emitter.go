@@ -7,7 +7,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	eventsv1 "k8s.io/api/events/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -57,18 +56,28 @@ type projectEventEmitter interface {
 // broadcaster over one rest.Config, i.e. one static identity, while parent
 // context varies per Project.
 //
-// Events are created as events.k8s.io/v1 rather than core/v1 so the objects
-// genuinely carry the Regarding/Note fields the ActivityPolicy eventRules read
-// (config/services/activity/policies/resourcemanager/project-policy.yaml),
-// with no dependence on a core/v1 -> events.k8s.io/v1 conversion in between.
+// Events are created as core/v1 Events. Milo serves core/v1 Events whether or
+// not the EventsProxy feature gate is on, and it injects scope on that API when
+// the gate is on. events.k8s.io/v1 is served only behind the gate. Activity
+// converts core/v1 Events to the events.k8s.io/v1 shape before the
+// ActivityPolicy eventRules see them
+// (config/services/activity/policies/resourcemanager/project-policy.yaml):
+// involvedObject becomes regarding, message becomes note, and source.component
+// becomes reportingController.
 //
-// Deployment prerequisite: the controller-manager must hold `impersonate` on
-// the configured impersonateUser and on
-// userextras/iam.miloapis.com/parent-type and .../parent-name. No such RBAC
-// exists under config/ today, and in test-infra the controller-manager
-// authenticates as `admin` in system:masters, which bypasses authorization —
-// so this works there and would fail anywhere with real RBAC until that
-// binding is added.
+// Authorization happens in Milo, in two separate checks:
+//
+//   - Impersonation. The controller manager's own Milo identity must be allowed
+//     to impersonate impersonateUser and the parent-type/parent-name extras.
+//     Datum's deployment connects as system:masters, which already allows it;
+//     config/services/resourcemanager/project-events ships a narrow
+//     ClusterRole for deployments that do not.
+//   - The create itself. An impersonated request carries only the impersonated
+//     identity, never the caller's groups, so system:masters does not carry
+//     over. impersonateUser must be allowed to create core/v1 events in Milo; the same component binds the default user to that role.
+//
+// The controller manager's hosting-cluster ClusterRole plays no part in either
+// check, which is why no kubebuilder RBAC markers cover this emitter.
 type ProjectEventEmitter struct {
 	// baseConfig is the controller-manager's own rest config; each emit
 	// derives an impersonating copy from it.
@@ -120,7 +129,7 @@ func (e *ProjectEventEmitter) clientForProject(projectName string) (kubernetes.I
 	return e.newClient(cfg)
 }
 
-// Emit creates an events.k8s.io/v1 Event regarding project.
+// Emit creates a core/v1 Event regarding project.
 //
 // note reaches tenant-facing activity feeds, so callers must keep it free of
 // internal admin detail — see recordTransition.
@@ -134,31 +143,39 @@ func (e *ProjectEventEmitter) Emit(ctx context.Context, project *resourcemanager
 		return fmt.Errorf("failed to build impersonating client for project %q: %w", project.Name, err)
 	}
 
-	event := &eventsv1.Event{
+	now := metav1.Now()
+	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			// Names are assigned client-side rather than via GenerateName,
 			// matching how client-go's own event recorder builds them. Two
 			// transitions for one project can't share a nanosecond, and this
 			// keeps the emitter independent of server-side name generation.
-			Name:      fmt.Sprintf("%s.%x", project.Name, time.Now().UnixNano()),
+			Name:      fmt.Sprintf("%s.%x", project.Name, now.UnixNano()),
 			Namespace: clusterScopedEventNamespace,
 		},
-		EventTime:           metav1.NowMicro(),
-		ReportingController: controllerOwnerName,
-		ReportingInstance:   e.reportingInstance,
-		Action:              reason,
-		Reason:              reason,
-		Regarding: corev1.ObjectReference{
+		InvolvedObject: corev1.ObjectReference{
 			APIVersion: resourcemanagerv1alpha.GroupVersion.String(),
 			Kind:       projectKind,
 			Name:       project.Name,
 			UID:        project.UID,
 		},
-		Note: note,
-		Type: corev1.EventTypeNormal,
+		Reason:  reason,
+		Message: note,
+		Type:    corev1.EventTypeNormal,
+		// Activity reads reportingController and reportingInstance from
+		// source.component and source.host.
+		Source: corev1.EventSource{
+			Component: controllerOwnerName,
+			Host:      e.reportingInstance,
+		},
+		ReportingController: controllerOwnerName,
+		ReportingInstance:   e.reportingInstance,
+		FirstTimestamp:      now,
+		LastTimestamp:       now,
+		Count:               1,
 	}
 
-	if _, err := cs.EventsV1().Events(clusterScopedEventNamespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
+	if _, err := cs.CoreV1().Events(clusterScopedEventNamespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("failed to create %q event for project %q: %w", reason, project.Name, err)
 	}
 

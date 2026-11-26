@@ -1,0 +1,199 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-suspension-events
+spec:
+  description: |
+    Tests that the suspension controller's Suspended and Reinstated events
+    reach Milo under Milo's real RBAC.
+
+    The controller manager connects to Milo as system:masters, but it creates
+    these events while impersonating its project event user
+    (system:milo:project-event-emitter) and the project's parent context. An
+    impersonated request is authorized as the impersonated user alone, so the
+    event create only succeeds if config/services/resourcemanager/project-events
+    grants that user events create in Milo.
+
+    This test verifies:
+    - Suspending a project creates a Suspended event regarding the project,
+      whose message is the reason category and never the
+      ProjectSuspension's name.
+    - The project's Suspended condition message names the category only.
+    - Lifting the suspension creates a Reinstated event.
+    - Milo's RBAC is what allows the create: the default project event user
+      can create an event, and any other impersonated user is refused.
+
+    Scope annotations are not asserted here. Milo adds them on the events
+    proxy path (the EventsProxy feature gate), which test-infra does not
+    enable; internal/apiserver/events covers them in unit tests.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org
+
+  steps:
+    - name: setup-organization
+      description: Create the Organization.
+      cluster: main
+      try:
+        - apply:
+            file: 01-organization.yaml
+        - apply:
+            file: 04-test-user-rbac.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-suspension-events-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create the Project in the organization's control plane.
+      cluster: org
+      try:
+        - apply:
+            file: 02-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-suspension-events-project
+            timeout: 30s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: suspend-project
+      description: Suspend the project and check the condition message is redacted.
+      cluster: main
+      try:
+        - apply:
+            file: 03-suspension.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-suspended.yaml
+
+    - name: verify-suspended-event
+      description: |
+        The controller creates a Suspended event regarding the project. The
+        create runs as the impersonated project event user, so it only lands
+        if Milo's RBAC allows it.
+      cluster: main
+      try:
+        - script:
+            timeout: 60s
+            content: |
+              set -eu
+              PROJECT=test-suspension-events-project
+              for i in $(seq 1 20); do
+                EVENT=$(kubectl get events -n default -o json \
+                  | jq -c --arg p "$PROJECT" '[.items[] | select(.involvedObject.name == $p and .reason == "Suspended")] | last // empty')
+                if [ -n "$EVENT" ]; then break; fi
+                sleep 3
+              done
+              if [ -z "${EVENT:-}" ]; then
+                echo "FAIL: no Suspended event regarding $PROJECT"
+                kubectl get events -n default || true
+                exit 1
+              fi
+              echo "$EVENT"
+
+              MESSAGE=$(echo "$EVENT" | jq -r '.message')
+              [ "$MESSAGE" = "Abuse" ] || { echo "FAIL: expected message Abuse, got '$MESSAGE'"; exit 1; }
+              if echo "$MESSAGE" | grep -q 'suspension-events-abuse'; then
+                echo "FAIL: message names the ProjectSuspension"; exit 1
+              fi
+
+              CONTROLLER=$(echo "$EVENT" | jq -r '.source.component')
+              [ "$CONTROLLER" = "project-suspension-controller" ] \
+                || { echo "FAIL: expected source.component project-suspension-controller, got '$CONTROLLER'"; exit 1; }
+
+              KIND=$(echo "$EVENT" | jq -r '.involvedObject.kind')
+              [ "$KIND" = "Project" ] || { echo "FAIL: expected involvedObject.kind Project, got '$KIND'"; exit 1; }
+
+              echo "PASS: Suspended event created with the category as its message"
+
+    - name: verify-milo-rbac-decides
+      description: |
+        Show that the event create is decided by Milo's RBAC and not by the
+        caller's system:masters group: the default project event user may
+        create an event, and another impersonated user may not.
+      cluster: main
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -u
+              EXTRAS="--as-user-extra=iam.miloapis.com/parent-type=Project --as-user-extra=iam.miloapis.com/parent-name=test-suspension-events-project"
+              manifest() {
+                cat <<YAML
+              apiVersion: v1
+              kind: Event
+              metadata:
+                name: $1
+                namespace: default
+              reason: RBACCheck
+              message: RBAC check
+              source:
+                component: chainsaw
+              involvedObject:
+                apiVersion: resourcemanager.miloapis.com/v1alpha1
+                kind: Project
+                name: test-suspension-events-project
+              type: Normal
+              YAML
+              }
+
+              if ! manifest suspension-events-rbac-allowed \
+                | kubectl create -f - --as=system:milo:project-event-emitter $EXTRAS; then
+                echo "FAIL: the project event user was refused an event create"
+                exit 1
+              fi
+              kubectl delete events -n default suspension-events-rbac-allowed --ignore-not-found
+
+              OUT=$(manifest suspension-events-rbac-denied \
+                | kubectl create -f - --as=system:milo:not-the-project-event-user $EXTRAS 2>&1)
+              STATUS=$?
+              echo "$OUT"
+              if [ $STATUS -eq 0 ]; then
+                kubectl delete events -n default suspension-events-rbac-denied --ignore-not-found
+                echo "FAIL: an unbound impersonated user created an event"
+                exit 1
+              fi
+              echo "$OUT" | grep -qi forbidden || { echo "FAIL: expected Forbidden, got: $OUT"; exit 1; }
+
+              echo "PASS: Milo's RBAC decides the event create"
+
+    - name: lift-suspension
+      description: Lift the suspension and check the Reinstated event.
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: suspension-events-abuse
+        - assert:
+            cluster: org
+            file: assertions/assert-reinstated.yaml
+        - script:
+            timeout: 60s
+            content: |
+              set -eu
+              PROJECT=test-suspension-events-project
+              for i in $(seq 1 20); do
+                COUNT=$(kubectl get events -n default -o json \
+                  | jq --arg p "$PROJECT" '[.items[] | select(.involvedObject.name == $p and .reason == "Reinstated")] | length')
+                if [ "$COUNT" -gt 0 ]; then
+                  echo "PASS: Reinstated event created"
+                  exit 0
+                fi
+                sleep 3
+              done
+              echo "FAIL: no Reinstated event regarding $PROJECT"
+              exit 1
