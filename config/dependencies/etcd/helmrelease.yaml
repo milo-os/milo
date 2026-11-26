@@ -16,7 +16,7 @@ spec:
     image:
       registry: docker.io
       repository: bitnamilegacy/etcd
-      tag: "3.5.15-debian-12-r6"
+      tag: "3.5.21-debian-12-r6"
       pullPolicy: IfNotPresent
 
     # Disable persistence for test infrastructure (ephemeral)
