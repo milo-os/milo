@@ -3,6 +3,10 @@
 # parent-type. parent-name cannot be narrowed, since the controller emits for
 # every project.
 #
+# The access-review rules let the controller manager check, every 10 minutes,
+# that Milo still allows the emit (see CheckAccess in
+# internal/controllers/resourcemanager/project_event_access.go).
+#
 # No binding ships with this role. Datum's controller manager connects to Milo
 # as system:masters, which can already impersonate. A deployment whose
 # controller manager uses a narrower identity binds that identity to this
@@ -35,3 +39,10 @@ rules:
       - userextras/iam.miloapis.com/parent-name
     verbs:
       - impersonate
+  - apiGroups:
+      - authorization.k8s.io
+    resources:
+      - selfsubjectaccessreviews
+      - subjectaccessreviews
+    verbs:
+      - create

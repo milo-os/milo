@@ -63,7 +63,23 @@ var (
 			Help:           "Total number of project lifecycle events that could not be emitted, by reason.",
 			StabilityLevel: metrics.ALPHA,
 		},
-		[]string{"reason"}, // "Suspended", "Reinstated"
+		[]string{"reason"}, // projectLifecycleEventReasons
+	)
+
+	// projectEventUserAuthorized reports whether Milo allows the controller
+	// manager to emit Project lifecycle events as its project event user: 1
+	// when both the impersonation and the event create are allowed, 0 when
+	// either is refused. projectEventAccessMonitor sets it. The user label
+	// keeps the series absent until the monitor first runs, so a controller
+	// manager that does not run the monitor never reports 0.
+	projectEventUserAuthorized = metrics.NewGaugeVec(
+		&metrics.GaugeOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_event_user_authorized",
+			Help:           "1 when Milo allows the controller manager to create Project lifecycle events as its project event user, 0 when it does not.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"user"},
 	)
 
 	pauseFailedTotal = metrics.NewCounter(
@@ -103,10 +119,31 @@ func init() {
 	legacyregistry.MustRegister(transitionDurationSeconds)
 	legacyregistry.MustRegister(pauseFailedTotal)
 	legacyregistry.MustRegister(eventEmitFailedTotal)
+	legacyregistry.MustRegister(projectEventUserAuthorized)
 	legacyregistry.MustRegister(deletionPendingSeconds)
 	legacyregistry.MustRegister(deletionBlockingResources)
 	legacyregistry.MustRegister(suspensionEscalatedTotal)
 	legacyregistry.MustRegister(suspensionWarningEmailsTotal)
+
+	// Export each reason's emit-failure series at 0 from the start. The first
+	// failure would otherwise create the series at 1, and increase() would
+	// not see it.
+	for _, reason := range projectLifecycleEventReasons {
+		eventEmitFailedTotal.WithLabelValues(reason)
+	}
+}
+
+// projectLifecycleEventReasons lists the reasons recordTransition emits.
+var projectLifecycleEventReasons = []string{"Suspended", "Reinstated"}
+
+// recordProjectEventAccess publishes the result of a project event access
+// check for user.
+func recordProjectEventAccess(user string, err error) {
+	if err != nil {
+		projectEventUserAuthorized.WithLabelValues(user).Set(0)
+		return
+	}
+	projectEventUserAuthorized.WithLabelValues(user).Set(1)
 }
 
 // recordSuspensionEscalated counts a project that was deleted after its

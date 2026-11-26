@@ -64,3 +64,37 @@ spec:
               1. Check controller logs for propagation/reinstatement errors: kubectl logs -n milo-system -l app.kubernetes.io/component=controller-manager
               2. Verify target project status conditions manually: kubectl get project {{ $labels.resource_name }} -o yaml
 
+
+        # The controller logs an emit failure and moves on, so a missing grant in Milo would otherwise drop every
+        # Suspended and Reinstated event without notice. Suspensions are rare, so one failure is worth a look. Each
+        # reason's series starts at 0, so increase() sees the first failure.
+        - alert: ProjectLifecycleEventEmitFailed
+          expr: |
+            sum by (reason) (increase(milo_resourcemanager_project_lifecycle_event_emit_failed_total[30m])) > 0
+          labels:
+            severity: warning
+            category: events
+            team: platform
+            service: milo
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-lifecycle-event-emit-failed.md"
+            summary: "Project {{ $labels.reason }} events are failing to reach Milo"
+            description: "The controller manager failed to create {{ $value | humanize }} Project {{ $labels.reason }} event(s) in the last 30 minutes. Tenants do not see these suspensions or reinstatements in their activity feed."
+
+        # Every controller manager replica asks Milo every 10 minutes whether it may emit as its --project-event-user.
+        # The flag ships to the hosting cluster and the RBAC ships to Milo, so a changed flag or a missing binding shows
+        # up here before the next suspension does. The 30m window covers a fresh install, where Milo's RBAC can land
+        # after the controller manager starts.
+        - alert: ProjectEventUserUnauthorized
+          expr: |
+            milo_resourcemanager_project_event_user_authorized == 0
+          for: 30m
+          labels:
+            severity: warning
+            category: events
+            team: platform
+            service: milo
+          annotations:
+            runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-event-user-unauthorized.md"
+            summary: "The controller manager cannot emit Project lifecycle events in Milo"
+            description: "Controller manager pod {{ $labels.pod }} reports that Milo refuses its project event user {{ $labels.user }}. Suspended and Reinstated events will not reach tenant activity feeds until the --project-event-user flag and Milo's project-events RBAC agree."

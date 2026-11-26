@@ -213,7 +213,16 @@ func (r *ProjectSuspensionPropagatorController) SetupWithManager(mgr ctrl.Manage
 		// mgr.GetEventRecorderFor: the recorder is backed by a single
 		// broadcaster over one static identity, but scope requires per-Project
 		// parent context on the request.
-		r.EventEmitter = NewProjectEventEmitter(mgr.GetConfig(), r.projectEventUser(), controllerOwnerName)
+		emitter := NewProjectEventEmitter(mgr.GetConfig(), r.projectEventUser(), controllerOwnerName)
+		r.EventEmitter = emitter
+
+		// Reconcile emits nothing while the ProjectSuspension gate is off, so
+		// the access check would only raise a false alarm there.
+		if utilfeature.DefaultFeatureGate.Enabled(features.ProjectSuspension) {
+			if err := mgr.Add(&projectEventAccessMonitor{emitter: emitter, interval: projectEventAccessCheckInterval}); err != nil {
+				return fmt.Errorf("failed to add project event access monitor: %w", err)
+			}
+		}
 	}
 
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &resourcemanagerv1alpha.ProjectSuspension{}, projectRefNameIndex, func(rawObj client.Object) []string {
