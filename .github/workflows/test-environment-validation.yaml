@@ -96,15 +96,16 @@ jobs:
       # Chainsaw and controller-gen are Go programs that the Taskfile installs
       # with go install, and compiling them takes minutes. The workflow
       # cache-e2e-tools.yaml saves them on main. Its key is the same as this
-      # one: it names the runner image and the Go version that compile the
-      # tools, and the hash of the Taskfile, which pins their versions and says
-      # how to install them. A change to any of these misses the cache, and the
-      # Taskfile then installs the tools as before. A pull request never saves
-      # this cache: what it saves only its own runs can restore.
+      # one, because both take it from the action
+      # .github/actions/e2e-tools-cache-key: it names the runner image and the
+      # Go version that compile the tools, and the hash of the Taskfile, which
+      # pins their versions and says how to install them. A change to any of
+      # these misses the cache, and the Taskfile then installs the tools as
+      # before. A pull request never saves this cache: what it saves only its
+      # own runs can restore.
       - name: Name the test tools cache
         id: tools-cache
-        run: |
-          echo "key=e2e-tools-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS}-$(go env GOVERSION)-$(sha256sum Taskfile.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/e2e-tools-cache-key
 
       - name: Restore the test tools
         uses: actions/cache/restore@v6
@@ -122,6 +123,7 @@ jobs:
           # Import only: the image publish on main writes this cache. A cache that a
           # pull request run writes can be restored only by runs of that pull
           # request, and writing it takes minutes of every run.
+          # Relies on publish-docker (pinned in build-apiserver.yaml) still writing this cache from main.
           cache-from: type=gha
           platforms: linux/amd64
           build-args: |
