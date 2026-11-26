@@ -11,22 +11,6 @@
   },
   "packageRules": [
     {
-      "description": "k8s.io/kubernetes only builds against staging modules of the same release, so bump it, every pinned staging module and controller-runtime together",
-      "matchManagers": [
-        "gomod"
-      ],
-      "matchPackageNames": [
-        "k8s.io/**",
-        "sigs.k8s.io/controller-runtime",
-        "sigs.k8s.io/multicluster-runtime",
-        "!k8s.io/klog/**",
-        "!k8s.io/utils",
-        "!k8s.io/kube-openapi"
-      ],
-      "groupName": "kubernetes",
-      "groupSlug": "kubernetes"
-    },
-    {
       "description": "The testcontainers core and its modules release together",
       "matchManagers": [
         "gomod"
@@ -34,8 +18,26 @@
       "matchPackageNames": [
         "github.com/testcontainers/testcontainers-go{,/**}"
       ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
       "groupName": "testcontainers",
       "groupSlug": "testcontainers"
+    },
+    {
+      "description": "Patch releases of testcontainers move together in their own pull request, so they can open without approval",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/testcontainers/testcontainers-go{,/**}"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "testcontainers (patch)",
+      "groupSlug": "testcontainers-patch"
     },
     {
       "description": "The CockroachDB operator and the cluster it runs move together. The cluster chart's version is also the CockroachDB version the storage tests run",
@@ -46,8 +48,27 @@
         "cockroachdb-operator-chart",
         "cockroachdb-chart"
       ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
       "groupName": "cockroachdb",
       "groupSlug": "cockroachdb"
+    },
+    {
+      "description": "Patch releases of the CockroachDB operator and cluster charts move together in their own pull request, so they can open without approval",
+      "matchManagers": [
+        "flux"
+      ],
+      "matchPackageNames": [
+        "cockroachdb-operator-chart",
+        "cockroachdb-chart"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "cockroachdb (patch)",
+      "groupSlug": "cockroachdb-patch"
     }
   ]
 }
