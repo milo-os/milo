@@ -75,6 +75,15 @@ var accessReviewResources = map[schema.GroupResource]bool{
 	{Group: "authorization.k8s.io", Resource: "selfsubjectrulesreviews"}:   true,
 }
 
+// serviceAccountStatusResource is the resource whose status subresource this
+// plugin never blocks. Suspending a project is what makes the controller
+// manager write each of its ServiceAccounts' Suspended condition, so blocking
+// that write would leave every ServiceAccount in a suspended project working.
+// The controller manager is in system:masters today, which is exempt anyway;
+// this keeps the mark working if that membership is removed. Customers are not
+// granted the status subresource, so the exemption gives them no new write.
+var serviceAccountStatusResource = schema.GroupResource{Group: "iam.miloapis.com", Resource: "serviceaccounts"}
+
 // NewPlugin creates a new ProjectSuspensionEnforcement admission plugin.
 // It only registers for Create and Update; Delete requests are never
 // routed to Validate (see Decisions Made in the design doc: DELETE is
@@ -137,8 +146,15 @@ func (p *Plugin) getSuspensionState(_ context.Context, projectID string) *projec
 //     policy checks.
 //  3. Updates to objects already mid-deletion, so finalizer removal can
 //     complete (see isAlreadyTerminating).
+//  4. Updates to a ServiceAccount's status, so the controller manager can
+//     mark a suspended project's ServiceAccounts (see
+//     serviceAccountStatusResource).
 func isExempt(_ context.Context, attrs admission.Attributes) bool {
 	if accessReviewResources[attrs.GetResource().GroupResource()] {
+		return true
+	}
+
+	if attrs.GetResource().GroupResource() == serviceAccountStatusResource && attrs.GetSubresource() == "status" {
 		return true
 	}
 

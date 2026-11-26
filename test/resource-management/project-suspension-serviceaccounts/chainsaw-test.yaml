@@ -19,6 +19,11 @@ spec:
       that names the project and the suspension reason.
     - The suspension leaves each ServiceAccount's spec.state unchanged,
       whether the customer set it Active or Inactive.
+    - While the project is suspended, an identity outside system:masters can
+      still write a ServiceAccount's status, which is how the controller
+      manager writes the mark, but cannot update the ServiceAccount itself.
+      test-admin is in system:masters and bypasses the suspension admission
+      plugin, so this uses test-user.
     - Lifting the suspension removes the Suspended condition from every
       ServiceAccount.
 
@@ -29,14 +34,18 @@ spec:
       kubeconfig: kubeconfig-org-template
     project:
       kubeconfig: kubeconfig-project
+    projectUser:
+      kubeconfig: kubeconfig-project-user
 
   steps:
     - name: setup-organization
-      description: Create the Organization
+      description: Create the Organization and authorize test-user
       cluster: main
       try:
         - apply:
             file: 01-test-organization.yaml
+        - apply:
+            file: 05-test-user-rbac.yaml
         - wait:
             apiVersion: v1
             kind: Namespace
@@ -99,6 +108,39 @@ spec:
         - assert:
             timeout: 60s
             file: assertions/assert-robot-inactive-suspended.yaml
+
+    - name: verify-status-writable-outside-system-masters
+      description: |
+        As test-user, which is outside system:masters, write a ServiceAccount's
+        status in the suspended project. The suspension admission plugin must
+        let it through, or a controller manager outside system:masters could
+        never write the mark. The patch touches only status.email, so the mark
+        stays.
+      cluster: projectUser
+      try:
+        - patch:
+            file: 06-status-patch.yaml
+            subresource: status
+        - assert:
+            cluster: project
+            file: assertions/assert-robot-active-status-written.yaml
+
+    - name: verify-update-denied-outside-system-masters
+      description: |
+        As test-user, updating the ServiceAccount itself in the suspended
+        project is still denied, so the status exemption does not open other
+        writes.
+      cluster: projectUser
+      try:
+        - patch:
+            file: 07-spec-patch.yaml
+            expect:
+              - check:
+                  ($error != null): true
+                  (contains($error, 'is suspended')): true
+        - assert:
+            cluster: project
+            file: assertions/assert-robot-active-suspended.yaml
 
     - name: lift-suspension
       description: Delete the ProjectSuspension and wait for the project to be Active again

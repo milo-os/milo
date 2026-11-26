@@ -332,3 +332,51 @@ func TestValidate_AccessReviewExempt(t *testing.T) {
 		})
 	}
 }
+
+func TestValidate_ServiceAccountStatusExemptWhileSuspended(t *testing.T) {
+	p, _ := newTestPlugin(t, newUnstructuredProject("proj-1", true, resourcemanagerv1alpha1.ReasonAbuse))
+	ctx := milorequest.WithProject(context.Background(), "proj-1")
+
+	serviceAccounts := schema.GroupVersionResource{Group: "iam.miloapis.com", Version: "v1alpha1", Resource: "serviceaccounts"}
+	serviceAccountKind := schema.GroupVersionKind{Group: "iam.miloapis.com", Version: "v1alpha1", Kind: "ServiceAccount"}
+	groups := schema.GroupVersionResource{Group: "iam.miloapis.com", Version: "v1alpha1", Resource: "groups"}
+	groupKind := schema.GroupVersionKind{Group: "iam.miloapis.com", Version: "v1alpha1", Kind: "Group"}
+
+	// An identity outside system:masters, like a controller manager that has
+	// lost that membership.
+	controller := &user.DefaultInfo{Name: "system:control@platform.miloapis.com", Groups: []string{"system:authenticated"}}
+
+	attrsFor := func(gvk schema.GroupVersionKind, gvr schema.GroupVersionResource, subresource string) admission.Attributes {
+		return admission.NewAttributesRecord(
+			nil, nil, gvk, "", "robot", gvr, subresource,
+			admission.Update, nil, false, controller,
+		)
+	}
+
+	for name, tc := range map[string]struct {
+		attrs    admission.Attributes
+		wantDeny bool
+	}{
+		"ServiceAccount status update is allowed": {
+			attrs: attrsFor(serviceAccountKind, serviceAccounts, "status"),
+		},
+		"ServiceAccount update is still denied": {
+			attrs:    attrsFor(serviceAccountKind, serviceAccounts, ""),
+			wantDeny: true,
+		},
+		"another resource's status update is still denied": {
+			attrs:    attrsFor(groupKind, groups, "status"),
+			wantDeny: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := p.Validate(ctx, tc.attrs, nil)
+			if tc.wantDeny && !apierrors.IsForbidden(err) {
+				t.Fatalf("Validate() error = %v, want forbidden", err)
+			}
+			if !tc.wantDeny && err != nil {
+				t.Fatalf("Validate() error = %v, want nil", err)
+			}
+		})
+	}
+}

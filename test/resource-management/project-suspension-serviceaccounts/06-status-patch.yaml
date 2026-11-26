@@ -1,0 +1,8 @@
+# A status write that leaves the Suspended condition alone: a merge patch of
+# one other status field.
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata:
+  name: robot-active
+status:
+  email: robot-active@e2e.suspension.test

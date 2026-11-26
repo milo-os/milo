@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -12,6 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
@@ -97,8 +99,8 @@ func TestProjectServiceAccountSuspension_SuspendedProjectMarksServiceAccounts(t 
 		suspensionTestServiceAccount("robot-b"),
 	)
 
-	if res := reconcileProject(t, r, "acme"); res.RequeueAfter != 0 {
-		t.Errorf("RequeueAfter = %v, want 0: the controller reacts to Project changes only", res.RequeueAfter)
+	if res := reconcileProject(t, r, "acme"); res.RequeueAfter != defaultSuspendedProjectRecheck {
+		t.Errorf("RequeueAfter = %v, want %v so a missed or erased mark is repaired", res.RequeueAfter, defaultSuspendedProjectRecheck)
 	}
 
 	for _, name := range []string{"robot-a", "robot-b"} {
@@ -139,7 +141,9 @@ func TestProjectServiceAccountSuspension_LiftedProjectRemovesCondition(t *testin
 		suspensionTestServiceAccount("robot-b"),
 	)
 
-	reconcileProject(t, r, "acme")
+	if res := reconcileProject(t, r, "acme"); res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0: only suspended projects are rechecked", res.RequeueAfter)
+	}
 	for _, name := range []string{"robot-a", "robot-b"} {
 		if cond := suspendedCondition(t, pc, name); cond != nil {
 			t.Errorf("%s: Suspended condition = %+v, want it removed", name, cond)
@@ -236,5 +240,102 @@ func TestProjectServiceAccountSuspension_Predicates(t *testing.T) {
 				t.Errorf("update passes = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The recheck repairs what Project changes alone miss: a ServiceAccount
+// created during the suspension, and a mark another writer erased.
+func TestProjectServiceAccountSuspension_RecheckRepairsMissedMarks(t *testing.T) {
+	suspended := true
+	project := suspensionTestProject("acme", true, &suspended, resourcemanagerv1alpha1.ReasonAbuse)
+	r, pc, _ := newServiceAccountSuspensionTest(t, project, suspensionTestServiceAccount("robot-a"))
+	ctx := context.Background()
+
+	reconcileProject(t, r, "acme")
+
+	// A ServiceAccount created during the suspension, for example by
+	// system:masters, which the admission plugin exempts.
+	if err := pc.Create(ctx, suspensionTestServiceAccount("robot-late")); err != nil {
+		t.Fatal(err)
+	}
+	// A writer that replaces status.conditions and drops the mark.
+	var erased iamv1alpha1.ServiceAccount
+	if err := pc.Get(ctx, types.NamespacedName{Name: "robot-a"}, &erased); err != nil {
+		t.Fatal(err)
+	}
+	erased.Status.Conditions = []metav1.Condition{readyServiceAccountCondition}
+	if err := pc.Status().Update(ctx, &erased); err != nil {
+		t.Fatal(err)
+	}
+
+	// The requeue the first reconcile scheduled.
+	reconcileProject(t, r, "acme")
+
+	for _, name := range []string{"robot-a", "robot-late"} {
+		if cond := suspendedCondition(t, pc, name); cond == nil || cond.Status != metav1.ConditionTrue {
+			t.Errorf("%s: Suspended condition = %+v, want True after the recheck", name, cond)
+		}
+	}
+}
+
+// A conflicting write from another writer, such as the auth provider, fails
+// the reconcile instead of overwriting; the retry reads fresh data and keeps
+// that writer's conditions.
+func TestProjectServiceAccountSuspension_ConflictRetryKeepsOtherWritersConditions(t *testing.T) {
+	if err := utilfeature.DefaultMutableFeatureGate.Set(fmt.Sprintf("%s=true", features.ProjectSuspension)); err != nil {
+		t.Fatal(err)
+	}
+	suspended := true
+	project := suspensionTestProject("acme", true, &suspended, resourcemanagerv1alpha1.ReasonAbuse)
+	scheme := getTestScheme()
+	core := fake.NewClientBuilder().WithScheme(scheme).WithObjects(project).WithStatusSubresource(project).Build()
+
+	otherWriter := metav1.Condition{Type: "ProviderSynced", Status: metav1.ConditionTrue, Reason: "Synced", LastTransitionTime: metav1.Now()}
+	raced := false
+	pc := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(suspensionTestServiceAccount("robot-a", readyServiceAccountCondition)).
+		WithStatusSubresource(&iamv1alpha1.ServiceAccount{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, subResource string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if !raced {
+					// The other writer lands between this controller's list
+					// and its patch.
+					raced = true
+					var sa iamv1alpha1.ServiceAccount
+					if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &sa); err != nil {
+						return err
+					}
+					apimeta.SetStatusCondition(&sa.Status.Conditions, otherWriter)
+					if err := c.Status().Update(ctx, &sa); err != nil {
+						return err
+					}
+				}
+				return c.SubResource(subResource).Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	r := &ProjectServiceAccountSuspensionController{
+		Client:        core,
+		ProjectClient: func(string) (client.Client, error) { return pc, nil },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "acme"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("first Reconcile() error = %v, want a conflict", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("retry Reconcile() error = %v", err)
+	}
+
+	var sa iamv1alpha1.ServiceAccount
+	if err := pc.Get(context.Background(), types.NamespacedName{Name: "robot-a"}, &sa); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Ready", "ProviderSynced", iamv1alpha1.ServiceAccountSuspended} {
+		if apimeta.FindStatusCondition(sa.Status.Conditions, want) == nil {
+			t.Errorf("condition %q missing after the retry: %+v", want, sa.Status.Conditions)
+		}
 	}
 }

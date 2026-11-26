@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -50,15 +51,26 @@ func NewProjectClientFunc(base *rest.Config, scheme *runtime.Scheme) ProjectClie
 // removed. The auth provider reads the condition and stops the
 // ServiceAccount from authenticating.
 //
-// It reacts only to Project changes. That is enough because a ServiceAccount
-// cannot be created while its project is suspended: the
-// ProjectSuspensionEnforcement admission plugin denies the create.
+// It reacts to Project changes, and rechecks a suspended project every
+// Recheck. Project changes alone can miss a ServiceAccount: system:masters
+// may create one during the suspension, a create can land between this
+// controller's list and the admission plugin seeing the suspension, and a
+// writer that replaces status.conditions without the read resourceVersion can
+// erase the mark. The recheck repairs each of these within one interval.
 type ProjectServiceAccountSuspensionController struct {
 	// Client reads Projects from the core control plane.
 	Client client.Client
 	// ProjectClient reaches a project's control plane.
 	ProjectClient ProjectClientFunc
+	// Recheck is how often a suspended project's ServiceAccounts are checked
+	// again. Zero uses defaultSuspendedProjectRecheck.
+	Recheck time.Duration
 }
+
+// defaultSuspendedProjectRecheck bounds how long a missed or erased mark can
+// leave a ServiceAccount working in a suspended project. Only suspended
+// projects are rechecked, so the cost scales with suspensions, not projects.
+const defaultSuspendedProjectRecheck = 10 * time.Minute
 
 // +kubebuilder:rbac:groups=resourcemanager.miloapis.com,resources=projects,verbs=get;list;watch
 // +kubebuilder:rbac:groups=iam.miloapis.com,resources=serviceaccounts,verbs=get;list;watch
@@ -125,7 +137,20 @@ func (r *ProjectServiceAccountSuspensionController) Reconcile(ctx context.Contex
 	if changed > 0 {
 		logger.Info("updated ServiceAccount suspension", "project", project.Name, "suspended", suspended, "serviceAccounts", changed)
 	}
-	return ctrl.Result{}, errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return ctrl.Result{}, err
+	}
+	if suspended {
+		return ctrl.Result{RequeueAfter: r.recheck()}, nil
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *ProjectServiceAccountSuspensionController) recheck() time.Duration {
+	if r.Recheck > 0 {
+		return r.Recheck
+	}
+	return defaultSuspendedProjectRecheck
 }
 
 // applyServiceAccountSuspension sets the Suspended condition to desired, or
