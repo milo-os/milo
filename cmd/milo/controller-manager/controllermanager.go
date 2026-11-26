@@ -288,6 +288,9 @@ func NewCommand() *cobra.Command {
 			if ProjectOwnerRoleNamespace == "" {
 				ProjectOwnerRoleNamespace = SystemNamespace
 			}
+			for _, warning := range ownerRoleNamespaceWarnings(OrganizationOwnerRoleNamespace, ProjectOwnerRoleNamespace, AssignableRolesNamespace) {
+				klog.Warning(warning)
+			}
 
 			c, err := s.Config(cmd.Context(), KnownControllers(), nil, ControllerAliases())
 			if err != nil {
@@ -330,9 +333,9 @@ func NewCommand() *cobra.Command {
 	// TODO: Investigate why these aren't showing up in the help output
 	fs.StringVar(&SystemNamespace, "system-namespace", "milo-system", "The namespace to use for system components and resources that are automatically created to run the system.")
 	fs.StringVar(&OrganizationOwnerRoleName, "organization-owner-role-name", "resourcemanager.miloapis.com-organizationowner", "The name of the role that will be used to grant organization owner permissions.")
-	fs.StringVar(&OrganizationOwnerRoleNamespace, "organization-owner-role-namespace", "", "The namespace where the organization owner role is located. Defaults to system-namespace if not specified.")
+	fs.StringVar(&OrganizationOwnerRoleNamespace, "organization-owner-role-namespace", "", "The namespace where the organization owner role is located. Defaults to system-namespace if not specified. Set it to --assignable-roles-namespace so owners can make other members owners through the organization API.")
 	fs.StringVar(&ProjectOwnerRoleName, "project-owner-role-name", "resourcemanager.miloapis.com-projectowner", "The name of the role that will be used to grant project owner permissions.")
-	fs.StringVar(&ProjectOwnerRoleNamespace, "project-owner-role-namespace", "", "The namespace where the project owner role is located. Defaults to system-namespace if not specified.")
+	fs.StringVar(&ProjectOwnerRoleNamespace, "project-owner-role-namespace", "", "The namespace where the project owner role is located. Defaults to system-namespace if not specified. Set it to --assignable-roles-namespace so organization-scope callers can bind the project owner role.")
 	fs.StringVar(&GetInvitationRoleName, "get-invitation-role-name", "iam.miloapis.com-getinvitation", "The name of the role that will be used to grant get invitation permissions.")
 	fs.StringVar(&AcceptInvitationRoleName, "accept-invitation-role-name", "iam.miloapis.com-acceptinvitation", "The name of the role that will be used to grant accept invitation permissions.")
 	fs.StringVar(&UserInvitationEmailTemplate, "user-invitation-email-template", "emailtemplates.notification.miloapis.com-userinvitationemailtemplate", "The name of the template that will be used to send the user invitation email.")
@@ -358,7 +361,7 @@ func NewCommand() *cobra.Command {
 
 	fs.IntVar(&s.ControllerRuntimeWebhookPort, "controller-runtime-webhook-port", 9443, "The port to use for the controller-runtime webhook server.")
 
-	fs.StringVar(&AssignableRolesNamespace, "assignable-roles-namespace", "datum-cloud", "An extra namespace that the system allows to be used for assignable roles.")
+	fs.StringVar(&AssignableRolesNamespace, "assignable-roles-namespace", "datum-cloud", "An extra namespace that the system allows to be used for assignable roles. Organization-scope callers can assign only roles from this namespace.")
 
 	s.InfraCluster.AddFlags(namedFlagSets.FlagSet("Infrastructure Cluster"))
 	s.ControlPlane.AddFlags(namedFlagSets.FlagSet("Control Plane"))
