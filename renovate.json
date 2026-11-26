@@ -36,7 +36,7 @@
       "matchUpdateTypes": [
         "patch"
       ],
-      "groupName": "testcontainers (patch)",
+      "groupName": "testcontainers",
       "groupSlug": "testcontainers-patch"
     },
     {
@@ -67,7 +67,7 @@
       "matchUpdateTypes": [
         "patch"
       ],
-      "groupName": "cockroachdb (patch)",
+      "groupName": "cockroachdb",
       "groupSlug": "cockroachdb-patch"
     }
   ]
