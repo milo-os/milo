@@ -100,8 +100,10 @@ jobs:
           push: false
           load: true  # Load the image into Docker daemon for KinD
           tags: ${{ env.MILO_IMAGE_NAME }}:${{ env.MILO_IMAGE_TAG }}
+          # Import only: the image publish on main writes this cache. A cache that a
+          # pull request run writes can be restored only by runs of that pull
+          # request, and writing it takes minutes of every run.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           platforms: linux/amd64
           build-args: |
             GOPROXY=https://proxy.golang.org,direct
