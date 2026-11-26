@@ -4,6 +4,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// ServiceAccountSuspended is the condition type Milo sets to True on every
+	// ServiceAccount in a suspended project. Milo removes the condition when the
+	// project's suspension is lifted. The auth provider must treat a
+	// ServiceAccount with this condition as unable to authenticate, whatever
+	// its spec.state, so the customer's own Active/Inactive choice survives the
+	// suspension.
+	ServiceAccountSuspended = "Suspended"
+
+	// ServiceAccountProjectSuspendedReason is the reason on the Suspended
+	// condition when the ServiceAccount's project is suspended.
+	ServiceAccountProjectSuspendedReason = "ProjectSuspended"
+)
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:subresource:status
 // +kubebuilder:object:root=true
@@ -12,6 +26,7 @@ import (
 // +kubebuilder:printcolumn:name="Email",type="string",JSONPath=".status.email"
 // +kubebuilder:printcolumn:name="Description",type="string",JSONPath=".metadata.annotations['kubernetes\\.io/description']"
 // +kubebuilder:printcolumn:name="State",type="string",JSONPath=".spec.state"
+// +kubebuilder:printcolumn:name="Suspended",type="string",JSONPath=".status.conditions[?(@.type=='Suspended')].status",priority=1
 // +kubebuilder:printcolumn:name="Access Token Type",type="string",JSONPath=".spec.accessTokenType"
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"

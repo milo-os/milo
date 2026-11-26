@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata:
+  name: robot-inactive
+spec:
+  state: Inactive
+status:
+  (conditions[?type == 'Suspended']):
+  - status: "True"
+    reason: ProjectSuspended
+    message: Project "test-suspension-sa-project" is suspended (Abuse).

@@ -1,0 +1,6 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata:
+  name: robot-active
+spec:
+  state: Inactive

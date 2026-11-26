@@ -1,0 +1,15 @@
+# test-user authenticates outside system:masters, so the suspension admission
+# plugin applies to it, unlike test-admin. The binding name is unique to this
+# test so parallel tests don't delete each other's binding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: test-user-admin-suspension-sa
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: User
+  name: test-user
+  apiGroup: rbac.authorization.k8s.io

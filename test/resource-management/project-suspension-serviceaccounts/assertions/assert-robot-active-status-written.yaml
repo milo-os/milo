@@ -1,0 +1,11 @@
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata:
+  name: robot-active
+spec:
+  state: Active
+status:
+  email: robot-active@e2e.suspension.test
+  (conditions[?type == 'Suspended']):
+  - status: "True"
+    reason: ProjectSuspended

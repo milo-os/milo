@@ -574,6 +574,15 @@ func Run(ctx context.Context, c *config.CompletedConfig, opts *Options) error {
 				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 			}
 
+			serviceAccountSuspensionCtrl := resourcemanagercontroller.ProjectServiceAccountSuspensionController{
+				Client:        ctrl.GetClient(),
+				ProjectClient: resourcemanagercontroller.NewProjectClientFunc(ctrl.GetConfig(), Scheme),
+			}
+			if err := serviceAccountSuspensionCtrl.SetupWithManager(ctrl); err != nil {
+				logger.Error(err, "Error setting up project service account suspension controller")
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+
 			warningExcludedReasons := make([]resourcemanagerv1alpha1.ProjectSuspensionReason, 0, len(ProjectSuspensionWarningExcludedReasons))
 			for _, reason := range ProjectSuspensionWarningExcludedReasons {
 				warningExcludedReasons = append(warningExcludedReasons, resourcemanagerv1alpha1.ProjectSuspensionReason(reason))
