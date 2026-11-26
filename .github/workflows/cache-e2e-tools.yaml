@@ -6,11 +6,12 @@ name: Cache the end-to-end tools
 # run restores them. A cache that a pull request run saves can be restored only
 # by runs of that pull request, so only a run on main saves this one.
 #
-# The key is the same as the key of the "Name the test tools cache" step of
-# test-environment-validation.yaml. It names the runner image and the Go version
-# that compile the tools, and the hash of the Taskfile, which pins their
-# versions and says how to install them. A change to any of these gives a new
-# key, and the next run on main installs the tools again and saves them under it.
+# The key comes from the action .github/actions/e2e-tools-cache-key, which
+# test-environment-validation.yaml uses too, so that both name the same cache.
+# It names the runner image and the Go version that compile the tools, and the
+# hash of the Taskfile, which pins their versions and says how to install them.
+# A change to any of these gives a new key, and the next run on main installs
+# the tools again and saves them under it.
 
 on:
   push:
@@ -45,8 +46,7 @@ jobs:
 
       - name: Name the test tools cache
         id: tools-cache
-        run: |
-          echo "key=e2e-tools-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS}-$(go env GOVERSION)-$(sha256sum Taskfile.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/e2e-tools-cache-key
 
       # Restores the tools when the key exists, and saves them at the end of the
       # job when it does not.

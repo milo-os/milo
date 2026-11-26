@@ -1,0 +1,29 @@
+name: Name the end-to-end tools cache
+description: >-
+  Names the Actions cache that holds the end-to-end test tools (Chainsaw and
+  controller-gen). Both cache-e2e-tools.yaml, which saves the cache on main,
+  and test-environment-validation.yaml, which restores it, use this one
+  definition, so that they can never name different caches.
+
+# The key names the runner image and the Go version that compile the tools, and
+# the hash of the Taskfile, which pins their versions and says how to install
+# them. A change to any of these gives a new key: the next run on main installs
+# the tools again and saves them under it, and a run that finds no cache
+# installs them as the Taskfile says.
+#
+# Run it after the checkout and after setup-go: it reads Taskfile.yaml and asks
+# go for its version.
+
+outputs:
+  key:
+    description: The cache key of the end-to-end tools.
+    value: ${{ steps.key.outputs.key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Name the cache
+      id: key
+      shell: bash
+      run: |
+        echo "key=e2e-tools-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS}-$(go env GOVERSION)-$(sha256sum Taskfile.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
