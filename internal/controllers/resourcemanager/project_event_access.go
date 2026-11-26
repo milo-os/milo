@@ -10,6 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 )
 
 // projectEventAccessCheckInterval is how often the controller manager asks
@@ -19,8 +21,9 @@ import (
 const projectEventAccessCheckInterval = 10 * time.Minute
 
 // CheckAccess asks Milo whether it allows both halves of an emit: the
-// controller manager impersonating the project event user, and that user
-// creating events. It returns an error naming the half that is refused.
+// controller manager impersonating the project event user with a Project
+// parent context, and that user creating events. It returns an error naming
+// the part that is refused.
 //
 // The --project-event-user flag ships with the controller manager to the
 // hosting cluster, while the binding and the impersonator role's
@@ -34,20 +37,19 @@ func (e *ProjectEventEmitter) CheckAccess(ctx context.Context) error {
 		return fmt.Errorf("failed to build access review client: %w", err)
 	}
 
-	impersonation, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
-		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Verb:     "impersonate",
-				Resource: "users",
-				Name:     e.impersonateUser,
-			},
-		},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to review impersonation of %q: %w", e.impersonateUser, err)
-	}
-	if !impersonation.Status.Allowed {
-		return fmt.Errorf("the controller manager cannot impersonate %q in Milo: bind its Milo identity to resourcemanager.miloapis.com:project-event-impersonator, whose users resourceNames must name the --project-event-user value", e.impersonateUser)
+	// Milo authorizes the impersonated user and each impersonated extra on its
+	// own, so a grant that covers the user but not the extras still refuses
+	// every emit. Ask about each value clientForProject sends.
+	for _, review := range e.impersonationReviews() {
+		result, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
+			Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: review.attributes},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to review impersonation of %s for %q: %w", review.what, e.impersonateUser, err)
+		}
+		if !result.Status.Allowed {
+			return fmt.Errorf("the controller manager cannot impersonate %s for %q in Milo: bind its Milo identity to resourcemanager.miloapis.com:project-event-impersonator, whose users resourceNames must name the --project-event-user value", review.what, e.impersonateUser)
+		}
 	}
 
 	// An impersonated request carries the impersonated user and the
@@ -72,6 +74,44 @@ func (e *ProjectEventEmitter) CheckAccess(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// impersonationReview is one impersonated value CheckAccess asks about.
+type impersonationReview struct {
+	what       string
+	attributes *authorizationv1.ResourceAttributes
+}
+
+// impersonationReviews lists the impersonation checks behind one emit: the
+// user, then each parent-context extra as a userextras/<key> resource whose
+// name is the asserted value. parent-name is asked with an empty name, which
+// Milo allows only when every project is allowed, because the emitter sends
+// whichever project changed.
+func (e *ProjectEventEmitter) impersonationReviews() []impersonationReview {
+	extra := func(key, value string) *authorizationv1.ResourceAttributes {
+		return &authorizationv1.ResourceAttributes{
+			Verb:        "impersonate",
+			Group:       "authentication.k8s.io",
+			Resource:    "userextras",
+			Subresource: key,
+			Name:        value,
+		}
+	}
+
+	return []impersonationReview{
+		{
+			what:       "the user",
+			attributes: &authorizationv1.ResourceAttributes{Verb: "impersonate", Resource: "users", Name: e.impersonateUser},
+		},
+		{
+			what:       fmt.Sprintf("the %s extra %q", iamv1alpha1.ParentKindExtraKey, projectKind),
+			attributes: extra(iamv1alpha1.ParentKindExtraKey, projectKind),
+		},
+		{
+			what:       fmt.Sprintf("the %s extra for every project", iamv1alpha1.ParentNameExtraKey),
+			attributes: extra(iamv1alpha1.ParentNameExtraKey, ""),
+		},
+	}
 }
 
 // projectEventAccessMonitor runs CheckAccess on an interval and publishes the

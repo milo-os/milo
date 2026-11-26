@@ -14,15 +14,33 @@ import (
 	"k8s.io/component-base/metrics/testutil"
 )
 
-// reviewAnswers sets what the fake API server answers to each access review.
-type reviewAnswers struct {
-	canImpersonate bool
-	userCanCreate  bool
+// Keys for the reviews CheckAccess sends, used to make the fake API server
+// refuse one of them.
+const (
+	reviewImpersonateUser       = "impersonate user"
+	reviewImpersonateParentType = "impersonate parent-type"
+	reviewImpersonateParentName = "impersonate parent-name"
+	reviewCreateEvents          = "create events"
+)
+
+// reviewKey names the review a set of resource attributes asks about.
+func reviewKey(attrs *authorizationv1.ResourceAttributes) string {
+	switch {
+	case attrs.Verb == "create" && attrs.Resource == "events":
+		return reviewCreateEvents
+	case attrs.Verb == "impersonate" && attrs.Resource == "users":
+		return reviewImpersonateUser
+	case attrs.Verb == "impersonate" && attrs.Resource == "userextras" && attrs.Subresource == "iam.miloapis.com/parent-type":
+		return reviewImpersonateParentType
+	case attrs.Verb == "impersonate" && attrs.Resource == "userextras" && attrs.Subresource == "iam.miloapis.com/parent-name":
+		return reviewImpersonateParentName
+	}
+	return "unexpected review"
 }
 
-// newAccessTestEmitter returns an emitter whose client answers access reviews
-// from answers, and the reviews it was sent.
-func newAccessTestEmitter(t *testing.T, answers reviewAnswers) (*ProjectEventEmitter, *[]runtime.Object) {
+// newAccessTestEmitter returns an emitter whose client allows every access
+// review except the one named by refuse, and the reviews it was sent.
+func newAccessTestEmitter(t *testing.T, refuse string) (*ProjectEventEmitter, *[]runtime.Object) {
 	t.Helper()
 
 	e, _, cs := newTestEmitter(t, &rest.Config{Host: "https://milo.example"})
@@ -31,13 +49,13 @@ func newAccessTestEmitter(t *testing.T, answers reviewAnswers) (*ProjectEventEmi
 	cs.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		sent = append(sent, review)
-		review.Status.Allowed = answers.canImpersonate
+		review.Status.Allowed = reviewKey(review.Spec.ResourceAttributes) != refuse
 		return true, review, nil
 	})
 	cs.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
 		sent = append(sent, review)
-		review.Status.Allowed = answers.userCanCreate
+		review.Status.Allowed = reviewKey(review.Spec.ResourceAttributes) != refuse
 		return true, review, nil
 	})
 
@@ -47,17 +65,19 @@ func newAccessTestEmitter(t *testing.T, answers reviewAnswers) (*ProjectEventEmi
 func TestProjectEventEmitter_CheckAccess(t *testing.T) {
 	tests := []struct {
 		name      string
-		answers   reviewAnswers
+		refuse    string
 		wantError string
 	}{
-		{name: "allowed", answers: reviewAnswers{canImpersonate: true, userCanCreate: true}},
-		{name: "controller cannot impersonate the user", answers: reviewAnswers{canImpersonate: false, userCanCreate: true}, wantError: "cannot impersonate"},
-		{name: "user cannot create events", answers: reviewAnswers{canImpersonate: true, userCanCreate: false}, wantError: "cannot create events"},
+		{name: "allowed"},
+		{name: "controller cannot impersonate the user", refuse: reviewImpersonateUser, wantError: "cannot impersonate"},
+		{name: "controller cannot assert the parent type", refuse: reviewImpersonateParentType, wantError: "iam.miloapis.com/parent-type"},
+		{name: "controller cannot assert every parent name", refuse: reviewImpersonateParentName, wantError: "iam.miloapis.com/parent-name"},
+		{name: "user cannot create events", refuse: reviewCreateEvents, wantError: "cannot create events"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e, _ := newAccessTestEmitter(t, tt.answers)
+			e, _ := newAccessTestEmitter(t, tt.refuse)
 
 			err := e.CheckAccess(context.Background())
 
@@ -78,34 +98,59 @@ func TestProjectEventEmitter_CheckAccess(t *testing.T) {
 }
 
 func TestProjectEventEmitter_CheckAccessAsksAboutTheRealRequest(t *testing.T) {
-	e, sent := newAccessTestEmitter(t, reviewAnswers{canImpersonate: true, userCanCreate: true})
+	e, sent := newAccessTestEmitter(t, "")
 
 	if err := e.CheckAccess(context.Background()); err != nil {
 		t.Fatalf("CheckAccess returned error: %v", err)
 	}
 
-	var ssar *authorizationv1.SelfSubjectAccessReview
-	var sar *authorizationv1.SubjectAccessReview
+	impersonation := map[string]*authorizationv1.ResourceAttributes{}
+	var create *authorizationv1.SubjectAccessReview
 	for _, obj := range *sent {
 		switch review := obj.(type) {
 		case *authorizationv1.SelfSubjectAccessReview:
-			ssar = review
+			impersonation[reviewKey(review.Spec.ResourceAttributes)] = review.Spec.ResourceAttributes
 		case *authorizationv1.SubjectAccessReview:
-			sar = review
+			create = review
 		}
 	}
-	if ssar == nil || sar == nil {
-		t.Fatalf("expected one review of each kind, got %d reviews", len(*sent))
+
+	// Each impersonated value is authorized on its own, so the check asks
+	// about each one the emitter sends.
+	want := map[string]authorizationv1.ResourceAttributes{
+		reviewImpersonateUser: {Verb: "impersonate", Resource: "users", Name: DefaultProjectEventUser},
+		reviewImpersonateParentType: {
+			Verb: "impersonate", Group: "authentication.k8s.io", Resource: "userextras",
+			Subresource: "iam.miloapis.com/parent-type", Name: projectKind,
+		},
+		// An empty name asks whether every project is allowed, since the
+		// emitter sends whichever project changed.
+		reviewImpersonateParentName: {
+			Verb: "impersonate", Group: "authentication.k8s.io", Resource: "userextras",
+			Subresource: "iam.miloapis.com/parent-name",
+		},
+	}
+	if len(impersonation) != len(want) {
+		t.Errorf("expected %d impersonation reviews, got %d: %v", len(want), len(impersonation), impersonation)
+	}
+	for key, attrs := range want {
+		got, ok := impersonation[key]
+		if !ok {
+			t.Errorf("no review for %s", key)
+			continue
+		}
+		if *got != attrs {
+			t.Errorf("%s review: got %+v, want %+v", key, *got, attrs)
+		}
 	}
 
-	if got := ssar.Spec.ResourceAttributes; got.Verb != "impersonate" || got.Resource != "users" || got.Name != DefaultProjectEventUser {
-		t.Errorf("unexpected impersonation review: %+v", got)
+	if create == nil {
+		t.Fatal("expected a create review")
 	}
-
-	if sar.Spec.User != DefaultProjectEventUser {
-		t.Errorf("expected the create review for user %q, got %q", DefaultProjectEventUser, sar.Spec.User)
+	if create.Spec.User != DefaultProjectEventUser {
+		t.Errorf("expected the create review for user %q, got %q", DefaultProjectEventUser, create.Spec.User)
 	}
-	if got := sar.Spec.ResourceAttributes; got.Verb != "create" || got.Resource != "events" || got.Group != "" || got.Namespace != clusterScopedEventNamespace {
+	if got := create.Spec.ResourceAttributes; got.Verb != "create" || got.Resource != "events" || got.Group != "" || got.Namespace != clusterScopedEventNamespace {
 		t.Errorf("unexpected create review: %+v", got)
 	}
 }

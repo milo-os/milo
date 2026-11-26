@@ -1,11 +1,15 @@
-# Lets a caller assert the project event identity and a Project parent
-# context, and nothing broader: one user name, and only the Project value for
-# parent-type. parent-name cannot be narrowed, since the controller emits for
+# The impersonation rules let a caller assert the project event identity and a
+# Project parent context, and nothing broader: one user name, and only the
+# Project value for parent-type. parent-name cannot be narrowed, since the controller emits for
 # every project.
 #
 # The access-review rules let the controller manager check, every 10 minutes,
 # that Milo still allows the emit (see CheckAccess in
-# internal/controllers/resourcemanager/project_event_access.go).
+# internal/controllers/resourcemanager/project_event_access.go). The check
+# needs create on subjectaccessreviews to ask about the project event user.
+# That grant cannot be narrowed to one subject, so an identity bound to this
+# role can ask Milo what any user may do. It reads permissions and changes
+# none, but weigh it before binding a narrower identity here.
 #
 # No binding ships with this role. Datum's controller manager connects to Milo
 # as system:masters, which can already impersonate. A deployment whose
