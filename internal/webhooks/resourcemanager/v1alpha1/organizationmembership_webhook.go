@@ -24,26 +24,28 @@ var organizationmembershiplog = logf.Log.WithName("organizationmembership-resour
 // +kubebuilder:webhook:path=/validate-resourcemanager-miloapis-com-v1alpha1-organizationmembership,mutating=false,failurePolicy=fail,sideEffects=None,groups=resourcemanager.miloapis.com,resources=organizationmemberships,verbs=create;update;delete,versions=v1alpha1,name=vorganizationmembership.datum.net,admissionReviewVersions={v1,v1beta1},serviceName=milo-controller-manager,servicePort=9443,serviceNamespace=milo-system
 
 // SetupOrganizationMembershipWebhooksWithManager sets up OrganizationMembership webhooks
-func SetupOrganizationMembershipWebhooksWithManager(mgr ctrl.Manager, organizationOwnerRoleName string, organizationOwnerRoleNamespace string) error {
+func SetupOrganizationMembershipWebhooksWithManager(mgr ctrl.Manager, organizationOwnerRoleName string, organizationOwnerRoleNamespace string, assignableRolesNamespace string) error {
 	organizationmembershiplog.Info("Setting up resourcemanager.miloapis.com organizationmembership webhooks")
 
 	return ctrl.NewWebhookManagedBy(mgr, &resourcemanagerv1alpha1.OrganizationMembership{}).
 		WithValidator(&OrganizationMembershipValidator{
-			client:             mgr.GetClient(),
-			apiReader:          mgr.GetAPIReader(),
-			ownerRoleName:      organizationOwnerRoleName,
-			ownerRoleNamespace: organizationOwnerRoleNamespace,
+			client:                   mgr.GetClient(),
+			apiReader:                mgr.GetAPIReader(),
+			ownerRoleName:            organizationOwnerRoleName,
+			ownerRoleNamespace:       organizationOwnerRoleNamespace,
+			assignableRolesNamespace: assignableRolesNamespace,
 		}).
 		Complete()
 }
 
 // OrganizationMembershipValidator validates OrganizationMemberships
 type OrganizationMembershipValidator struct {
-	client             client.Client
-	apiReader          client.Reader
-	decoder            admission.Decoder
-	ownerRoleName      string
-	ownerRoleNamespace string
+	client                   client.Client
+	apiReader                client.Reader
+	decoder                  admission.Decoder
+	ownerRoleName            string
+	ownerRoleNamespace       string
+	assignableRolesNamespace string
 }
 
 func (v *OrganizationMembershipValidator) ValidateCreate(ctx context.Context, membership *resourcemanagerv1alpha1.OrganizationMembership) (admission.Warnings, error) {
@@ -93,6 +95,11 @@ func (v *OrganizationMembershipValidator) ValidateUpdate(ctx context.Context, ol
 
 	// Validate roles if specified
 	if len(newMembership.Spec.Roles) > 0 {
+		if isOrgContext {
+			if err := v.validateOrgAssignableRoles(newMembership, oldMembership.Spec.Roles); err != nil {
+				return nil, err
+			}
+		}
 		if err := v.validateRoles(ctx, newMembership); err != nil {
 			return nil, err
 		}
@@ -262,6 +269,47 @@ func (v *OrganizationMembershipValidator) isNamespaceTerminating(ctx context.Con
 	}
 
 	return ns.DeletionTimestamp != nil
+}
+
+// validateOrgAssignableRoles enforces that any newly added role in organization
+// context references a Role in the configured assignable-roles namespace (e.g.
+// "datum-cloud"). Roles already present in previousRoles are left untouched so
+// existing system-assigned roles (such as an owner role) do not block unrelated
+// updates. This runs before validateRoles so disallowed namespaces are rejected
+// without probing Role existence outside the assignable-roles catalog.
+func (v *OrganizationMembershipValidator) validateOrgAssignableRoles(membership *resourcemanagerv1alpha1.OrganizationMembership, previousRoles []resourcemanagerv1alpha1.RoleReference) error {
+	existing := make(map[string]struct{}, len(previousRoles))
+	for _, r := range previousRoles {
+		ns := r.Namespace
+		if ns == "" {
+			ns = membership.Namespace
+		}
+		existing[fmt.Sprintf("%s/%s", ns, r.Name)] = struct{}{}
+	}
+
+	var errs field.ErrorList
+	rolesPath := field.NewPath("spec", "roles")
+	for i, roleRef := range membership.Spec.Roles {
+		ns := roleRef.Namespace
+		if ns == "" {
+			ns = membership.Namespace
+		}
+		if _, ok := existing[fmt.Sprintf("%s/%s", ns, roleRef.Name)]; ok {
+			continue
+		}
+		if roleRef.Namespace != v.assignableRolesNamespace {
+			errs = append(errs, field.NotSupported(
+				rolesPath.Index(i).Child("namespace"),
+				roleRef.Namespace,
+				[]string{v.assignableRolesNamespace},
+			))
+		}
+	}
+
+	if len(errs) > 0 {
+		return apierrors.NewInvalid(resourcemanagerv1alpha1.GroupVersion.WithKind("OrganizationMembership").GroupKind(), membership.Name, errs)
+	}
+	return nil
 }
 
 // validateRoles validates the role references in the membership

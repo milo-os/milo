@@ -165,8 +165,8 @@ spec:
                   name: ui-priv-org
                 email: invitee@ui-priv-test.local
                 roles:
-                  - name: resourcemanager.miloapis.com-organization-viewer
-                    namespace: milo-system
+                  - name: viewer
+                    namespace: datum-cloud
                 state: Accepted
               YAML
               ); then
@@ -175,6 +175,13 @@ spec:
               fi
               echo "$OUT" | grep -q "a new invitation must be Pending" \
                 || { echo "FAIL: unexpected refusal: $OUT"; exit 1; }
+              # The role comes from the assignable-roles namespace, so the
+              # webhook must not also refuse it for its namespace. The test
+              # environment has no datum-cloud/viewer Role, so the refusal also
+              # reports spec.roles[0].name as not found; that is expected.
+              if echo "$OUT" | grep -q "spec.roles\[0\].namespace"; then
+                echo "FAIL: role namespace refused alongside the state: $OUT"; exit 1
+              fi
               echo "PASS: a non-platform caller cannot create an Accepted invitation"
 
     - name: invitee-lists-own-invitation

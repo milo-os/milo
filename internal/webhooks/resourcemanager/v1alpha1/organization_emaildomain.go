@@ -15,6 +15,7 @@ import (
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 	"go.miloapis.com/milo/pkg/features"
+	"go.miloapis.com/milo/pkg/webhook"
 )
 
 // validateEmailDomainJoining checks spec.emailDomainJoining when it changes:
@@ -45,13 +46,21 @@ func (v *OrganizationValidator) validateEmailDomainJoining(ctx context.Context, 
 		return field.ErrorList{field.Forbidden(fldPath, "email domain joining is not available yet")}, nil
 	}
 
+	_, isOrgContext, err := webhook.OrgContextFromRequest(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	var errs field.ErrorList
 	orgNamespace := fmt.Sprintf("organization-%s", newOrg.Name)
 	allowedNamespaces := []string{orgNamespace, v.systemNamespace, v.assignableRolesNamespace}
+	if isOrgContext {
+		allowedNamespaces = []string{v.assignableRolesNamespace}
+	}
 	for i, role := range joining.Roles {
 		rolePath := fldPath.Child("roles").Index(i)
 		namespace := role.Namespace
-		if namespace == "" {
+		if !isOrgContext && namespace == "" {
 			namespace = orgNamespace
 		}
 		if !slices.Contains(allowedNamespaces, namespace) {

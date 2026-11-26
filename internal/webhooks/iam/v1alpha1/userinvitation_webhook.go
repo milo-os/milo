@@ -17,6 +17,7 @@ import (
 	"go.miloapis.com/milo/internal/emaildomain"
 	iamv1alpha1 "go.miloapis.com/milo/pkg/apis/iam/v1alpha1"
 	resourcemanagerv1alpha1 "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
+	"go.miloapis.com/milo/pkg/webhook"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -186,25 +187,31 @@ func (v *UserInvitationValidator) ValidateCreate(ctx context.Context, ui *iamv1a
 		}
 	}
 
+	_, isOrgContext, err := webhook.OrgContextFromRequest(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	for i, role := range ui.Spec.Roles {
-		canGetRole := true
+		rolePath := field.NewPath("spec").Child("roles").Index(i)
 		if role.Name == "" {
-			canGetRole = false
-			errs = append(errs, field.Invalid(field.NewPath("spec").Child("roles").Index(i).Child("name"), role.Name, "name is required"))
+			errs = append(errs, field.Invalid(rolePath.Child("name"), role.Name, "name is required"))
+			continue
+		}
+		if isOrgContext {
+			errs = append(errs, validateAssignableRole(ctx, v.client, role.Name, role.Namespace, v.assignableRolesNamespace, rolePath)...)
+			continue
 		}
 		allowedNamespaces := []string{req.Namespace, v.systemNamespace, v.assignableRolesNamespace}
 		if !slices.Contains(allowedNamespaces, role.Namespace) {
-			canGetRole = false
-			errs = append(errs, field.Invalid(field.NewPath("spec").Child("roles").Index(i).Child("namespace"), role.Namespace, "namespace is invalid"))
-		}
-		if !canGetRole {
+			errs = append(errs, field.Invalid(rolePath.Child("namespace"), role.Namespace, "namespace is invalid"))
 			continue
 		}
 
 		foundRole := &iamv1alpha1.Role{}
 		if err := v.client.Get(ctx, client.ObjectKey{Name: role.Name, Namespace: role.Namespace}, foundRole); err != nil {
 			if errors.IsNotFound(err) {
-				errs = append(errs, field.NotFound(field.NewPath("spec").Child("roles").Index(i).Child("name"), fmt.Sprintf("%s/%s", role.Namespace, role.Name)))
+				errs = append(errs, field.NotFound(rolePath.Child("name"), fmt.Sprintf("%s/%s", role.Namespace, role.Name)))
 				continue
 			}
 			userinvitationlog.Error(err, "failed to get role reference", "role", role)
