@@ -118,6 +118,7 @@ rules:
   - iam.miloapis.com
   resources:
   - groups/status
+  - serviceaccounts/status
   verbs:
   - get
   - patch

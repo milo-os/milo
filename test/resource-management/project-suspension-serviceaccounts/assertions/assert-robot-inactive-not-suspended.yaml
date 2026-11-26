@@ -1,0 +1,9 @@
+# No Suspended condition at all. The expression is evaluated against the whole
+# object, so a ServiceAccount with no status yet also passes.
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata:
+  name: robot-inactive
+spec:
+  state: Inactive
+(length(status.conditions[?type == 'Suspended'] || `[]`)): 0

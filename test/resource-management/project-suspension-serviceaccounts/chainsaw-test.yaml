@@ -1,0 +1,127 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: project-suspension-serviceaccounts
+spec:
+  description: |
+    Tests that suspending a project marks its ServiceAccounts, and that
+    lifting the suspension removes the mark.
+
+    The auth provider reads the ServiceAccount's Suspended condition to stop
+    it from authenticating. The local environment has no auth provider, so
+    this test covers only the condition that Milo's controller manages.
+
+    This test verifies:
+    - ServiceAccounts in a project that was never suspended carry no
+      Suspended condition.
+    - Suspending the project sets a Suspended condition with status True and
+      reason ProjectSuspended on every ServiceAccount in it, with a message
+      that names the project and the suspension reason.
+    - The suspension leaves each ServiceAccount's spec.state unchanged,
+      whether the customer set it Active or Inactive.
+    - Lifting the suspension removes the Suspended condition from every
+      ServiceAccount.
+
+  clusters:
+    main:
+      kubeconfig: kubeconfig-main
+    org:
+      kubeconfig: kubeconfig-org-template
+    project:
+      kubeconfig: kubeconfig-project
+
+  steps:
+    - name: setup-organization
+      description: Create the Organization
+      cluster: main
+      try:
+        - apply:
+            file: 01-test-organization.yaml
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: organization-test-suspension-sa-org
+            timeout: 30s
+            for:
+              jsonPath:
+                path: '{.status.phase}'
+                value: Active
+
+    - name: create-project
+      description: Create the Project and wait for its control plane to be ready
+      cluster: org
+      try:
+        - apply:
+            file: 02-test-project.yaml
+        - wait:
+            apiVersion: resourcemanager.miloapis.com/v1alpha1
+            kind: Project
+            name: test-suspension-sa-project
+            timeout: 60s
+            for:
+              condition:
+                name: Ready
+                value: 'True'
+
+    - name: create-service-accounts
+      description: |
+        Create one Active and one Inactive ServiceAccount in the project's
+        control plane while the project is still active. Neither may carry a
+        Suspended condition.
+      cluster: project
+      try:
+        - apply:
+            file: 03-service-accounts.yaml
+        - assert:
+            file: assertions/assert-robot-active-not-suspended.yaml
+        - assert:
+            file: assertions/assert-robot-inactive-not-suspended.yaml
+
+    - name: suspend-project
+      description: Suspend the project and wait for the propagator to mark it Suspended
+      cluster: main
+      try:
+        - apply:
+            file: 04-suspension.yaml
+        - assert:
+            cluster: org
+            file: assertions/assert-project-suspended.yaml
+
+    - name: verify-service-accounts-suspended
+      description: |
+        Every ServiceAccount in the suspended project carries a Suspended
+        condition set to True, and keeps its own spec.state.
+      cluster: project
+      try:
+        - assert:
+            timeout: 60s
+            file: assertions/assert-robot-active-suspended.yaml
+        - assert:
+            timeout: 60s
+            file: assertions/assert-robot-inactive-suspended.yaml
+
+    - name: lift-suspension
+      description: Delete the ProjectSuspension and wait for the project to be Active again
+      cluster: main
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: ProjectSuspension
+              name: test-suspension-sa
+        - assert:
+            cluster: org
+            file: assertions/assert-project-active.yaml
+
+    - name: verify-suspended-condition-removed
+      description: |
+        Lifting the suspension removes the Suspended condition from every
+        ServiceAccount, and each keeps its own spec.state.
+      cluster: project
+      try:
+        - assert:
+            timeout: 60s
+            file: assertions/assert-robot-active-not-suspended.yaml
+        - assert:
+            timeout: 60s
+            file: assertions/assert-robot-inactive-not-suspended.yaml
