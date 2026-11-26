@@ -346,10 +346,14 @@ func TestValidate_ServiceAccountStatusExemptWhileSuspended(t *testing.T) {
 	// lost that membership.
 	controller := &user.DefaultInfo{Name: "system:control@platform.miloapis.com", Groups: []string{"system:authenticated"}}
 
-	attrsFor := func(gvk schema.GroupVersionKind, gvr schema.GroupVersionResource, subresource string) admission.Attributes {
+	attrsFor := func(gvk schema.GroupVersionKind, gvr schema.GroupVersionResource, subresource string, op ...admission.Operation) admission.Attributes {
+		operation := admission.Update
+		if len(op) > 0 {
+			operation = op[0]
+		}
 		return admission.NewAttributesRecord(
 			nil, nil, gvk, "", "robot", gvr, subresource,
-			admission.Update, nil, false, controller,
+			operation, nil, false, controller,
 		)
 	}
 
@@ -366,6 +370,10 @@ func TestValidate_ServiceAccountStatusExemptWhileSuspended(t *testing.T) {
 		},
 		"another resource's status update is still denied": {
 			attrs:    attrsFor(groupKind, groups, "status"),
+			wantDeny: true,
+		},
+		"ServiceAccount status create is not exempt": {
+			attrs:    attrsFor(serviceAccountKind, serviceAccounts, "status", admission.Create),
 			wantDeny: true,
 		},
 	} {

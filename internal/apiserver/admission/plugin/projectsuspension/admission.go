@@ -154,7 +154,9 @@ func isExempt(_ context.Context, attrs admission.Attributes) bool {
 		return true
 	}
 
-	if attrs.GetResource().GroupResource() == serviceAccountStatusResource && attrs.GetSubresource() == "status" {
+	if attrs.GetOperation() == admission.Update &&
+		attrs.GetResource().GroupResource() == serviceAccountStatusResource &&
+		attrs.GetSubresource() == "status" {
 		return true
 	}
 
