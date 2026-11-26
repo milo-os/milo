@@ -29,7 +29,7 @@ jobs:
       # The milo-os/activity release deployed with Milo. Keep in sync with
       # ACTIVITYTOOL_VERSION in Taskfile.yaml.
       # renovate: datasource=docker depName=ghcr.io/milo-os/activitytool
-      activitytool-version: v0.10.0@sha256:8846d57a341837d888cc3de1d2cb396e42b8e0bcf0e2da5f501d8d5223fe0db1
+      activitytool-version: v0.10.1@sha256:9efcfff21f2533919a8a43bb49ab1a6fa2e29edd9cb665e34574428c490389c3
       policies-path: config/services/activity/policies
       tests-path: test/activity-policies
       fail-on-untested: true
