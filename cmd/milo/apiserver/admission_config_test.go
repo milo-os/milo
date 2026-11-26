@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -117,6 +116,13 @@ const (
 // the webhook, which refuses connections without a trusted client
 // certificate, admits the request. Without the flag no certificate is
 // presented and the request is refused, as before.
+//
+// The refusal is read from the server's side. Under TLS 1.3 the client
+// finishes its half of the handshake before the server checks for a
+// certificate, so it can send the request and see the connection close
+// ("broken pipe", "use of closed network connection") rather than the
+// server's "certificate required" alert. The server logs the same reason
+// every time.
 func TestAdmissionConfigFileGivesWebhookClientCertificate(t *testing.T) {
 	dir := t.TempDir()
 	pki := newTestPKI(t, dir)
@@ -142,8 +148,10 @@ func TestAdmissionConfigFileGivesWebhookClientCertificate(t *testing.T) {
 		ClientCAs:    pki.pool,
 		MinVersion:   tls.VersionTLS12,
 	}
-	// The handshake failure without a client certificate is expected.
-	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	// The server logs each refused handshake, which is how the test learns
+	// the request was refused for lacking a client certificate.
+	handshakeErrors := &syncBuffer{}
+	srv.Config.ErrorLog = log.New(handshakeErrors, "", 0)
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	serverURL, err := url.Parse(srv.URL)
@@ -191,6 +199,7 @@ plugins:
 			mu.Lock()
 			callers = nil
 			mu.Unlock()
+			handshakeErrors.Reset()
 
 			err := validateThroughWebhookChain(t, tt.args, serverURL, pki.caPEM)
 			if tt.wantAllowed && err != nil {
@@ -199,8 +208,8 @@ plugins:
 			if !tt.wantAllowed && err == nil {
 				t.Fatal("request admitted, want refused by a webhook that requires a client certificate")
 			}
-			if !tt.wantAllowed && !strings.Contains(err.Error(), "tls: certificate required") {
-				t.Fatalf("request refused for another reason: %v", err)
+			if !tt.wantAllowed && !handshakeErrors.waitFor(noClientCertificate, 5*time.Second) {
+				t.Fatalf("request refused for another reason: %v (server handshake errors: %q)", err, handshakeErrors.String())
 			}
 
 			mu.Lock()
@@ -209,6 +218,51 @@ plugins:
 				t.Errorf("webhook callers = %v, want %v", callers, tt.wantCallers)
 			}
 		})
+	}
+}
+
+// noClientCertificate is the reason crypto/tls gives a server for a client
+// that sent no certificate, under TLS 1.2 and TLS 1.3 alike.
+const noClientCertificate = "tls: client didn't provide a certificate"
+
+// syncBuffer is a log sink the webhook server's goroutines can write to
+// while the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+// waitFor reports whether the buffer contains want within timeout. The
+// server logs a refused handshake on its own goroutine, which can run after
+// the client has already returned its error.
+func (b *syncBuffer) waitFor(want string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if strings.Contains(b.String(), want) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
