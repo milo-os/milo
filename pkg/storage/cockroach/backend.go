@@ -172,6 +172,11 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Backend, error) {
 	if !strings.Contains(dsn, "pool_max_conn_lifetime") {
 		cfg.MaxConnLifetime, cfg.MaxConnLifetimeJitter = connLifetime, connLifetimeJitter
 	}
+	// Every query uses a primary index, so histograms cost CPU without
+	// improving plans.
+	if _, ok := cfg.ConnConfig.RuntimeParams["optimizer_use_histograms"]; !ok {
+		cfg.ConnConfig.RuntimeParams["optimizer_use_histograms"] = "false"
+	}
 	if o.migrate {
 		if err := Migrate(ctx, dsn); err != nil {
 			return nil, err

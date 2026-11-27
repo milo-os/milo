@@ -291,7 +291,7 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	var live map[string]*row
 	var begin pgx.Batch
 	begin.Queue(`BEGIN ISOLATION LEVEL SERIALIZABLE`)
-	begin.Queue(keysSQL+` ORDER BY key FOR UPDATE`, project, batch.keys).Query(func(rows pgx.Rows) error {
+	begin.Queue(keysSQL+` FOR UPDATE`, project, batch.keys).Query(func(rows pgx.Rows) error {
 		var err error
 		counter, live, err = collectKeys(rows)
 		return err
