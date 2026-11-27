@@ -24,7 +24,7 @@ jobs:
   test-activity-policies:
     permissions:
       contents: read
-    uses: datum-cloud/actions/.github/workflows/test-activity-policies.yaml@v1.29.0
+    uses: datum-cloud/actions/.github/workflows/test-activity-policies.yaml@v1.31.0
     with:
       # The milo-os/activity release deployed with Milo. Keep in sync with
       # ACTIVITYTOOL_VERSION in Taskfile.yaml.
