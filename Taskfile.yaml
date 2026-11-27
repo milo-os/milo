@@ -28,7 +28,7 @@ vars:
   # functions match production. Keep in sync with
   # .github/workflows/test-activity-policies.yaml.
   # renovate: datasource=docker depName=ghcr.io/milo-os/activitytool
-  ACTIVITYTOOL_VERSION: v0.10.1@sha256:9efcfff21f2533919a8a43bb49ab1a6fa2e29edd9cb665e34574428c490389c3
+  ACTIVITYTOOL_VERSION: v0.10.2@sha256:d7fe47a6189f6baa44dcfcddc258887a3051b74d0e009ef121ff60973c1c4234
 
 includes:
   # Must set TASK_X_REMOTE_TASKFILES=1 to use this feature.
