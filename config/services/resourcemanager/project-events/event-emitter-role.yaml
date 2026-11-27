@@ -1,0 +1,13 @@
+# Lets the controller manager's project event identity create core/v1 events. The
+# identity is impersonated, so Milo authorizes the create as that user alone.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resourcemanager.miloapis.com:project-event-emitter
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create

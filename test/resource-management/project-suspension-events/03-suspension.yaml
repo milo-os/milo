@@ -1,0 +1,10 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: ProjectSuspension
+metadata:
+  name: suspension-events-abuse
+spec:
+  projectRef:
+    name: test-suspension-events-project
+  reason: Abuse
+  reinstateAuthority: Operator
+  requestedBy: operator-admin

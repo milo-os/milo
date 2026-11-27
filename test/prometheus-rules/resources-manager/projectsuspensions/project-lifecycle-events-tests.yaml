@@ -1,0 +1,69 @@
+rule_files:
+  - ../../../../config/telemetry/alerts/resources-manager/projectsuspensions.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ProjectLifecycleEventEmitFailed: one Suspended event fails at 10m. The series starts at 0, so increase() sees
+  # it, and the alert clears once the failure leaves the 30m window.
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_lifecycle_event_emit_failed_total{pod="cm-a", reason="Suspended"}'
+        values: '0x9 1x50'
+      - series: 'milo_resourcemanager_project_lifecycle_event_emit_failed_total{pod="cm-a", reason="Reinstated"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProjectLifecycleEventEmitFailed
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ProjectLifecycleEventEmitFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: events
+              team: platform
+              service: milo
+              reason: Suspended
+            exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-lifecycle-event-emit-failed.md"
+              summary: "Project Suspended events are failing to reach Milo"
+              description: "The controller manager failed to create 1 Project Suspended event(s) in the last 30 minutes. Tenants do not see these suspensions or reinstatements in their activity feed."
+      - eval_time: 45m
+        alertname: ProjectLifecycleEventEmitFailed
+        exp_alerts: []
+
+  # ProjectEventUserUnauthorized: Milo refuses from the start, as on a fresh install before its RBAC lands. The
+  # alert waits out the 30m window, so a binding that arrives within it never pages.
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_event_user_authorized{pod="cm-a", user="system:milo:project-event-emitter"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: ProjectEventUserUnauthorized
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: ProjectEventUserUnauthorized
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: events
+              team: platform
+              service: milo
+              pod: cm-a
+              user: system:milo:project-event-emitter
+            exp_annotations:
+              runbook_url: "https://github.com/milo-os/milo/blob/main/docs/runbooks/project-event-user-unauthorized.md"
+              summary: "The controller manager cannot emit Project lifecycle events in Milo"
+              description: "Controller manager pod cm-a reports that Milo refuses its project event user system:milo:project-event-emitter. Suspended and Reinstated events will not reach tenant activity feeds until the --project-event-user flag and Milo's project-events RBAC agree."
+
+  # A binding that lands 10 minutes in clears the gauge before the alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'milo_resourcemanager_project_event_user_authorized{pod="cm-a", user="system:milo:project-event-emitter"}'
+        values: '0x10 1x30'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ProjectEventUserUnauthorized
+        exp_alerts: []

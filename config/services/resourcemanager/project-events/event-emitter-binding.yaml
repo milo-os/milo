@@ -1,0 +1,17 @@
+# The subject must match the controller manager's --project-event-user flag.
+# The default flag value is system:milo:project-event-emitter; patch this
+# subject if a deployment sets the flag to something else. The controller
+# manager checks this grant every 10 minutes, and the
+# ProjectEventUserUnauthorized alert fires if the two disagree.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: resourcemanager.miloapis.com:project-event-emitter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: resourcemanager.miloapis.com:project-event-emitter
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: system:milo:project-event-emitter

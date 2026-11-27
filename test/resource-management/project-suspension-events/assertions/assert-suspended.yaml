@@ -1,0 +1,11 @@
+# The condition message names the reason category only, never the
+# ProjectSuspension's name, because project members can read Project status.
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-suspension-events-project
+status:
+  (conditions[?type == 'Suspended']):
+  - status: "True"
+    reason: Suspended
+    message: "Project is suspended (category: Abuse)"

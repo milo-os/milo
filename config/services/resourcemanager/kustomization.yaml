@@ -3,3 +3,4 @@ kind: Component
 
 components:
   - telemetry/metrics
+  - project-events

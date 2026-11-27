@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: test-suspension-events-project
+spec:
+  ownerRef:
+    kind: Organization
+    name: test-suspension-events-org

@@ -2,16 +2,11 @@ package resourcemanager
 
 import (
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
 	"k8s.io/component-base/metrics"
 	legacyregistry "k8s.io/component-base/metrics/legacyregistry"
-
-	resourcemanagerv1alpha "go.miloapis.com/milo/pkg/apis/resourcemanager/v1alpha1"
 )
 
 var (
@@ -56,6 +51,37 @@ var (
 		[]string{"project"},
 	)
 
+	// eventEmitFailedTotal exists because event emission is best-effort: a
+	// failure is logged and the reconcile continues. Scope is now carried
+	// solely by impersonation, with no fallback, so a silent emit failure
+	// means suspension events stop reaching tenant feeds with nothing else
+	// to catch it. This counter is what makes that visible.
+	eventEmitFailedTotal = metrics.NewCounterVec(
+		&metrics.CounterOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_lifecycle_event_emit_failed_total",
+			Help:           "Total number of project lifecycle events that could not be emitted, by reason.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"reason"}, // projectLifecycleEventReasons
+	)
+
+	// projectEventUserAuthorized reports whether Milo allows the controller
+	// manager to emit Project lifecycle events as its project event user: 1
+	// when both the impersonation and the event create are allowed, 0 when
+	// either is refused. projectEventAccessMonitor sets it. The user label
+	// keeps the series absent until the monitor first runs, so a controller
+	// manager that does not run the monitor never reports 0.
+	projectEventUserAuthorized = metrics.NewGaugeVec(
+		&metrics.GaugeOpts{
+			Subsystem:      "milo_resourcemanager",
+			Name:           "project_event_user_authorized",
+			Help:           "1 when Milo allows the controller manager to create Project lifecycle events as its project event user, 0 when it does not.",
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"user"},
+	)
+
 	pauseFailedTotal = metrics.NewCounter(
 		&metrics.CounterOpts{
 			Subsystem:      "milo_resourcemanager",
@@ -92,10 +118,32 @@ func init() {
 	legacyregistry.MustRegister(activeSuspensionsTotal)
 	legacyregistry.MustRegister(transitionDurationSeconds)
 	legacyregistry.MustRegister(pauseFailedTotal)
+	legacyregistry.MustRegister(eventEmitFailedTotal)
+	legacyregistry.MustRegister(projectEventUserAuthorized)
 	legacyregistry.MustRegister(deletionPendingSeconds)
 	legacyregistry.MustRegister(deletionBlockingResources)
 	legacyregistry.MustRegister(suspensionEscalatedTotal)
 	legacyregistry.MustRegister(suspensionWarningEmailsTotal)
+
+	// Export each reason's emit-failure series at 0 from the start. The first
+	// failure would otherwise create the series at 1, and increase() would
+	// not see it.
+	for _, reason := range projectLifecycleEventReasons {
+		eventEmitFailedTotal.WithLabelValues(reason)
+	}
+}
+
+// projectLifecycleEventReasons lists the reasons recordTransition emits.
+var projectLifecycleEventReasons = []string{"Suspended", "Reinstated"}
+
+// recordProjectEventAccess publishes the result of a project event access
+// check for user.
+func recordProjectEventAccess(user string, err error) {
+	if err != nil {
+		projectEventUserAuthorized.WithLabelValues(user).Set(0)
+		return
+	}
+	projectEventUserAuthorized.WithLabelValues(user).Set(1)
 }
 
 // recordSuspensionEscalated counts a project that was deleted after its
@@ -162,20 +210,4 @@ func clearActiveSuspensions(projectName string) {
 
 func recordPauseFailure() {
 	pauseFailedTotal.Inc()
-}
-
-func recordTransition(eventRecorder record.EventRecorder, project *resourcemanagerv1alpha.Project, wasSuspended, isSuspendedNow bool, activeSuspensionNames []string, latestSuspensionTime metav1.Time) {
-	if !wasSuspended && isSuspendedNow {
-		if eventRecorder != nil {
-			eventRecorder.Eventf(project, "Normal", "Suspended", "Project %s has been suspended due to active suspensions: %s", project.Name, strings.Join(activeSuspensionNames, ", "))
-		}
-		if !latestSuspensionTime.IsZero() {
-			transitionDurationSeconds.WithLabelValues("suspended").Observe(time.Since(latestSuspensionTime.Time).Seconds())
-		}
-	} else if wasSuspended && !isSuspendedNow {
-		if eventRecorder != nil {
-			eventRecorder.Eventf(project, "Normal", "Reinstated", "Project %s has been reinstated", project.Name)
-		}
-		transitionDurationSeconds.WithLabelValues("reinstated").Observe(0)
-	}
 }

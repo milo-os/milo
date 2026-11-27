@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# RBAC, applied to Milo, for the Project lifecycle events (Suspended,
+# Reinstated) the controller manager creates. These objects go to Milo and not
+# to the hosting cluster: Milo authorizes both the impersonation and the event
+# create. See ProjectEventEmitter in
+# internal/controllers/resourcemanager/project_event_emitter.go.
+resources:
+  - event-emitter-role.yaml
+  - event-emitter-binding.yaml
+  - event-impersonator-role.yaml
