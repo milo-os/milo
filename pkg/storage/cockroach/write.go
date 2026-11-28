@@ -79,16 +79,19 @@ type writeOutcome struct {
 //     batches. Otherwise unbatched gives each write a batch of its own.
 //  3. admittedBatches holds one of the server's slots for each transaction,
 //     which keeps the transactions in flight below the pool's connections.
-//  4. retryingBatches reruns a transaction that aborted on a conflict. It sits
+//  4. queuedDeletes queues the tombstone of each delete that commits, for the
+//     sweeper to remove.
+//  5. retryingBatches reruns a transaction that aborted on a conflict. It sits
 //     below the server's slots and group commit, so a retry reruns the same
 //     batch in the slot it already holds.
-//  5. observedBatches times each attempt in the operation metrics.
-//  6. attempt runs one transaction.
+//  6. observedBatches times each attempt in the operation metrics.
+//  7. attempt runs one transaction.
 //
 // It also returns what stops the stack when the backend closes.
-func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission, groupCommit bool) (committer, func()) {
+func newCommitter(attempt batchFunc, projectSlots, serverSlots *admission, tombstones *tombstoneQueue, groupCommit bool) (committer, func()) {
 	var txn batchCommitter = observedBatches{attempt}
 	txn = retryingBatches{txn}
+	txn = queuedDeletes{txn, tombstones}
 	txn = admittedBatches{serverSlots, txn}
 	var perProject committer = unbatched{txn}
 	stop := func() {}
@@ -245,6 +248,10 @@ func currentRevision(ctx context.Context, q querier, project string) (int64, err
 // keysSQL selects the rows of the keys, the counter's "" among them.
 const keysSQL = `SELECT key, rv, deleted, value FROM objects WHERE project = $1 AND key = ANY($2)`
 
+// keySQL selects the row of one key. A direct comparison returns sooner than
+// keysSQL's array.
+const keySQL = `SELECT key, rv, deleted, value FROM objects WHERE project = $1 AND key = $2`
+
 // collectKeys reads keysSQL's rows and returns the project's current revision
 // and its live rows.
 func collectKeys(rows pgx.Rows) (int64, map[string]*row, error) {
@@ -284,7 +291,7 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	var live map[string]*row
 	var begin pgx.Batch
 	begin.Queue(`BEGIN ISOLATION LEVEL SERIALIZABLE`)
-	begin.Queue(keysSQL+` ORDER BY key FOR UPDATE`, project, batch.keys).Query(func(rows pgx.Rows) error {
+	begin.Queue(keysSQL+` FOR UPDATE`, project, batch.keys).Query(func(rows pgx.Rows) error {
 		var err error
 		counter, live, err = collectKeys(rows)
 		return err
@@ -294,6 +301,7 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	}
 	results := make([]writeResult, len(batch.writes))
 	var rows upsertRows
+	var expiring expiringRows
 	for i, w := range batch.writes {
 		l := live[w.key]
 		results[i].live = l
@@ -302,11 +310,15 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 		}
 		value := w.value
 		if w.deleted {
-			// The tombstone keeps the last value, the delete's before-image.
-			value = l.value
+			// A tombstone holds no value. Watches read the deleted object from
+			// the feed's before-image.
+			value = []byte{}
 		}
 		results[i].rev, results[i].written = counter+int64(len(rows.keys))+1, true
-		rows.add(w.key, results[i].rev, w.deleted, value, w.ttlSeconds)
+		rows.add(w.key, results[i].rev, w.deleted, value)
+		if w.ttlSeconds > 0 {
+			expiring.add(w.key, results[i].rev, w.ttlSeconds)
+		}
 	}
 	if len(rows.keys) == 0 {
 		return results, nil
@@ -315,7 +327,10 @@ func (b *Backend) tryCommitBatch(ctx context.Context, project string, batch writ
 	// here would fix the transaction's timestamp, so CockroachDB could no longer
 	// refresh it past concurrent reads and would abort it instead.
 	var commit pgx.Batch
-	commit.Queue(upsertSQL, project, rows.keys, rows.revs, rows.deleted, rows.values, rows.ttls, counter+int64(len(rows.keys)))
+	commit.Queue(upsertSQL, project, rows.keys, rows.revs, rows.deleted, rows.values, counter+int64(len(rows.keys)))
+	if len(expiring.keys) > 0 {
+		commit.Queue(expirationsSQL, project, expiring.keys, expiring.revs, expiring.ttls)
+	}
 	commit.Queue(`COMMIT`)
 	if err := conn.SendBatch(ctx, &commit).Close(); err != nil {
 		return nil, err
@@ -338,11 +353,17 @@ func endTransaction(ctx context.Context, conn *pgx.Conn) {
 // upsertSQL writes a batch's rows, passed as one array per column, and moves
 // the project's counter to the batch's last revision. Its text is the same
 // for every batch, so every connection prepares it once.
-const upsertSQL = `UPSERT INTO objects (project, key, rv, deleted, value, expires_at, deleted_at)
-	SELECT $1, k, r, d, v, CASE WHEN t > 0 THEN now() + t * INTERVAL '1 second' END, CASE WHEN d THEN now() END
-	FROM unnest($2::STRING[], $3::INT8[], $4::BOOL[], $5::BYTES[], $6::INT8[]) AS w (k, r, d, v, t)
+const upsertSQL = `UPSERT INTO objects (project, key, rv, deleted, value, deleted_at)
+	SELECT $1, k, r, d, v, CASE WHEN d THEN now() END
+	FROM unnest($2::STRING[], $3::INT8[], $4::BOOL[], $5::BYTES[]) AS w (k, r, d, v)
 	UNION ALL
-	SELECT $1, '', $7, false, ''::BYTES, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ`
+	SELECT $1, '', $6, false, ''::BYTES, NULL::TIMESTAMPTZ`
+
+// expirationsSQL records when a batch's writes with a TTL expire, passed as
+// one array per column.
+const expirationsSQL = `UPSERT INTO expirations (expires_at, project, key, rv)
+	SELECT now() + t * INTERVAL '1 second', $1, k, r
+	FROM unnest($2::STRING[], $3::INT8[], $4::INT8[]) AS w (k, r, t)`
 
 // upsertRows is a batch's rows, by column.
 type upsertRows struct {
@@ -350,13 +371,24 @@ type upsertRows struct {
 	revs    []int64
 	deleted []bool
 	values  [][]byte
-	ttls    []int64
 }
 
-func (u *upsertRows) add(key string, rev int64, deleted bool, value []byte, ttl uint64) {
+func (u *upsertRows) add(key string, rev int64, deleted bool, value []byte) {
 	u.keys = append(u.keys, key)
 	u.revs = append(u.revs, rev)
 	u.deleted = append(u.deleted, deleted)
 	u.values = append(u.values, value)
-	u.ttls = append(u.ttls, int64(ttl))
+}
+
+// expiringRows is a batch's writes with a TTL, by column.
+type expiringRows struct {
+	keys []string
+	revs []int64
+	ttls []int64
+}
+
+func (e *expiringRows) add(key string, rev int64, ttl uint64) {
+	e.keys = append(e.keys, key)
+	e.revs = append(e.revs, rev)
+	e.ttls = append(e.ttls, int64(ttl))
 }
